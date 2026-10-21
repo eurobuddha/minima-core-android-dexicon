@@ -1,0 +1,475 @@
+package com.eurobuddha.dexicon;
+
+import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.View;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
+
+import com.eurobuddha.dexicon.envelope.Envelope;
+import com.eurobuddha.dexicon.envelope.Envelopes;
+import com.eurobuddha.dexicon.fill.Coin;
+import com.eurobuddha.dexicon.fill.FillPlan;
+import com.eurobuddha.dexicon.fill.FillTxn;
+import com.eurobuddha.dexicon.fill.Tokens;
+import com.eurobuddha.dexicon.identity.DexIdentity;
+import com.eurobuddha.dexicon.identity.Sodium;
+import com.eurobuddha.dexicon.maker.MakerEngine;
+import com.eurobuddha.dexicon.maker.MakerService;
+import com.eurobuddha.dexicon.maker.MyOrder;
+import com.eurobuddha.dexicon.relay.HttpTransport;
+import com.eurobuddha.dexicon.relay.RelayClient;
+import com.eurobuddha.dexicon.relay.RelayStore;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * Dexicon host (PandaDEX MainActivity shape): first paint from SQLite before the node exists, our own 30 s balance
+ * clock, a continuous relay long-poll for the book while foreground, immediate repaint after every action, only the
+ * visible tab renders. The maker side lives in {@link MakerService}; this Activity is the TAKER and the order desk.
+ */
+public class MainActivity extends AppCompatActivity {
+
+    public static volatile boolean FOREGROUND = false;
+    private static final long POLL_MS = 30_000;
+    private static final int TAB_TRADE = 0, TAB_ORDERS = 1, TAB_HISTORY = 2, TAB_ASSETS = 3, TAB_RELAYS = 4;
+    private static final String[] TAB_NAMES = {"TRADE", "ORDERS", "HISTORY", "ASSETS", "RELAYS"};
+
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
+
+    private NodeApi node;
+    private DexDb db;
+    private RelayClient relay;
+    private DexIdentity me;
+    private MakerEngine engine;
+    private boolean paired, pairingKnown, deriving, bookPolling, busy, closed;
+    private long chainBlock;
+    private String receiveAddr = "";
+    private BigDecimal minimaSendable = BigDecimal.ZERO, mxusdSendable = BigDecimal.ZERO, minimaConfirmed = BigDecimal.ZERO, mxusdConfirmed = BigDecimal.ZERO;
+    private long balanceAtMs;
+    private String stage = "";
+    private BroadcastReceiver changedReceiver, nodeReceiver;
+    private ActivityResultLauncher<String> saveCsv;
+    private String pendingCsv;
+
+    private TradeView trade;
+    private OrdersTab ordersTab;
+    private HistoryTab historyTab;
+    private AssetsTab assetsTab;
+    private RelaysTab relaysTab;
+    private FrameLayout content;
+    private LinearLayout tabBar;
+    private TextView pairPill, blockPill, stageTv;
+    private int tab = TAB_TRADE;
+
+    private final Runnable pollTask = new Runnable() {
+        @Override public void run() { if (paired) { readBalances(); readBlock(); } ui.postDelayed(this, POLL_MS); }
+    };
+
+    @Override protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        Design.load(this);
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        db = new DexDb(this);
+        relay = new RelayClient(new HttpTransport());
+        applySettings();
+        saveCsv = registerForActivityResult(new ActivityResultContracts.CreateDocument("text/csv"), uri -> {
+            if (uri == null || pendingCsv == null) return;
+            try (java.io.OutputStream o = getContentResolver().openOutputStream(uri)) { o.write(pendingCsv.getBytes(java.nio.charset.StandardCharsets.UTF_8)); toast("CSV saved"); }
+            catch (Exception e) { toast("Could not save: " + e.getMessage()); }
+            pendingCsv = null;
+        });
+        setContentView(buildChrome());
+        selectTab(tab);
+
+        node = new NodeApi(this, enabled -> {
+            paired = enabled; pairingKnown = true;
+            if (enabled) onPaired();
+            repaint();
+        });
+        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { repaint(); } };
+        ContextCompat.registerReceiver(this, changedReceiver, new IntentFilter(MakerService.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
+        nodeReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { if (paired) { readBalances(); readBlock(); } } };
+        ContextCompat.registerReceiver(this, nodeReceiver, new IntentFilter(NodeTransportService.EVENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
+        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 91);
+        try { ContextCompat.startForegroundService(this, new Intent(this, MakerService.class)); } catch (Exception ignored) {}
+        ui.postDelayed(pollTask, POLL_MS);
+    }
+
+    /** Relay list + dev token override are shared prefs; re-read whenever they may have changed. */
+    void applySettings() {
+        relay.setRelays(RelayStore.load(this));
+        Tokens.setMxUsd(RelayStore.mxusdOverride(this));
+    }
+
+    private void onPaired() {
+        readBalances(); readBlock();
+        if (me == null) deriveIdentity();
+    }
+
+    private void deriveIdentity() {
+        if (deriving) return;
+        deriving = true;
+        node.cmd("vault action:seed", new NodeApi.Cb() {
+            public void onResult(JSONObject j) {
+                JSONObject r = j.optJSONObject("response");
+                String seed = r == null ? "" : r.optString("seed", r.optString("phrase", ""));
+                if (seed.isEmpty()) { deriving = false; setStage("Identity: the node returned no seed (vault locked?). Unlock and reopen."); return; }
+                net.execute(() -> {
+                    try {
+                        DexIdentity id = DexIdentity.fromSeed(Sodium.get(), seed);
+                        ui.post(() -> { me = id; engine = new MakerEngine(MainActivity.this, node, db, relay, me); deriving = false; repaint(); });
+                    } catch (Exception e) { ui.post(() -> { deriving = false; setStage("Identity derivation failed: " + e.getMessage()); }); }
+                });
+            }
+            public void onError(String m) { deriving = false; setStage(NodeApi.ERR_NOT_ENABLED.equals(m) ? "Enable Dexicon in Minima Core → Apps" : "Seed read failed: " + m); }
+        });
+    }
+
+    private void readBlock() {
+        node.cmd("block", new NodeApi.Cb() {
+            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); try { chainBlock = Long.parseLong(r.optString("block", "0")); } catch (Exception ignored) {} repaintHeader(); }
+            public void onError(String m) {}
+        });
+    }
+
+    private void readBalances() {
+        node.cmd("balance", new NodeApi.Cb() {
+            public void onResult(JSONObject j) {
+                for (JSONObject b : NodeApi.rows(j)) {
+                    String tok = b.optString("tokenid", "");
+                    if (Tokens.isMinima(tok)) { minimaSendable = Util.dec(b.optString("sendable", "0")); minimaConfirmed = Util.dec(b.optString("confirmed", "0")); }
+                    else if (Tokens.isMxUsd(tok)) { mxusdSendable = Util.dec(b.optString("sendable", "0")); mxusdConfirmed = Util.dec(b.optString("confirmed", "0")); }
+                }
+                balanceAtMs = System.currentTimeMillis();
+                repaint();
+            }
+            public void onError(String m) {}
+        });
+        if (receiveAddr.isEmpty()) node.cmd("getaddress", new NodeApi.Cb() {
+            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); if (r != null) receiveAddr = r.optString("address", ""); repaint(); }
+            public void onError(String m) {}
+        });
+    }
+
+    // ---- book long-poll (foreground only) ----
+    private void bookLoop() {
+        if (closed || !FOREGROUND || bookPolling) return;
+        if (relay.relays().isEmpty()) { ui.postDelayed(this::bookLoop, 3000); return; }
+        bookPolling = true;
+        net.execute(() -> {
+            int changed = relay.pollBook(25);
+            ui.post(() -> { bookPolling = false; if (closed) return; repaint(); ui.postDelayed(this::bookLoop, changed < 0 ? 2000 : 0); });
+        });
+    }
+
+    // ---- accessors for the tabs ----
+    DexDb db() { return db; }
+    RelayClient relay() { return relay; }
+    DexIdentity identity() { return me; }
+    long chainBlock() { return chainBlock; }
+    boolean isBusy() { return busy; }
+    boolean paired() { return paired; }
+    String receiveAddress() { return receiveAddr; }
+    BigDecimal minimaSendable() { return minimaSendable; }
+    BigDecimal mxusdSendable() { return mxusdSendable; }
+    BigDecimal minimaConfirmed() { return minimaConfirmed; }
+    BigDecimal mxusdConfirmed() { return mxusdConfirmed; }
+    long balanceAtMs() { return balanceAtMs; }
+    List<Envelope> book() { return relay.orders(null); }
+    List<MyOrder> myOrders() { return db.myOrders(); }
+    boolean isMine(Envelope e) { return me != null && e.signPk.equalsIgnoreCase(me.signPkHex()); }
+
+    void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
+    void setStage(String s) { stage = s == null ? "" : s; repaintHeader(); }
+    void copy(String label, String value) {
+        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null || value == null || value.isEmpty()) return;
+        cm.setPrimaryClip(ClipData.newPlainText(label, value));   // the COMPLETE value, never an abbreviation
+        toast(label + " copied");
+    }
+
+    // ---- order desk ----
+
+    /** BUY/SELL from the panel: if the book crosses at this price, TAKE the best order (one maker per take); else REST. */
+    void placeOrder(boolean buy, BigDecimal price, BigDecimal amount) {
+        if (me == null || engine == null) { toast("Identity not ready — is Dexicon enabled in Minima Core?"); return; }
+        if (busy) { toast("A transaction is in progress"); return; }
+        Envelope best = null;
+        for (Envelope e : relay.orders(buy ? "sell" : "buy")) {
+            if (isMine(e) || e.coins.isEmpty()) continue;
+            BigDecimal p = new BigDecimal(e.price);
+            if (buy ? p.compareTo(price) <= 0 : p.compareTo(price) >= 0) { best = e; break; }
+        }
+        if (best != null) { previewTake(best, amount.min(new BigDecimal(best.amount))); return; }
+        confirm((buy ? "Buy " : "Sell ") + Util.fmt(amount) + " MINIMA @ " + Util.fmt(price) + " MxUSD",
+                "Rests on the relays as your order. Your wallet coins back it; the maker engine co-signs fills while the phone is in your pocket.",
+                () -> {
+                    busy = true; setStage("Publishing order…"); repaint();
+                    engine.create(buy ? "buy" : "sell", price.toPlainString(), amount.toPlainString(), (err, o) -> {
+                        busy = false;
+                        setStage(err != null ? "Order failed: " + err : "Order published — id " + o.orderId);
+                        repaint();
+                    });
+                });
+    }
+
+    void cancelOrder(MyOrder o) {
+        confirm("Cancel order " + o.orderId + "?", (o.side.equals("sell") ? "SELL " : "BUY ") + Util.fmt(Util.dec(o.remaining)) + " MINIMA @ " + o.price, () -> {
+            busy = true; repaint();
+            engine.cancel(o.orderId, (err, x) -> { busy = false; setStage(err != null ? "Cancel failed: " + err : "Order cancelled"); repaint(); });
+        });
+    }
+
+    void editOrder(MyOrder o) {
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
+        int p = Design.dp(this, 16); box.setPadding(p, p, p, 0);
+        EditText price = new EditText(this); price.setHint("Price (MxUSD per MINIMA)"); price.setText(o.price);
+        EditText amount = new EditText(this); amount.setHint("Amount (MINIMA)"); amount.setText(o.remaining);
+        box.addView(price); box.addView(amount);
+        new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Edit order").setView(box)
+                .setPositiveButton("Update", (d, w) -> {
+                    busy = true; repaint();
+                    engine.edit(o.orderId, price.getText().toString().trim(), amount.getText().toString().trim(), (err, x) -> { busy = false; setStage(err != null ? "Edit failed: " + err : "Order updated"); repaint(); });
+                }).setNegativeButton("Back", null).show();
+    }
+
+    /** Taker step 1: re-fetch the maker's coins, read my coins, plan, show the exact exchange, confirm. */
+    void previewTake(Envelope order, BigDecimal takeAmount) {
+        if (me == null) { toast("Identity not ready"); return; }
+        if (busy) { toast("A transaction is in progress"); return; }
+        busy = true; setStage("Checking the maker's coins…"); repaint();
+        fetchCoins(order.coins, 0, new ArrayList<>(), (err, makerCoins) -> {
+            if (err != null) { busy = false; setStage(err); repaint(); return; }
+            boolean sell = "sell".equals(order.side);
+            MakerEngine.walletCoins(node, sell ? Tokens.MXUSD() : Tokens.MINIMA, (e2, myCoins) -> {
+                if (e2 != null) { busy = false; setStage("Cannot read your coins: " + e2); repaint(); return; }
+                node.cmd("getaddress", new NodeApi.Cb() {
+                    public void onResult(JSONObject j) {
+                        JSONObject r = j.optJSONObject("response");
+                        String addr = r == null ? "" : r.optString("address", "");
+                        FillPlan.Plan plan;
+                        try {
+                            plan = FillPlan.plan(new FillPlan.Order(order.side, order.price, order.amount, order.address, order.coins, order.scripts), takeAmount.toPlainString(), makerCoins, myCoins, addr);
+                        } catch (RuntimeException e) { busy = false; setStage(e.getMessage()); repaint(); return; }
+                        busy = false; repaint();
+                        confirm((sell ? "Buy " : "Sell ") + plan.filled + " MINIMA @ " + order.price,
+                                "You give " + plan.takerGives + (sell ? " MxUSD" : " MINIMA") + " and receive " + plan.makerGives + (sell ? " MINIMA" : " MxUSD")
+                                        + " (" + plan.inputs.size() + " inputs, " + plan.outputs.size() + " outputs). The maker's node co-signs; final after one block.\n\nMaker pay-to address:\n" + order.address,
+                                () -> confirmTake(order, plan));
+                    }
+                    public void onError(String m) { busy = false; setStage("getaddress failed: " + m); repaint(); }
+                });
+            });
+        });
+    }
+
+    private interface CoinsCb { void done(String err, List<Coin> coins); }
+    private void fetchCoins(List<String> ids, int i, List<Coin> out, CoinsCb cb) {
+        if (i >= ids.size()) { cb.done(null, out); return; }
+        String id = ids.get(i);
+        node.cmdR("coins coinid:" + id, new NodeApi.Cb() {
+            public void onResult(JSONObject j) {
+                List<JSONObject> rows = NodeApi.rows(j);
+                if (rows.isEmpty() || rows.get(0).optString("coinid", "").isEmpty()) { cb.done("Maker coin " + id + " not found (spent or not yet visible)", null); return; }
+                Coin c = Coin.of(rows.get(0));
+                if (c.spent) { cb.done("Maker coin " + id + " is already spent", null); return; }
+                out.add(c); fetchCoins(ids, i + 1, out, cb);
+            }
+            public void onError(String m) { cb.done("Cannot fetch maker coin " + id + ": " + m, null); }
+        });
+    }
+
+    /** Taker step 2: build + sign my side, seal the take to the maker, publish to every relay, remember it. */
+    private void confirmTake(Envelope order, FillPlan.Plan plan) {
+        busy = true; setStage("Building and signing your side…"); repaint();
+        FillTxn.build(node, plan, (err, hex) -> {
+            if (err != null) { busy = false; setStage("Build failed: " + err); repaint(); return; }
+            try {
+                JSONObject inner = new JSONObject().put("k", "take").put("orderId", order.orderId).put("txn", hex).put("taker", me.publicId());
+                String blob = me.seal(order.pubId, inner.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                String msg = Envelopes.msg(me, order.pubId, blob, MakerEngine.now() + 300);
+                JSONObject pt = new JSONObject().put("order", new JSONObject(order.raw)).put("plan", planJson(plan)).put("sent", System.currentTimeMillis());
+                db.savePending(order.orderId, pt);
+                net.execute(() -> {
+                    List<RelayClient.PublishResult> results = relay.publish(msg);
+                    int ok = 0; for (RelayClient.PublishResult r : results) if (r.ok) ok++;
+                    final int okCount = ok; final String firstErr = results.isEmpty() ? "no relays" : results.get(0).error;
+                    ui.post(() -> {
+                        busy = false;
+                        if (okCount == 0) { db.removePending(order.orderId); setStage("No relay accepted the take: " + firstErr); }
+                        else setStage("Take sent to " + okCount + " relay(s); waiting for the maker to co-sign…");
+                        repaint();
+                    });
+                });
+            } catch (Exception e) { busy = false; setStage("Take failed: " + e.getMessage()); repaint(); }
+        });
+    }
+
+    private static JSONObject planJson(FillPlan.Plan p) throws Exception {
+        return new JSONObject().put("filled", p.filled).put("takerGives", p.takerGives).put("makerGives", p.makerGives).put("payToken", p.payToken).put("recvToken", p.recvToken).put("inputs", new JSONArray(p.inputs));
+    }
+
+    void exportCsv() {
+        pendingCsv = TradeExport.csv(db.fills(5000));
+        saveCsv.launch("dexicon-fills-" + System.currentTimeMillis() / 1000 + ".csv");
+    }
+
+    private void confirm(String title, String body, Runnable yes) {
+        new AlertDialog.Builder(this, Design.dialogTheme()).setTitle(title).setMessage(body)
+                .setPositiveButton("Confirm", (d, w) -> yes.run()).setNegativeButton("Back", null).show();
+    }
+
+    // ---- chrome ----
+
+    private View buildChrome() {
+        int pad = Design.dp(this, 12);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Design.BG());
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            androidx.core.graphics.Insets bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+            androidx.core.graphics.Insets ime = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime());
+            v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
+            return insets;
+        });
+
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(pad, pad, pad, Design.dp(this, 6));
+        TextView logo = new TextView(this);
+        logo.setText("◆ DEXICON"); logo.setTextColor(Design.TEXT()); logo.setTypeface(Design.monoBold()); logo.setTextSize(15f);
+        header.addView(logo, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView verPill = Design.pill(this, "v" + BuildConfig.VERSION_NAME, Design.SURFACE2(), Design.DIM2());
+        LinearLayout.LayoutParams vp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        vp.rightMargin = Design.dp(this, 6);
+        header.addView(verPill, vp);
+        TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾", Design.SURFACE2(), Design.DIM());
+        themePill.setMinWidth(Design.dp(this, 48)); themePill.setMinHeight(Design.dp(this, 48));
+        themePill.setOnClickListener(v -> { Design.toggle(this); setContentView(buildChrome()); selectTab(tab); });
+        Design.pressable(themePill);
+        header.addView(themePill);
+        root.addView(header);
+
+        LinearLayout nodeRow = new LinearLayout(this);
+        nodeRow.setGravity(Gravity.CENTER_VERTICAL);
+        nodeRow.setPadding(pad, 0, pad, Design.dp(this, 6));
+        pairPill = Design.pill(this, "PAIRING…", Design.SURFACE2(), Design.DIM());
+        nodeRow.addView(pairPill, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        blockPill = Design.pill(this, "# —", Design.SURFACE2(), Design.DIM());
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        bp.leftMargin = Design.dp(this, 6);
+        nodeRow.addView(blockPill, bp);
+        root.addView(nodeRow);
+
+        ScrollView scroller = new ScrollView(this);
+        content = new FrameLayout(this);
+        scroller.addView(content, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(scroller, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        trade = new TradeView(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); relaysTab = new RelaysTab(this);
+        for (View v : new View[]{trade, ordersTab, historyTab, assetsTab, relaysTab}) { v.setVisibility(View.GONE); content.addView(v); }
+
+        stageTv = new TextView(this);
+        stageTv.setTextSize(10f); stageTv.setTypeface(Design.mono()); stageTv.setTextColor(Design.TEXT());
+        stageTv.setPadding(pad, Design.dp(this, 6), pad, Design.dp(this, 6));
+        stageTv.setBackgroundColor(Design.SURFACE2());
+        stageTv.setVisibility(View.GONE);
+        stageTv.setOnClickListener(v -> copy("Status", stage));
+        root.addView(stageTv);
+
+        tabBar = new LinearLayout(this);
+        tabBar.setBackgroundColor(Design.SURFACE());
+        for (int i = 0; i < TAB_NAMES.length; i++) {
+            final int idx = i;
+            TextView t = new TextView(this);
+            t.setText(TAB_NAMES[i]); t.setTextSize(10f); t.setTypeface(Design.sansBold()); t.setGravity(Gravity.CENTER);
+            t.setPadding(0, Design.dp(this, 11), 0, Design.dp(this, 11)); t.setMinHeight(Design.dp(this, 48));
+            t.setOnClickListener(v -> selectTab(idx));
+            tabBar.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        }
+        root.addView(tabBar);
+        return root;
+    }
+
+    private void selectTab(int idx) {
+        tab = idx;
+        View[] views = {trade, ordersTab, historyTab, assetsTab, relaysTab};
+        for (int i = 0; i < views.length; i++) views[i].setVisibility(i == idx ? View.VISIBLE : View.GONE);
+        for (int i = 0; i < tabBar.getChildCount(); i++) {
+            TextView t = (TextView) tabBar.getChildAt(i);
+            t.setTextColor(i == idx ? Design.ON_ACCENT() : Design.DIM());
+            t.setBackground(i == idx ? Design.roundBg(this, Design.ACCENT(), 10) : null);
+        }
+        repaint();
+    }
+
+    void repaintHeader() {
+        if (pairPill == null) return;
+        String ps = !pairingKnown ? "PAIRING…" : !paired ? "ENABLE IN MINIMA CORE → APPS" : me == null ? "PAIRED · deriving identity" : "PAIRED";
+        pairPill.setText(ps);
+        pairPill.setTextColor(paired ? Design.IN() : Design.DIM());
+        blockPill.setText("# " + (chainBlock > 0 ? String.valueOf(chainBlock) : "—"));
+        stageTv.setText(stage);
+        stageTv.setVisibility(stage.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    void repaint() {
+        if (closed || trade == null) return;
+        repaintHeader();
+        switch (tab) {
+            case TAB_TRADE: trade.render(); break;
+            case TAB_ORDERS: ordersTab.render(); break;
+            case TAB_HISTORY: historyTab.render(); break;
+            case TAB_ASSETS: assetsTab.render(); break;
+            default: relaysTab.render();
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        FOREGROUND = true;
+        applySettings();
+        bookLoop();
+        repaint();
+    }
+
+    @Override protected void onPause() { super.onPause(); FOREGROUND = false; }
+
+    @Override protected void onDestroy() {
+        closed = true;
+        ui.removeCallbacksAndMessages(null);
+        if (changedReceiver != null) try { unregisterReceiver(changedReceiver); } catch (Exception ignored) {}
+        if (nodeReceiver != null) try { unregisterReceiver(nodeReceiver); } catch (Exception ignored) {}
+        if (node != null) node.onDestroy();
+        net.shutdownNow();
+        super.onDestroy();
+    }
+}

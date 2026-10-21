@@ -1,0 +1,80 @@
+plugins {
+    alias(libs.plugins.android.application)
+}
+
+android {
+    namespace 'com.eurobuddha.dexicon'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.eurobuddha.dexicon"
+        minSdk 28
+        targetSdk 35
+        // Every code change bumps BOTH (pre-commit hook .githooks/pre-commit enforces it).
+        versionCode 1
+        versionName "0.1.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    buildFeatures {
+        buildConfig true   // BuildConfig.VERSION_NAME in the header pill
+    }
+    signingConfigs {
+        // Minima family release key. Credentials come from ~/.gradle/gradle.properties
+        // (outside every repo), so nothing secret is ever committed. On a machine without
+        // those props this config stays empty; a release must not silently use a debug key.
+        release {
+            def ksFile = project.findProperty('MINIMA_FAMILY_RELEASE_STORE_FILE')
+            if (ksFile != null) {
+                storeFile file(ksFile)
+                storePassword project.findProperty('MINIMA_FAMILY_RELEASE_STORE_PASSWORD')
+                keyAlias project.findProperty('MINIMA_FAMILY_RELEASE_KEY_ALIAS')
+                keyPassword project.findProperty('MINIMA_FAMILY_RELEASE_KEY_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // No R8: lazysodium (+ JNA) and org.json are reflection-heavy (same call as AtomiX).
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+    testOptions {
+        unitTests {
+            // A REAL org.json is on the test classpath (see testImplementation); never stub it.
+            returnDefaultValues = false
+            all { maxHeapSize = '2g' }
+        }
+    }
+}
+
+dependencies {
+
+    implementation libs.appcompat
+    implementation libs.material
+    implementation libs.activity
+    implementation libs.constraintlayout
+
+    // Minima Core IPC client SDK — the ONLY way this app reaches the node. Auditable, bounded sources are
+    // compiled from src/main/java/com/eurobuddha/minimaapi (PandaDEX's vendored transport); app/libs/minimaapi.aar
+    // is kept beside it for parity with the scaffold but is not referenced.
+
+    // Identity: X25519 sealed box + Ed25519 (libsodium via Lazysodium), keys derived from the node seed (AtomiX).
+    implementation 'com.goterl:lazysodium-android:5.1.0@aar'
+    implementation 'net.java.dev.jna:jna:5.13.0@aar'
+
+    // ---- Local JVM unit tests (src/test) ----
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+    // Desktop libsodium so the REAL identity derivation / seal / sign run in JVM tests (same libsodium as the AAR).
+    testImplementation 'com.goterl:lazysodium-java:5.1.4'
+    testImplementation 'net.java.dev.jna:jna:5.13.0'
+}

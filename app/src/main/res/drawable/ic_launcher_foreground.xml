@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PandaDEX launcher glyph: three candlesticks (bid-green up, Minima-orange doji, ask-red down)
+     inside the 66dp adaptive-icon safe zone. Distinct from every sibling app icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+
+    <!-- green rising candle: wick 33..75, body 42..66 -->
+    <path android:fillColor="#3FD0A2" android:pathData="M32.5,33 h3 v42 h-3 z" />
+    <path android:fillColor="#3FD0A2" android:pathData="M27,42 h14 a2,2 0 0 1 2,2 v20 a2,2 0 0 1 -2,2 h-14 a2,2 0 0 1 -2,-2 v-20 a2,2 0 0 1 2,-2 z" />
+
+    <!-- orange center candle (taller): wick 27..81, body 38..70 -->
+    <path android:fillColor="#F7931A" android:pathData="M52.5,27 h3 v54 h-3 z" />
+    <path android:fillColor="#F7931A" android:pathData="M47,38 h14 a2,2 0 0 1 2,2 v28 a2,2 0 0 1 -2,2 h-14 a2,2 0 0 1 -2,-2 v-28 a2,2 0 0 1 2,-2 z" />
+
+    <!-- red falling candle: wick 39..79, body 46..70 -->
+    <path android:fillColor="#FF5C5C" android:pathData="M72.5,39 h3 v40 h-3 z" />
+    <path android:fillColor="#FF5C5C" android:pathData="M67,46 h14 a2,2 0 0 1 2,2 v20 a2,2 0 0 1 -2,2 h-14 a2,2 0 0 1 -2,-2 v-20 a2,2 0 0 1 2,-2 z" />
+</vector>

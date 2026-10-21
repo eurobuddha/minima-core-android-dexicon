@@ -1,0 +1,3 @@
+MinimaAPI source reused from the MinimaCore base project (Apache-2.0).
+PandaDEX adaptations: durable pairing initialization, bounded reply processing and pending callbacks, and transport errors without a node status.
+The original app/libs/minimaapi.aar is retained as provenance and is no longer compiled.
