@@ -34,6 +34,8 @@ public final class RelayClient {
 
     public static final class Status {
         public boolean ok; public long lastMs; public String error = ""; public int orders; public boolean reset;
+        /** Envelopes this relay served that we refused (shape, signature, expiry) and the last reason — visible in RELAYS. */
+        public int rejected; public String lastReject = "";
     }
     public static final class PublishResult {
         public final String url; public final boolean ok; public final String error;
@@ -70,9 +72,12 @@ public final class RelayClient {
 
     /** Apply one raw order envelope; true if it changed the book. */
     public synchronized boolean applyOrder(String raw) {
-        Envelope v;
-        try { v = Envelope.parse(raw, now.getAsLong()); } catch (RuntimeException e) { return false; }
-        if (v.kind != Envelope.Kind.ORDER) return false;
+        try { return applyOrderStrict(raw); } catch (RuntimeException e) { return false; }
+    }
+    /** Like applyOrder but an invalid envelope THROWS with the reason (shape / signature / expiry). */
+    public synchronized boolean applyOrderStrict(String raw) {
+        Envelope v = Envelope.parse(raw, now.getAsLong());
+        if (v.kind != Envelope.Kind.ORDER) throw new IllegalArgumentException("not an order");
         Envelope have = book.get(v.key());
         if (have != null && have.seq >= v.seq) return false;
         book.put(v.key(), v);
@@ -108,6 +113,28 @@ public final class RelayClient {
     }
 
     /** Long-poll ONE relay's book (round-robin). Returns the number of changed orders; -1 on error (status records why). */
+
+    /** The top-level JSON objects inside `"<key>":[ ... ]` of a relay body, as the EXACT substrings the relay sent.
+     *  Envelopes are signed over their canonical bytes and the subset parser accepts no escapes, so they must never
+     *  be re-serialised by a platform JSON library (Android's org.json turns "MINIMA/MxUSD" into "MINIMA\/MxUSD"). */
+    public static List<String> rawObjects(String body, String key) {
+        List<String> out = new ArrayList<>();
+        int k = body.indexOf("\"" + key + "\"");
+        if (k < 0) return out;
+        int a = body.indexOf('[', k);
+        if (a < 0) return out;
+        int depth = 0, start = -1; boolean inStr = false;
+        for (int i = a + 1; i < body.length(); i++) {
+            char c = body.charAt(i);
+            if (inStr) { if (c == '\\') i++; else if (c == '"') inStr = false; continue; }
+            if (c == '"') inStr = true;
+            else if (c == '{') { if (depth++ == 0) start = i; }
+            else if (c == '}') { if (--depth == 0 && start >= 0) { out.add(body.substring(start, i + 1)); start = -1; } }
+            else if (c == ']' && depth == 0) break;
+        }
+        return out;
+    }
+
     public int pollBook(int hold) {
         String url = next();
         if (url == null) return -1;
@@ -119,14 +146,17 @@ public final class RelayClient {
         try { body = new JSONObject(text); } catch (Exception e) { mark(url, false, "bad json"); return -1; }
         JSONArray orders = body.optJSONArray("orders");
         if (!body.has("cursor") || orders == null) { mark(url, false, "bad body"); return -1; }
-        int changed = 0;
+        int changed = 0, rejected = 0; String why = "";
+        List<String> raws = rawObjects(text, "orders");
         for (int i = 0; i < orders.length(); i++) {
             Object o = orders.opt(i);
-            if (applyOrder(o instanceof String ? (String) o : String.valueOf(o))) changed++;
+            String raw = o instanceof String ? (String) o : (i < raws.size() ? raws.get(i) : String.valueOf(o));
+            try { if (applyOrderStrict(raw)) changed++; }
+            catch (RuntimeException e) { rejected++; why = String.valueOf(e.getMessage()); }
         }
         synchronized (this) { cursors.put(url, body.optLong("cursor", 0)); }
         mark(url, true, null);
-        synchronized (this) { Status s = status.get(url); s.orders = orders.length(); s.reset = body.optBoolean("reset", false); }
+        synchronized (this) { Status s = status.get(url); s.orders = orders.length(); s.reset = body.optBoolean("reset", false); s.rejected = rejected; if (rejected > 0) s.lastReject = why; }
         return changed;
     }
 
@@ -162,9 +192,10 @@ public final class RelayClient {
         JSONArray msgs = body.optJSONArray("messages");
         if (!body.has("cursor") || msgs == null) { mark(url, false, "bad body"); return fresh; }
         long n = now.getAsLong();
+        List<String> raws = rawObjects(text, "messages");
         for (int i = 0; i < msgs.length(); i++) {
             Object m = msgs.opt(i);
-            String raw = m instanceof String ? (String) m : String.valueOf(m);
+            String raw = m instanceof String ? (String) m : (i < raws.size() ? raws.get(i) : String.valueOf(m));
             Envelope v;
             try { v = Envelope.parse(raw, n); } catch (RuntimeException e) { continue; }
             if (v.kind != Envelope.Kind.MSG || !v.to.equalsIgnoreCase(publicId)) continue;

@@ -111,7 +111,7 @@ public final class RelaysTab extends LinearLayout {
             top.addView(rm);
             c.addView(top);
             RelayClient.Status s = status.get(u);
-            String health = s == null ? "not polled yet" : s.ok ? "OK · " + s.orders + " orders in last poll · " + Util.ago(System.currentTimeMillis() - s.lastMs) : "ERROR · " + s.error + " · " + Util.ago(System.currentTimeMillis() - s.lastMs);
+            String health = s == null ? "not polled yet" : s.ok ? "OK · " + s.orders + " orders in last poll" + (s.rejected > 0 ? " · " + s.rejected + " REFUSED: " + s.lastReject : "") + " · " + Util.ago(System.currentTimeMillis() - s.lastMs) : "ERROR · " + s.error + " · " + Util.ago(System.currentTimeMillis() - s.lastMs);
             c.addView(t(health, s == null ? Design.DIM2() : s.ok ? Design.IN() : Design.RED(), 9.5f, Design.mono()));
         }
     }
