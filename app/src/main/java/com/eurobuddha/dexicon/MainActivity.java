@@ -119,7 +119,7 @@ public class MainActivity extends AppCompatActivity {
             if (enabled) onPaired();
             repaint();
         });
-        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { repaint(); retryIfDue(); } };
+        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { settleStage(); repaint(); retryIfDue(); } };
         ContextCompat.registerReceiver(this, changedReceiver, new IntentFilter(MakerService.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
         nodeReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { if (paired) { readBalances(); readBlock(); } } };
         ContextCompat.registerReceiver(this, nodeReceiver, new IntentFilter(NodeTransportService.EVENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
@@ -252,6 +252,19 @@ public class MainActivity extends AppCompatActivity {
 
     /** Mirror of the MiniDapp's retryNextLevel: a take from the order form that lost the race re-plans the same limit
      *  against the next best fast level (never the same order twice) and asks once more. */
+    /** The service answers takes; the screen only said "waiting for the maker" — and kept saying it after the fill
+     *  landed (seen on-device 2026-10-21). When no take is pending any more, name the newest fill instead. */
+    void settleStage() {
+        if (!stage.startsWith("Take sent")) return;
+        if (!db.pendings().isEmpty()) return;
+        java.util.List<org.json.JSONObject> fills = db.fills(1);
+        String last = db.meta("last_refusal", "");
+        if (!fills.isEmpty() && fills.get(0).optLong("ts", 0) * 1000 > System.currentTimeMillis() - 600_000L)
+            setStage("Filled " + fills.get(0).optString("filled") + " MINIMA @ " + fills.get(0).optString("price") + " — " + fills.get(0).optString("status", "settling") + " (HISTORY)");
+        else if (!last.isEmpty()) setStage("Maker refused: " + last);
+        else setStage("");
+    }
+
     void retryIfDue() {
         String due = db.meta("retry_due", "");
         if (due.isEmpty()) return;
