@@ -89,7 +89,13 @@ public class MainActivity extends AppCompatActivity {
     private int tab = TAB_TRADE;
 
     private final Runnable pollTask = new Runnable() {
-        @Override public void run() { if (paired) { readBalances(); readBlock(); } ui.postDelayed(this, POLL_MS); }
+        @Override public void run() {
+            if (paired) { readBalances(); readBlock(); }
+            // Not yet enabled in Minima Core → Apps: ask again every tick, so enabling it there pairs this screen
+            // without a restart (the maker service already re-registers; the Activity did not — seen on-device 2026-10-21).
+            else if (node != null && pairingKnown) node.reRegister();
+            ui.postDelayed(this, POLL_MS);
+        }
     };
 
     @Override protected void onCreate(Bundle savedInstanceState) {
