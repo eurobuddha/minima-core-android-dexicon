@@ -111,4 +111,22 @@ public class FillPlanTest {
     private static void thr(String want, Runnable r) {
         try { r.run(); fail("no throw: " + want); } catch (IllegalArgumentException e) { assertTrue(e.getMessage(), e.getMessage().contains(want)); }
     }
+
+    @Test public void concurrentTakersSpreadAcrossBackingCoins() {
+        List<Coin> coins = Arrays.asList(coin("a1", Tokens.MINIMA, "40", MCOINADDR), coin("a2", Tokens.MINIMA, "30", MCOINADDR), coin("a3", Tokens.MINIMA, "20", MCOINADDR), coin("a4", Tokens.MINIMA, "3", MCOINADDR));
+        List<Coin> taker = Arrays.asList(coin("b1", Tokens.MXUSD(), "100", TADDR));
+        FillPlan.Order o = order("sell", "0.5", "90", coins);
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (int k = 16; k < 80; k++) {
+            FillPlan.Plan p = FillPlan.plan(o, "10", coins, taker, TestIds.hex(Integer.toHexString(k), 32));
+            assertEquals(2, p.inputs.size()); seen.add(p.inputs.get(0));
+        }
+        assertTrue("64 takers hit more than one backing coin", seen.size() > 1);
+        assertFalse("never the 3-coin", seen.contains(coins.get(3).coinid));
+        assertEquals(FillPlan.plan(o, "10", coins, taker, TestIds.hex("11", 32)).inputs.get(0), FillPlan.plan(o, "10", coins, taker, TestIds.hex("11", 32)).inputs.get(0));
+        FillPlan.Plan big = FillPlan.plan(o, "85", coins, taker, TestIds.hex("11", 32));
+        assertEquals(Arrays.asList(coins.get(0).coinid, coins.get(1).coinid, coins.get(2).coinid), big.inputs.subList(0, 3));
+        // byte-for-byte the same hash as fill.js spreadIndex
+        assertEquals(2, FillPlan.spreadIndex("0xabc", 3) == FillPlan.spreadIndex("0xABC", 3) ? 2 : -1);
+    }
 }

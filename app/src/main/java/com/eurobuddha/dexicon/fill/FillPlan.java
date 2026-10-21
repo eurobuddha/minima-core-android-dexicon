@@ -30,12 +30,26 @@ public final class FillPlan {
     public static BigDecimal fit64(BigDecimal x) { return x.round(MC); }
     static boolean eq(String a, String b) { return String.valueOf(a).toLowerCase(Locale.ROOT).equals(String.valueOf(b).toLowerCase(Locale.ROOT)); }
 
+    /** Same hash as fill.js spreadIndex: h = h*31 + charCode over the lower-cased key, unsigned 32-bit, mod n. */
+    public static int spreadIndex(String key, int n) {
+        long h = 0; String k = key.toLowerCase();
+        for (int i = 0; i < k.length(); i++) h = ((h * 31) + k.charAt(i)) & 0xFFFFFFFFL;
+        return (int) (h % n);
+    }
     public static final class Pick { public final List<Coin> coins = new ArrayList<>(); public BigDecimal sum = BigDecimal.ZERO; }
 
     /** Pick coins (largest first, stable) until sum >= need; null if they cannot cover it within max. */
-    public static Pick pick(List<Coin> coins, BigDecimal need, int max) {
+    public static Pick pick(List<Coin> coins, BigDecimal need, int max) { return pick(coins, need, max, null); }
+    /** Concurrent takers (mirror of fill.js): when several coins each cover the take alone, the taker's own key picks
+     *  one deterministically, so two takers arriving together spend DIFFERENT backing coins and both fills mine. */
+    public static Pick pick(List<Coin> coins, BigDecimal need, int max, String spreadKey) {
         List<Coin> sorted = new ArrayList<>(coins);
         sorted.sort((a, b) -> b.value.compareTo(a.value));
+        if (spreadKey != null && !spreadKey.isEmpty()) {
+            List<Coin> single = new ArrayList<>();
+            for (Coin c : sorted) if (c.value.compareTo(need) >= 0) single.add(c);
+            if (single.size() > 1) { Pick one = new Pick(); Coin c = single.get(spreadIndex(spreadKey, single.size())); one.coins.add(c); one.sum = c.value; return one; }
+        }
         Pick p = new Pick();
         for (Coin c : sorted) {
             if (p.coins.size() >= max) break;
@@ -86,7 +100,7 @@ public final class FillPlan {
             if (!c.spendable()) throw new IllegalArgumentException("maker coin " + c.coinid + " spent or carries state");
             mc.add(c);
         }
-        Pick m = pick(mc, makerGives, 32);
+        Pick m = pick(mc, makerGives, 32, takerAddress);
         if (m == null) throw new IllegalArgumentException("maker coins do not cover " + plain(makerGives));
         List<Coin> tc = new ArrayList<>();
         for (Coin c : takerCoins) if (c.sameToken(takerTok) && c.spendable()) tc.add(c);

@@ -113,7 +113,7 @@ public class MainActivity extends AppCompatActivity {
             if (enabled) onPaired();
             repaint();
         });
-        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { repaint(); } };
+        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { repaint(); retryIfDue(); } };
         ContextCompat.registerReceiver(this, changedReceiver, new IntentFilter(MakerService.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
         nodeReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { if (paired) { readBalances(); readBlock(); } } };
         ContextCompat.registerReceiver(this, nodeReceiver, new IntentFilter(NodeTransportService.EVENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
@@ -228,7 +228,10 @@ public class MainActivity extends AppCompatActivity {
             BigDecimal p = new BigDecimal(e.price);
             if (buy ? p.compareTo(price) <= 0 : p.compareTo(price) >= 0) { best = e; break; }
         }
-        if (best != null) { previewTake(best, amount.min(new BigDecimal(best.amount))); return; }
+        if (best != null) {
+            try { db.setMeta("retry", new JSONObject().put("buy", buy).put("price", price.toPlainString()).put("amount", amount.toPlainString()).put("tried", new org.json.JSONArray().put(best.orderId)).toString()); } catch (Exception ignored) {}
+            previewTake(best, amount.min(new BigDecimal(best.amount))); return;
+        }
         confirm((buy ? "Buy " : "Sell ") + Util.fmt(amount) + " MINIMA @ " + Util.fmt(price) + " MxUSD",
                 "Rests on the relays as your order. Your wallet coins back it; the maker engine co-signs fills while the phone is in your pocket.",
                 () -> {
@@ -239,6 +242,30 @@ public class MainActivity extends AppCompatActivity {
                         repaint();
                     });
                 });
+    }
+
+    /** Mirror of the MiniDapp's retryNextLevel: a take from the order form that lost the race re-plans the same limit
+     *  against the next best fast level (never the same order twice) and asks once more. */
+    void retryIfDue() {
+        String due = db.meta("retry_due", "");
+        if (due.isEmpty()) return;
+        db.setMeta("retry_due", "");
+        JSONObject r; try { r = new JSONObject(db.meta("retry", "{}")); } catch (Exception e) { return; }
+        if (!r.has("price")) return;
+        boolean buy = r.optBoolean("buy"); BigDecimal price = new BigDecimal(r.optString("price")), amount = new BigDecimal(r.optString("amount"));
+        org.json.JSONArray tried = r.optJSONArray("tried") == null ? new org.json.JSONArray() : r.optJSONArray("tried");
+        java.util.Set<String> skip = new java.util.HashSet<>(); for (int i = 0; i < tried.length(); i++) skip.add(tried.optString(i));
+        skip.add(due);
+        Envelope next = null;
+        for (Envelope e : relay.orders(buy ? "sell" : "buy")) {
+            if (isMine(e) || e.coins.isEmpty() || skip.contains(e.orderId)) continue;
+            BigDecimal p = new BigDecimal(e.price);
+            if (buy ? p.compareTo(price) <= 0 : p.compareTo(price) >= 0) { next = e; break; }
+        }
+        if (next == null) { setStage("That level was taken and nothing else crosses " + Util.fmt(price) + " — place the order again to rest it."); return; }
+        try { tried.put(next.orderId); r.put("tried", tried); db.setMeta("retry", r.toString()); } catch (Exception ignored) {}
+        toast("That level was taken — next best is " + next.price + ". Review to retry.");
+        previewTake(next, amount.min(new BigDecimal(next.amount)));
     }
 
     void cancelOrder(MyOrder o) {

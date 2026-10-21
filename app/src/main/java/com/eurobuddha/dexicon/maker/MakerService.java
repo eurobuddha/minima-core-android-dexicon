@@ -201,8 +201,10 @@ public class MakerService extends Service {
                 if (db.saveFill(f)) Notifier.alert(this, "Filled", ("sell".equals(order.optString("side")) ? "Bought " : "Sold ") + f.optString("filled") + " MINIMA @ " + order.optString("price") + " MxUSD (settling)");
             } catch (Exception ignored) {}
         } else {
-            db.setMeta("last_refusal", inner.optString("reason", "refused"));
-            Notifier.alert(this, "Take refused", "The maker refused: " + inner.optString("reason", ""));
+            String reason = inner.optString("reason", "refused");
+            db.setMeta("last_refusal", reason);
+            if (reason.matches("(?i).*(taken|not live|advertised|spent|visible|cover).*")) db.setMeta("retry_due", orderId);   // the Activity re-plans at the next level
+            Notifier.alert(this, "Take refused", "The maker refused: " + reason);
         }
         db.removePending(orderId);
         changed();
