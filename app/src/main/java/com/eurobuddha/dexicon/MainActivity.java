@@ -119,7 +119,7 @@ public class MainActivity extends AppCompatActivity {
             if (enabled) onPaired();
             repaint();
         });
-        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { settleStage(); repaint(); retryIfDue(); } };
+        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { settleStage(); repaint(); retryIfDue(); restIfDue(); } };
         ContextCompat.registerReceiver(this, changedReceiver, new IntentFilter(MakerService.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
         nodeReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { if (paired) { readBalances(); readBlock(); } } };
         ContextCompat.registerReceiver(this, nodeReceiver, new IntentFilter(NodeTransportService.EVENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
@@ -235,8 +235,10 @@ public class MainActivity extends AppCompatActivity {
             if (buy ? p.compareTo(price) <= 0 : p.compareTo(price) >= 0) { best = e; break; }
         }
         if (best != null) {
-            try { db.setMeta("retry", new JSONObject().put("buy", buy).put("price", price.toPlainString()).put("amount", amount.toPlainString()).put("tried", new org.json.JSONArray().put(best.orderId)).toString()); } catch (Exception ignored) {}
-            previewTake(best, amount.min(new BigDecimal(best.amount))); return;
+            BigDecimal now = amount.min(new BigDecimal(best.amount)), rest = amount.subtract(now);
+            try { db.setMeta("retry", new JSONObject().put("buy", buy).put("price", price.toPlainString()).put("amount", amount.toPlainString()).put("rest", rest.toPlainString()).put("tried", new org.json.JSONArray().put(best.orderId)).toString()); } catch (Exception ignored) {}
+            if (rest.signum() > 0) toast("Takes " + now.toPlainString() + " now; the remaining " + rest.toPlainString() + " MINIMA rests as your order once the fill is co-signed");
+            previewTake(best, now); return;
         }
         confirm((buy ? "Buy " : "Sell ") + Util.fmt(amount) + " MINIMA @ " + Util.fmt(price) + " MxUSD",
                 "Rests on the relays as your order. Your wallet coins back it; the maker engine co-signs fills while the phone is in your pocket.",
@@ -263,6 +265,27 @@ public class MainActivity extends AppCompatActivity {
             setStage("Filled " + fills.get(0).optString("filled") + " MINIMA @ " + fills.get(0).optString("price") + " — " + fills.get(0).optString("status", "settling") + " (HISTORY)");
         else if (!last.isEmpty()) setStage("Maker refused: " + last);
         else setStage("");
+    }
+
+    /** Mirror of the MiniDapp: a crossing order that was only partly filled by the best resting order rests the
+     *  remainder as a fast order of our own, once the maker has co-signed (rest_due is set by the service on `taken`). */
+    void restIfDue() {
+        String due = db.meta("rest_due", "");
+        if (due.isEmpty() || engine == null || busy) return;
+        db.setMeta("rest_due", "");
+        JSONObject r; try { r = new JSONObject(db.meta("retry", "{}")); } catch (Exception e) { return; }
+        BigDecimal rest; try { rest = new BigDecimal(r.optString("rest", "0")); } catch (Exception e) { return; }
+        org.json.JSONArray tried = r.optJSONArray("tried");
+        boolean ours = false; for (int i = 0; tried != null && i < tried.length(); i++) if (due.equals(tried.optString(i))) ours = true;
+        if (!ours || rest.signum() <= 0) return;
+        db.setMeta("retry", "");
+        boolean buy = r.optBoolean("buy"); String price = r.optString("price");
+        busy = true; setStage("Resting the remaining " + rest.toPlainString() + " MINIMA @ " + price + " as your order…"); repaint();
+        engine.create(buy ? "buy" : "sell", price, rest.toPlainString(), (err, o) -> {
+            busy = false;
+            setStage(err != null ? "Remainder not rested: " + err : "Remaining " + rest.toPlainString() + " MINIMA rests as order " + o.orderId);
+            repaint();
+        });
     }
 
     void retryIfDue() {

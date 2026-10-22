@@ -191,6 +191,7 @@ public class MakerService extends Service {
         JSONObject pt = db.pending(orderId);
         if (pt == null) return;
         if ("taken".equals(inner.optString("k"))) {
+            db.setMeta("rest_due", orderId);   // the Activity rests any unfilled remainder of the limit behind this take
             try {
                 JSONObject order = pt.getJSONObject("order"), plan = pt.getJSONObject("plan");
                 JSONObject f = new JSONObject().put("role", "taker").put("orderId", orderId)
