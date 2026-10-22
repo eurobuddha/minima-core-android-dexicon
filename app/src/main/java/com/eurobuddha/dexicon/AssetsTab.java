@@ -14,8 +14,9 @@ import org.json.JSONObject;
 
 import java.math.BigDecimal;
 
-/** ASSETS tab: available / in orders / settling per token, receive address and Dexicon public id (full, tap-to-copy),
- *  and the DEV dollar-token override (test chains only). */
+/** ASSETS tab: available / in orders / settling per token, the Minima receive address (Mx…), the node's Ethereum wallet
+ *  (address, ETH, ERC20 USDT — the AtomiX tab's deposit address), the Dexicon public id (all full, tap-to-copy), and —
+ *  folded under ADVANCED — the dollar-token override that only a test chain needs. */
 @SuppressLint("ViewConstructor")
 public final class AssetsTab extends LinearLayout {
 
@@ -55,7 +56,7 @@ public final class AssetsTab extends LinearLayout {
         assetCard("MxUSD", f.mxusdAvailable, act.mxusdConfirmed(), f.mxusdInOrders, f.mxusdSettling);
 
         LinearLayout recv = card();
-        recv.addView(t("RECEIVE", Design.DIM(), 10f, Design.sansBold()));
+        recv.addView(t("RECEIVE · MINIMA AND MxUSD", Design.DIM(), 10f, Design.sansBold()));
         String addr = act.receiveAddress();
         recv.addView(t(addr.isEmpty() ? "Address not loaded" : addr, Design.TEXT(), 10f, Design.mono()));
         recv.addView(t(addr.isEmpty() ? (act.paired() ? "Reading from the node…" : "Pair with Minima Core first") : "Tap to copy", Design.ACCENT(), 9.5f, Design.sans()));
@@ -68,15 +69,23 @@ public final class AssetsTab extends LinearLayout {
         idc.addView(t(pid.isEmpty() ? "" : "Tap to copy · derived from your node seed, HKDF context \"decks\"", Design.ACCENT(), 9.5f, Design.sans()));
         if (!pid.isEmpty()) { idc.setOnClickListener(v -> act.copy("publicId", pid)); Design.pressable(idc); }
 
-        LinearLayout dev = card();
-        dev.addView(t("DEV · DOLLAR TOKEN OVERRIDE", Design.DIM(), 10f, Design.sansBold()));
-        dev.addView(t("Mainnet MxUSD is " + Tokens.MXUSD_MAINNET + ". On a test chain point the dollar leg at a test token here (empty = mainnet). Never on mainnet.", Design.DIM2(), 9.5f, Design.sans()));
+        ethCard();
+
+        // ADVANCED (folded): the dollar-token override exists only for TEST chains, where mainnet MxUSD does not exist and
+        // a test token stands in for it. On mainnet it must stay empty.
+        LinearLayout adv = card();
+        adv.addView(t(advOpen ? "ADVANCED  ▾" : "ADVANCED  ▸", Design.DIM(), 10f, Design.sansBold()));
+        adv.setOnClickListener(v -> { advOpen = !advOpen; render(); });
+        Design.pressable(adv);
+        if (!advOpen) return;
+        adv.addView(t("Dollar token override — for TEST chains only. Mainnet MxUSD (" + Tokens.MXUSD_MAINNET + ") does not exist on a test chain, so a test token can stand in for it there. Leave it empty on mainnet.", Design.DIM2(), 9.5f, Design.sans()));
         EditText in = new EditText(getContext());
         in.setHint("0x… test tokenid"); in.setText(RelayStore.mxusdOverride(getContext()));
         in.setTextColor(Design.TEXT()); in.setHintTextColor(Design.DIM2()); in.setTypeface(Design.mono()); in.setTextSize(10f);
         in.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 8));
         int p = Design.dp(getContext(), 8); in.setPadding(p, p, p, p);
-        dev.addView(in);
+        in.setOnClickListener(v -> {});   // typing must not fold the card
+        adv.addView(in);
         TextView save = t("SAVE", Design.ACCENT(), 10.5f, Design.mono());
         save.setGravity(android.view.Gravity.CENTER); save.setPadding(0, p, 0, p);
         save.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
@@ -88,7 +97,25 @@ public final class AssetsTab extends LinearLayout {
         });
         Design.pressable(save);
         LayoutParams sl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); sl.topMargin = p;
-        dev.addView(save, sl);
+        adv.addView(save, sl);
+    }
+
+    private boolean advOpen;
+    private static long ethReadMs;
+
+    /** The node's Ethereum wallet (seedrandom:ethbridge — the same key the AtomiX tab and the AtomiX app derive): address,
+     *  ETH for gas and ERC20 USDT. Read through the AtomiX engine at most once a minute. */
+    private void ethCard() {
+        com.eurobuddha.dexicon.doors.DoorHost host = com.eurobuddha.dexicon.doors.DoorHost.get(act);
+        if (System.currentTimeMillis() - ethReadMs > 60_000) { ethReadMs = System.currentTimeMillis(); host.readBalances(() -> act.repaint()); }
+        LinearLayout c = card();
+        c.addView(t("ETHEREUM · ERC20 USDT + ETH for gas", Design.DIM(), 10f, Design.sansBold()));
+        c.addView(t("USDT " + (host.usdtRaw == null ? "—" : com.eurobuddha.atomix.eth.EthWallet.format(host.usdtRaw, 6, 6)), Design.IN(), 18f, Design.monoBold()));
+        c.addView(t("ETH " + (host.ethWei == null ? "—" : com.eurobuddha.atomix.eth.EthWallet.format(host.ethWei, 18, 6)), Design.TEXT(), 12f, Design.mono()));
+        String a = host.ethAddress();
+        c.addView(t(a != null ? a : host.bootNote().isEmpty() ? "deriving…" : host.bootNote(), Design.TEXT(), 10f, Design.mono()));
+        c.addView(t(a != null ? "Tap to copy · derived from this node's seed, the same address as the ATOMIX tab and the AtomiX app" : "", Design.ACCENT(), 9.5f, Design.sans()));
+        if (a != null) { c.setOnClickListener(v -> act.copy("Ethereum address", a)); Design.pressable(c); }
     }
 
     private void assetCard(String name, BigDecimal sendable, BigDecimal confirmed, BigDecimal inOrders, BigDecimal settling) {

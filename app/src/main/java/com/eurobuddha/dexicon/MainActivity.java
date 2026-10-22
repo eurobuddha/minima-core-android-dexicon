@@ -90,7 +90,7 @@ public class MainActivity extends AppCompatActivity {
     private MakerEngine engine;
     private boolean paired, pairingKnown, deriving, bookPolling, busy, closed;
     private long chainBlock;
-    private String receiveAddr = "";
+    private String receiveAddr = "", receiveMx = "";   // hex = the resting-layer payout; Mx = what the user sees and shares (PandaDEX: miniaddress, falling back to hex)
     private BigDecimal minimaSendable = BigDecimal.ZERO, mxusdSendable = BigDecimal.ZERO, minimaConfirmed = BigDecimal.ZERO, mxusdConfirmed = BigDecimal.ZERO;
     private long balanceAtMs;
     private String stage = "";
@@ -258,7 +258,7 @@ public class MainActivity extends AppCompatActivity {
             public void onError(String m) {}
         });
         if (receiveAddr.isEmpty()) node.cmd("getaddress", new NodeApi.Cb() {
-            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); if (r != null) receiveAddr = r.optString("address", ""); restingTxn.setPayout(receiveAddr); repaint(); }
+            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); if (r != null) { receiveAddr = r.optString("address", ""); receiveMx = r.optString("miniaddress", receiveAddr); } restingTxn.setPayout(receiveAddr); repaint(); }
             public void onError(String m) {}
         });
     }
@@ -281,7 +281,7 @@ public class MainActivity extends AppCompatActivity {
     long chainBlock() { return chainBlock; }
     boolean isBusy() { return busy; }
     boolean paired() { return paired; }
-    String receiveAddress() { return receiveAddr; }
+    String receiveAddress() { return receiveMx.isEmpty() ? receiveAddr : receiveMx; }
     BigDecimal minimaSendable() { return minimaSendable; }
     BigDecimal mxusdSendable() { return mxusdSendable; }
     BigDecimal minimaConfirmed() { return minimaConfirmed; }
