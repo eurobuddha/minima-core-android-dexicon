@@ -249,8 +249,8 @@ public class MainActivity extends AppCompatActivity {
             public void onResult(JSONObject j) {
                 for (JSONObject b : NodeApi.rows(j)) {
                     String tok = b.optString("tokenid", "");
-                    if (Tokens.isMinima(tok)) { minimaSendable = Util.dec(b.optString("sendable", "0")); minimaConfirmed = Util.dec(b.optString("confirmed", "0")); }
-                    else if (Tokens.isMxUsd(tok)) { mxusdSendable = Util.dec(b.optString("sendable", "0")); mxusdConfirmed = Util.dec(b.optString("confirmed", "0")); }
+                    if (Tokens.isMinima(tok)) { minimaSendable = Util.dec(b.optString("sendable", "0")); minimaConfirmed = Util.dec(b.optString("confirmed", "0")); minimaCoins = b.optInt("coins", 0); }
+                    else if (Tokens.isMxUsd(tok)) { mxusdSendable = Util.dec(b.optString("sendable", "0")); mxusdConfirmed = Util.dec(b.optString("confirmed", "0")); mxusdCoins = b.optInt("coins", 0); }
                 }
                 balanceAtMs = System.currentTimeMillis();
                 repaint();
@@ -281,6 +281,9 @@ public class MainActivity extends AppCompatActivity {
     long chainBlock() { return chainBlock; }
     boolean isBusy() { return busy; }
     boolean paired() { return paired; }
+    int minimaCoins, mxusdCoins;   // wallet coin counts from `balance` (ASSETS › consolidate / split)
+    NodeApi nodeApi() { return node; }
+    void refreshBalances() { if (node != null) readBalances(); }
     String receiveAddress() { return receiveMx.isEmpty() ? receiveAddr : receiveMx; }
     BigDecimal minimaSendable() { return minimaSendable; }
     BigDecimal mxusdSendable() { return mxusdSendable; }
@@ -291,8 +294,14 @@ public class MainActivity extends AppCompatActivity {
     List<MyOrder> myOrders() { return db.myOrders(); }
     boolean isMine(Envelope e) { return me != null && e.signPk.equalsIgnoreCase(me.signPkHex()); }
 
-    void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
-    void setStage(String s) { stage = s == null ? "" : s; repaintHeader(); }
+    void toast(String s) { Toast.makeText(this, here(s), Toast.LENGTH_SHORT).show(); }
+    /** The vendored PandaDEX layer (verbatim) tells you to consolidate "in MinimaCore"; Dexicon has it on ASSETS. */
+    static String here(String s) {
+        return s == null ? null : s.replace("consolidate this token in MinimaCore", "consolidate this token on ASSETS › CONSOLIDATE")
+                .replace("Use MinimaCore consolidation", "Use ASSETS › CONSOLIDATE").replace("Consolidate funding", "Consolidate on ASSETS")
+                .replace("consolidate coins and retry", "consolidate on ASSETS and retry");
+    }
+    void setStage(String s) { stage = s == null ? "" : here(s); repaintHeader(); }
     void copy(String label, String value) {
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (cm == null || value == null || value.isEmpty()) return;
@@ -395,12 +404,12 @@ public class MainActivity extends AppCompatActivity {
         new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle(buy ? "Confirm buy · BOOK/POOL" : "Confirm sell · BOOK/POOL")
                 .setMessage(sb.toString())
-                .setPositiveButton("Execute", (d, w) -> executeComposite(plan, buy))
+                .setPositiveButton("Execute", (d, w) -> executeComposite(plan, buy, amount, price, 0))
                 .setNegativeButton("Back", null)
                 .show();
     }
 
-    private void executeComposite(CompositeRouter.Plan plan, boolean buy) {
+    private void executeComposite(CompositeRouter.Plan plan, boolean buy, BigDecimal amount, BigDecimal price, int retry) {
         if (busy) { toast("A transaction is in progress"); return; }
         busy = true;
         final String route = plan.orderMinima.signum() > 0 && plan.poolMinima.signum() > 0 ? "BOOK+POOL" : plan.poolMinima.signum() > 0 ? "POOL" : "BOOK";
@@ -442,9 +451,69 @@ public class MainActivity extends AppCompatActivity {
                 busy = false;
                 ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", message));
                 setStage("");
-                toast(message); refreshResting(); repaint();
+                refreshResting(); repaint();
+                // A DEX does the wallet work itself: a funding failure is recovered (wait for coins to confirm, or
+                // consolidate the token) and the SAME trade is re-planned within the same limit and retried once.
+                if (retry == 0 && message != null && (message.startsWith("Wallet has") || message.contains("Too many transaction inputs")
+                        || message.contains("needs more than") || message.contains("TxPoW size") || message.contains("too large")))
+                    autoFund(buy, amount, price, buy ? Tokens.MXUSD() : Tokens.MINIMA, buy ? plan.totalMxusd : plan.totalMinima, message);
+                else toast(message);
             }
         });
+    }
+
+    /** Recover a pool/book trade's funding by itself, then retry it once (owner 2026-10-22: "Where is the automation?"):
+     *  coins still confirming → wait for them; enough sendable but in too many / unusable coins → `consolidate` (the
+     *  family's PandaPools/UTXO tool) and wait for it; genuinely short → say so plainly. Waits at most 10 blocks. */
+    private void autoFund(boolean buy, BigDecimal amount, BigDecimal price, String token, BigDecimal need, String why) {
+        String name = Tokens.isMinima(token) ? "MINIMA" : "MxUSD";
+        node.cmd("balance tokenid:" + token, new NodeApi.Cb() {
+            public void onResult(JSONObject j) {
+                BigDecimal sendable = BigDecimal.ZERO, total = BigDecimal.ZERO; int coins = 0;
+                for (JSONObject b : NodeApi.rows(j)) if (token.equalsIgnoreCase(b.optString("tokenid"))) {
+                    sendable = Util.dec(b.optString("sendable", "0")); coins = b.optInt("coins", 0);
+                    total = Util.dec(b.optString("confirmed", "0")).add(Util.dec(b.optString("unconfirmed", "0")));
+                }
+                if (total.compareTo(need) < 0) { toast("Not enough " + name + ": this trade needs " + PriceMath.fmt(need) + ", your wallet holds " + PriceMath.fmt(total)); return; }
+                if (sendable.compareTo(need) < 0) {
+                    setStage("Waiting for your " + name + " to confirm (" + PriceMath.fmt(sendable) + " of " + PriceMath.fmt(need) + " spendable) — the trade retries by itself");
+                    waitThenRetry(buy, amount, price, token, need, chainBlock, false);
+                    return;
+                }
+                final int before = coins;
+                setStage("Your " + name + " is spread over " + coins + " coins — consolidating it, then the trade retries by itself");
+                SignGate.submit(release -> node.cmdR("consolidate tokenid:" + token, new NodeApi.Cb() {
+                    public void onResult(JSONObject x) { release.free(); waitThenRetry(buy, amount, price, token, need, chainBlock, true); }
+                    public void onError(String m) { release.free(); setStage(""); toast("Could not consolidate " + name + ": " + m + " — " + why); }
+                }));
+            }
+            public void onError(String m) { toast(why); }
+        });
+    }
+
+    /** Poll once a block (≤ 10) until the token is spendable again (and, after a consolidation, settled), then re-plan the
+     *  same trade at the same limit and execute it — no second confirmation: the user already confirmed this trade. */
+    private void waitThenRetry(boolean buy, BigDecimal amount, BigDecimal price, String token, BigDecimal need, long startBlock, boolean consolidated) {
+        ui.postDelayed(() -> {
+            if (closed) return;
+            if (chainBlock - startBlock > 10) { setStage(""); toast("Gave up waiting for the wallet after 10 blocks — try the trade again"); return; }
+            node.cmd("balance tokenid:" + token, new NodeApi.Cb() {
+                public void onResult(JSONObject j) {
+                    BigDecimal sendable = BigDecimal.ZERO, unconf = BigDecimal.ZERO;
+                    for (JSONObject b : NodeApi.rows(j)) if (token.equalsIgnoreCase(b.optString("tokenid"))) { sendable = Util.dec(b.optString("sendable", "0")); unconf = Util.dec(b.optString("unconfirmed", "0")); }
+                    boolean ready = sendable.compareTo(need) >= 0 && (!consolidated || unconf.signum() == 0);
+                    if (!ready || busy) { waitThenRetry(buy, amount, price, token, need, startBlock, consolidated); return; }
+                    final List<Order5> orders = new ArrayList<>(restingBook().values());
+                    final List<Pool> pools = new ArrayList<>(pools());
+                    CompositeRouter.Plan again;
+                    try { again = CompositeRouter.plan(orders, pools, buy, amount, price, chainBlock); } catch (RuntimeException e) { again = null; }
+                    if (again == null || again.isEmpty()) { setStage(""); toast("The liquidity moved past your limit while the wallet settled — nothing was traded"); return; }
+                    setStage("Wallet ready — retrying your " + (buy ? "buy" : "sell"));
+                    executeComposite(again, buy, amount, price, 1);
+                }
+                public void onError(String m) { waitThenRetry(buy, amount, price, token, need, startBlock, consolidated); }
+            });
+        }, 15_000);
     }
 
     /** PandaDEX MainActivity.poolImpact. */

@@ -72,7 +72,7 @@ public final class ActivityLog {
 
     /** The live status line (also used on the TRADE stage line). */
     public static String statusText(JSONObject a, long chainBlock, long nowMs) {
-        String s = a.optString("stage"), why = a.optString("reason", "");
+        String s = a.optString("stage"), why = MainActivity.here(a.optString("reason", ""));
         switch (s) {
             case FAILED: return "Failed — " + why;
             case REFUSED: return "Refused by the maker — " + why;

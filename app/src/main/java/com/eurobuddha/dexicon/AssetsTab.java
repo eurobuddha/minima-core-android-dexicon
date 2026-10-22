@@ -52,8 +52,8 @@ public final class AssetsTab extends LinearLayout {
     public void render() {
         body.removeAllViews();
         Funds f = Funds.of(act);   // the same numbers the TRADE funds panel shows
-        assetCard("MINIMA", f.minimaAvailable, act.minimaConfirmed(), f.minimaInOrders, f.minimaSettling);
-        assetCard("MxUSD", f.mxusdAvailable, act.mxusdConfirmed(), f.mxusdInOrders, f.mxusdSettling);
+        assetCard("MINIMA", Tokens.MINIMA, act.minimaCoins, f.minimaAvailable, act.minimaConfirmed(), f.minimaInOrders, f.minimaSettling);
+        assetCard("MxUSD", Tokens.MXUSD(), act.mxusdCoins, f.mxusdAvailable, act.mxusdConfirmed(), f.mxusdInOrders, f.mxusdSettling);
 
         LinearLayout recv = card();
         recv.addView(t("RECEIVE · MINIMA AND MxUSD", Design.DIM(), 10f, Design.sansBold()));
@@ -118,7 +118,7 @@ public final class AssetsTab extends LinearLayout {
         if (a != null) { c.setOnClickListener(v -> act.copy("Ethereum address", a)); Design.pressable(c); }
     }
 
-    private void assetCard(String name, BigDecimal sendable, BigDecimal confirmed, BigDecimal inOrders, BigDecimal settling) {
+    private void assetCard(String name, String tokenid, int coins, BigDecimal sendable, BigDecimal confirmed, BigDecimal inOrders, BigDecimal settling) {
         LinearLayout c = card();
         c.addView(t(name + " · available to trade", Design.DIM(), 10f, Design.sansBold()));
         if (act.balanceAtMs() <= 0) {
@@ -129,6 +129,24 @@ public final class AssetsTab extends LinearLayout {
         c.addView(t(Util.fmtBal(sendable), Design.IN(), 18f, Design.monoBold()));
         c.addView(t("confirmed " + Util.fmtBal(confirmed) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM2(), 9.5f, Design.mono()));
         c.addView(t("in orders " + Util.fmtBal(inOrders) + "  ·  settling +" + Util.fmtBal(settling), Design.ACCENT(), 9.5f, Design.mono()));
-        c.addView(t("Orders are backed by wallet coins that stay spendable; the same coin cannot back two orders.", Design.DIM2(), 9f, Design.sans()));
+        c.addView(t(coins + (coins == 1 ? " coin" : " coins") + " · orders are backed by wallet coins that stay spendable; the same coin cannot back two orders.", Design.DIM2(), 9f, Design.sans()));
+        // the family's wallet tools (PandaPools consolidate, PandaDEX split) — no trip to another app
+        LinearLayout tools = new LinearLayout(getContext());
+        TextView cons = tool("CONSOLIDATE"), split = tool("SPLIT ×" + WalletTools.SPLIT_COUNT);
+        cons.setOnClickListener(v -> WalletTools.consolidate(act, tokenid, name, coins));
+        split.setOnClickListener(v -> WalletTools.split(act, tokenid, name, sendable));
+        LayoutParams l1 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f); l1.rightMargin = Design.dp(getContext(), 6);
+        tools.addView(cons, l1); tools.addView(split, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        LayoutParams tl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); tl.topMargin = Design.dp(getContext(), 8);
+        c.addView(tools, tl);
+    }
+
+    private TextView tool(String label) {
+        TextView b = t(label, Design.ACCENT(), 10.5f, Design.monoBold());
+        b.setGravity(android.view.Gravity.CENTER);
+        int p = Design.dp(getContext(), 8); b.setPadding(0, p, 0, p);
+        b.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
+        Design.pressable(b);
+        return b;
     }
 }
