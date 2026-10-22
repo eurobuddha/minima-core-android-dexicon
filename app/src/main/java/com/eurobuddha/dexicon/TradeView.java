@@ -17,6 +17,10 @@ import android.widget.TextView;
 
 import com.eurobuddha.dexicon.envelope.Envelope;
 import com.eurobuddha.dexicon.maker.MyOrder;
+import com.eurobuddha.dexicon.resting.Order5;
+import com.eurobuddha.dexicon.resting.Pool;
+import com.eurobuddha.dexicon.resting.PriceMath;
+import com.eurobuddha.dexicon.resting.SyntheticDepth;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -24,10 +28,16 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * The spot screen (PandaDEX TradeView): ticker → grouped depth ladder → order panel → my open orders.
  * Inputs are built ONCE and never rebuilt; read-only sections re-render per book update.
+ *
+ * The ladder merges three sources per price level, tagged like the Dexicon MiniDapp (ui/pd_app.js renderBookRows):
+ * FAST (signed relay orders), BOOK (V5 covenant orders) and POOL (PandaPools depth, sampled by SyntheticDepth on a
+ * background thread exactly as PandaDEX TradeView does, painting the last completed snapshot).
  */
 @SuppressLint("ViewConstructor")
 public final class TradeView extends LinearLayout {
@@ -48,6 +58,15 @@ public final class TradeView extends LinearLayout {
     private TextView buyTab, sellTab, totalTv, ctaBtn;
     private EditText priceIn, amountIn;
     private final Runnable totalTask = this::updateTotal;
+
+    // PandaDEX TradeView depth worker: pool depth sampling walks the curve and re-plans through the router, so it
+    // never runs on the UI thread; the ladder paints the last completed snapshot for the current key.
+    private final ExecutorService depthExec = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "dexicon-depth"); t.setDaemon(true); return t;
+    });
+    private boolean depthRunning, closed;
+    private String requestedDepthKey = "", readyDepthKey = "";
+    private List<SyntheticDepth.Row> readyPoolAsks = new ArrayList<>(), readyPoolBids = new ArrayList<>();
 
     public TradeView(MainActivity act) {
         super(act);
@@ -159,8 +178,29 @@ public final class TradeView extends LinearLayout {
         }
     }
 
+    /** One ladder level: FAST / BOOK / POOL MINIMA at this grouped price. */
+    private static final class Level {
+        BigDecimal fast = BigDecimal.ZERO, book = BigDecimal.ZERO, pool = BigDecimal.ZERO, exact;
+        boolean mine, unbacked;
+        BigDecimal total() { return fast.add(book).add(pool); }
+    }
+
+    /** Amount column text, MiniDapp parity (pd_app.js renderBookRows): FAST and POOL are always tagged, BOOK only
+     *  when another source shares the level; amounts truncated to two decimals; one line per source. */
+    public static String amountText(BigDecimal fast, BigDecimal book, BigDecimal pool) {
+        List<String> parts = new ArrayList<>();
+        boolean hasPool = pool != null && pool.signum() > 0;
+        if (fast != null && fast.signum() > 0) parts.add("FAST " + PriceMath.fmtDown(fast, 2));
+        if (book != null && book.signum() > 0) parts.add((!parts.isEmpty() || hasPool ? "BOOK " : "") + PriceMath.fmtDown(book, 2));
+        if (hasPool) parts.add("POOL " + PriceMath.fmtDown(pool, 2));
+        return parts.isEmpty() ? PriceMath.fmtDown(BigDecimal.ZERO, 2) : String.join("\n", parts);
+    }
+
+    /** PandaDEX TradeView.amountText (BOOK + POOL only), kept so its ported test runs unchanged. */
+    public static String amountText(BigDecimal book, BigDecimal pool) { return amountText(BigDecimal.ZERO, book, pool); }
+
     /** One ladder row with a right-anchored translucent depth bar BEHIND the numbers; tap prefills the exact price. */
-    private View ladderRow(BigDecimal price, BigDecimal amount, BigDecimal total, float depthFrac, boolean ask, boolean mine, boolean unbacked, BigDecimal exactPrice) {
+    private View ladderRow(BigDecimal price, Level lv, float depthFrac, boolean ask) {
         FrameLayout f = new FrameLayout(getContext());
         View bar = new View(getContext());
         bar.setBackgroundColor(ask ? (Design.RED() & 0x00FFFFFF) | 0x22000000 : (Design.IN() & 0x00FFFFFF) | 0x22000000);
@@ -170,14 +210,16 @@ public final class TradeView extends LinearLayout {
         f.post(() -> { FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) bar.getLayoutParams(); p.width = (int) (f.getWidth() * Math.min(1f, depthFrac)); bar.setLayoutParams(p); });
         LinearLayout row = new LinearLayout(getContext());
         row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(0, dp(3), 0, dp(3));
-        TextView p = tv((mine ? "• " : "") + Util.fmtPrice(price), 11f, ask ? Design.RED() : Design.IN(), Design.mono());
+        TextView p = tv((lv.mine ? "• " : "") + Util.fmtPrice(price), 11f, ask ? Design.RED() : Design.IN(), Design.mono());
         row.addView(p, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.2f));
-        TextView am = tv(Util.fmtDown(amount, 2), 11f, Design.TEXT(), Design.mono()); am.setGravity(Gravity.END);
+        String amt = amountText(lv.fast, lv.book, lv.pool);
+        TextView am = tv(amt, amt.contains("\n") || amt.contains(" ") ? 9.5f : 11f, Design.TEXT(), Design.mono()); am.setGravity(Gravity.END);
         row.addView(am, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        TextView to = tv(unbacked ? "UNBACKED" : Util.fmt(total.setScale(4, RoundingMode.HALF_UP)), 11f, unbacked ? Design.ACCENT() : Design.DIM(), Design.mono()); to.setGravity(Gravity.END);
+        boolean unbacked = lv.unbacked && lv.book.signum() == 0 && lv.pool.signum() == 0;
+        TextView to = tv(unbacked ? "UNBACKED" : Util.fmt(PriceMath.up(price.multiply(lv.total()), 4)), 11f, unbacked ? Design.ACCENT() : Design.DIM(), Design.mono()); to.setGravity(Gravity.END);
         row.addView(to, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         f.addView(row);
-        BigDecimal prefill = exactPrice != null ? exactPrice : price;
+        BigDecimal prefill = lv.exact != null ? lv.exact : price;
         f.setOnClickListener(v -> { priceIn.setText(prefill.stripTrailingZeros().toPlainString()); setMode(ask); });
         Design.pressable(f);
         return f;
@@ -211,7 +253,7 @@ public final class TradeView extends LinearLayout {
         totalTv = tv("Total: —", 11f, Design.DIM(), Design.mono());
         totalTv.setPadding(0, dp(6), 0, 0);
         c.addView(totalTv);
-        c.addView(tv("Crosses the book → takes the best order (one maker per take, co-signed, final after one block). Otherwise rests on the relays as your order.", 9.5f, Design.DIM2(), Design.sans()));
+        c.addView(tv("Crosses the book → takes the best source for the first level: a FAST relay order (one maker per take, co-signed) or BOOK/POOL on-chain liquidity (one atomic transaction). The confirm dialog says which. Otherwise rests on the relays as your FAST order.", 9.5f, Design.DIM2(), Design.sans()));
         ctaBtn = tv("BUY MINIMA", 14f, Design.ON_ACCENT(), Design.sansBold());
         ctaBtn.setGravity(Gravity.CENTER); ctaBtn.setPadding(0, dp(12), 0, dp(12));
         LayoutParams cl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); cl.topMargin = dp(8);
@@ -302,48 +344,106 @@ public final class TradeView extends LinearLayout {
 
     private void renderLadder(List<Envelope> book) {
         BigDecimal tick = GROUPS[groupIdx];
-        TreeMap<BigDecimal, BigDecimal> asks = new TreeMap<>(), bids = new TreeMap<>((a, b) -> b.compareTo(a));
-        TreeMap<BigDecimal, Boolean> mineAt = new TreeMap<>(), unbackedAt = new TreeMap<>();
-        TreeMap<BigDecimal, BigDecimal> exactAt = new TreeMap<>();
-        int nb = 0, na = 0;
-        BigDecimal bestBid = null, bestAsk = null;
+        TreeMap<BigDecimal, Level> asks = new TreeMap<>(), bids = new TreeMap<>((a, b) -> b.compareTo(a));
+        int fastN = 0, bookN = 0;
         for (Envelope o : book) {
             boolean sell = "sell".equals(o.side);
             BigDecimal p = new BigDecimal(o.price), amt = new BigDecimal(o.amount);
-            BigDecimal g = sell ? p.divide(tick, 0, RoundingMode.CEILING).multiply(tick) : p.divide(tick, 0, RoundingMode.FLOOR).multiply(tick);
-            (sell ? asks : bids).merge(g, amt, BigDecimal::add);
-            if (act.isMine(o)) mineAt.put(g, true);
-            if (o.coins.isEmpty()) unbackedAt.put(g, true);
-            exactAt.merge(g, p, (x, y) -> sell ? x.min(y) : x.max(y));
-            if (sell) { na++; if (bestAsk == null || p.compareTo(bestAsk) < 0) bestAsk = p; } else { nb++; if (bestBid == null || p.compareTo(bestBid) > 0) bestBid = p; }
+            Level lv = level(sell ? asks : bids, p, tick, sell);
+            lv.fast = lv.fast.add(amt);
+            if (act.isMine(o)) lv.mine = true;
+            if (o.coins.isEmpty()) lv.unbacked = true;
+            fastN++;
+        }
+        long block = act.chainBlock();
+        for (Order5 o : act.restingBook().values()) {
+            if (o.expired(block)) continue;
+            Level lv = level(o.sell ? asks : bids, o.price(), tick, o.sell);
+            lv.book = lv.book.add(o.minimaAmount());
+            bookN++;
+        }
+        List<Pool> pools = act.pools();
+        String key = depthKey(pools, tick);
+        requestDepth(pools, tick, key);
+        boolean poolsReady = pools.isEmpty() || key.equals(readyDepthKey);
+        if (key.equals(readyDepthKey)) {
+            for (SyntheticDepth.Row r : readyPoolAsks) { Level lv = asks.computeIfAbsent(r.price, k -> new Level()); lv.pool = lv.pool.add(r.poolMinima); if (lv.exact == null) lv.exact = r.price; }
+            for (SyntheticDepth.Row r : readyPoolBids) { Level lv = bids.computeIfAbsent(r.price, k -> new Level()); lv.pool = lv.pool.add(r.poolMinima); if (lv.exact == null) lv.exact = r.price; }
         }
         asksBox.removeAllViews(); bidsBox.removeAllViews();
-        List<Map.Entry<BigDecimal, BigDecimal>> askList = new ArrayList<>(asks.entrySet()).subList(0, Math.min(MAX_ROWS, asks.size()));
-        BigDecimal askMax = BigDecimal.ZERO; for (Map.Entry<BigDecimal, BigDecimal> e : askList) askMax = askMax.add(e.getValue());
+        List<Map.Entry<BigDecimal, Level>> askList = new ArrayList<>(asks.entrySet()).subList(0, Math.min(MAX_ROWS, asks.size()));
+        BigDecimal askMax = BigDecimal.ZERO; for (Map.Entry<BigDecimal, Level> e : askList) askMax = askMax.add(e.getValue().total());
         BigDecimal running = BigDecimal.ZERO;
         List<View> askRows = new ArrayList<>();
-        for (Map.Entry<BigDecimal, BigDecimal> e : askList) {
-            running = running.add(e.getValue());
-            askRows.add(ladderRow(e.getKey(), e.getValue(), e.getKey().multiply(e.getValue()), askMax.signum() == 0 ? 0 : running.divide(askMax, 4, RoundingMode.HALF_UP).floatValue(),
-                    true, mineAt.containsKey(e.getKey()), unbackedAt.containsKey(e.getKey()), exactAt.get(e.getKey())));
+        for (Map.Entry<BigDecimal, Level> e : askList) {
+            running = running.add(e.getValue().total());
+            askRows.add(ladderRow(e.getKey(), e.getValue(), askMax.signum() == 0 ? 0 : running.divide(askMax, 4, RoundingMode.HALF_UP).floatValue(), true));
         }
         for (int i = askRows.size() - 1; i >= 0; i--) asksBox.addView(askRows.get(i));   // best ask just above centre
-        List<Map.Entry<BigDecimal, BigDecimal>> bidList = new ArrayList<>(bids.entrySet()).subList(0, Math.min(MAX_ROWS, bids.size()));
-        BigDecimal bidMax = BigDecimal.ZERO; for (Map.Entry<BigDecimal, BigDecimal> e : bidList) bidMax = bidMax.add(e.getValue());
+        List<Map.Entry<BigDecimal, Level>> bidList = new ArrayList<>(bids.entrySet()).subList(0, Math.min(MAX_ROWS, bids.size()));
+        BigDecimal bidMax = BigDecimal.ZERO; for (Map.Entry<BigDecimal, Level> e : bidList) bidMax = bidMax.add(e.getValue().total());
         running = BigDecimal.ZERO;
-        for (Map.Entry<BigDecimal, BigDecimal> e : bidList) {
-            running = running.add(e.getValue());
-            bidsBox.addView(ladderRow(e.getKey(), e.getValue(), e.getKey().multiply(e.getValue()), bidMax.signum() == 0 ? 0 : running.divide(bidMax, 4, RoundingMode.HALF_UP).floatValue(),
-                    false, mineAt.containsKey(e.getKey()), unbackedAt.containsKey(e.getKey()), exactAt.get(e.getKey())));
+        for (Map.Entry<BigDecimal, Level> e : bidList) {
+            running = running.add(e.getValue().total());
+            bidsBox.addView(ladderRow(e.getKey(), e.getValue(), bidMax.signum() == 0 ? 0 : running.divide(bidMax, 4, RoundingMode.HALF_UP).floatValue(), false));
         }
+        // Ticker = best of all three sources: the exact best price behind the best displayed level on each side.
+        BigDecimal bestAsk = askList.isEmpty() ? null : askList.get(0).getValue().exact, bestBid = bidList.isEmpty() ? null : bidList.get(0).getValue().exact;
         BigDecimal mid = bestBid != null && bestAsk != null ? bestBid.add(bestAsk).divide(new BigDecimal(2), 8, RoundingMode.HALF_UP) : bestBid != null ? bestBid : bestAsk;
         centerPriceTv.setText(mid == null ? "—" : Util.fmtPrice(mid));
         midTv.setText(mid == null ? "—" : Util.fmtPrice(mid));
         spreadTv.setText(bestBid != null && bestAsk != null ? "spread " + Util.fmt(bestAsk.subtract(bestBid)) : "");
-        kindTv.setText(mid == null ? "no live orders on the relays" : bestBid != null && bestAsk != null ? "mid of best bid / best ask" : bestBid != null ? "best bid only" : "best ask only");
-        bidsTv.setText(nb + " order" + (nb == 1 ? "" : "s")); asksTv.setText(na + " order" + (na == 1 ? "" : "s"));
-        if (book.isEmpty()) asksBox.addView(tv(act.relay().relays().isEmpty() ? "Add a relay in the RELAYS tab." : "No live orders yet.", 11f, Design.DIM2(), Design.sans()));
+        String layers = !act.restingOn() ? " · FAST only (BOOK/POOL need mainnet MxUSD)" : " · FAST + BOOK + POOL" + (poolsReady ? "" : " (pool depth loading)");
+        kindTv.setText((mid == null ? "no live orders" : bestBid != null && bestAsk != null ? "mid of best bid / best ask" : bestBid != null ? "best bid only" : "best ask only") + layers);
+        bidsTv.setText(fastN + " fast · " + bookN + " book order" + (bookN == 1 ? "" : "s"));
+        asksTv.setText(pools.size() + " pool" + (pools.size() == 1 ? "" : "s"));
+        if (asks.isEmpty() && bids.isEmpty()) asksBox.addView(tv(act.relay().relays().isEmpty() && !act.restingOn() ? "Add a relay in the RELAYS tab." : "No live orders yet.", 11f, Design.DIM2(), Design.sans()));
     }
+
+    /** Group a price to the tick (asks round up, bids down — PandaDEX levelPrice) and remember the best exact price. */
+    private static Level level(TreeMap<BigDecimal, Level> side, BigDecimal p, BigDecimal tick, boolean sell) {
+        BigDecimal g = sell ? p.divide(tick, 0, RoundingMode.CEILING).multiply(tick) : p.divide(tick, 0, RoundingMode.FLOOR).multiply(tick);
+        Level lv = side.computeIfAbsent(g, k -> new Level());
+        if (lv.exact == null || (sell ? p.compareTo(lv.exact) < 0 : p.compareTo(lv.exact) > 0)) lv.exact = p;
+        return lv;
+    }
+
+    private void requestDepth(List<Pool> pools, BigDecimal tick, String key) {
+        if (closed || depthRunning || key.equals(requestedDepthKey) || key.equals(readyDepthKey)) return;
+        depthRunning = true;
+        requestedDepthKey = key;
+        List<Pool> snapshot = new ArrayList<>(pools);
+        depthExec.execute(() -> {
+            List<SyntheticDepth.Row> asks = new ArrayList<>(), bids = new ArrayList<>();
+            try {
+                asks = SyntheticDepth.sample(snapshot, true, tick, 10);
+                bids = SyntheticDepth.sample(snapshot, false, tick, 10);
+            } catch (RuntimeException invalid) { /* Invalid depth is never rendered as executable liquidity. */ }
+            final List<SyntheticDepth.Row> resultAsks = asks, resultBids = bids;
+            ui.post(() -> {
+                depthRunning = false;
+                if (closed) return;
+                readyDepthKey = key;
+                readyPoolAsks = resultAsks;
+                readyPoolBids = resultBids;
+                act.repaint();   // renderLadder schedules at most the latest changed snapshot, never a backlog
+            });
+        });
+    }
+
+    private static String depthKey(List<Pool> pools, BigDecimal tick) {
+        StringBuilder sb = new StringBuilder(tick == null ? "exact" : tick.toPlainString());
+        if (pools != null) for (Pool p : pools) {
+            if (p == null) continue;
+            sb.append('|').append(p.address)
+              .append('|').append(p.coinidM).append(':').append(p.reserveM)
+              .append('|').append(p.coinidT).append(':').append(p.reserveT)
+              .append('|').append(p.tok);
+        }
+        return sb.toString();
+    }
+
+    void close() { closed = true; depthExec.shutdownNow(); }
 
     private void renderOrders() {
         ordersBox.removeAllViews();

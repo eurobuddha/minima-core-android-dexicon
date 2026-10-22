@@ -13,10 +13,12 @@ signatures (`spec/vectors/order-v1-vector.json` is a unit test here), same relay
 
 ## What it does
 
-- **TRADE** — ticker (book mid / spread), grouped depth ladder with cumulative depth bars, BUY/SELL panel with
-  percent chips, your open orders with edit / cancel. A price that crosses the book TAKES the best resting order
-  (one maker per take, the amount capped at that order); otherwise the order RESTS on the relays backed by your
-  wallet coins.
+- **TRADE** — ticker (mid of the best bid / ask across all three sources), grouped depth ladder with cumulative
+  depth bars and per-level **FAST / BOOK / POOL** amounts (MiniDapp parity), BUY/SELL panel with percent chips, your
+  open orders with edit / cancel. A price that crosses TAKES the best single source for the first level: a FAST relay
+  order (one maker per take, capped at that order) or BOOK/POOL on-chain liquidity through PandaDEX's composite
+  transaction (confirm dialog lists every part); otherwise the order RESTS on the relays backed by your wallet coins.
+  BOOK/POOL need the mainnet MxUSD token (off under the DEV dollar-token override).
 - **ORDERS** — open orders (+ takes awaiting the maker) and your fills with SETTLING / DONE / LOST badges.
 - **HISTORY** — every fill, net totals, CSV export with stable column names (see below).
 - **ASSETS** — available / in orders / settling per token, receive address and Dexicon publicId (full value,
@@ -41,6 +43,9 @@ relay/      RelayClient (multi-relay union by (signPk, orderId, highest seq), lo
 fill/       FillPlan (plan + verifyAsMaker, exact 64-digit BigDecimal, maker-favour rounding), FillTxn (taker build / maker cosign via the node), Coin, Tokens
 maker/      MyOrder, MakerEngine (create/edit/cancel/afterFill/refresh + relock), MakerService (foreground), HeartbeatReceiver, BootReceiver
             MainActivity, TradeView, OrdersTab, HistoryTab, AssetsTab, RelaysTab, TradeExport, DexDb, Design, NodeApi (+ NodeTransport*), SignGate
+resting/    PandaDEX 0.4.23 resting layer, vendored near-verbatim (header names each source): BookScanner/BookRepository
+            (V5 covenant book), PoolBook/PoolLiquidityRepository (PandaPools), CompositeRouter/PoolRouter/VirtualCurve/
+            SyntheticDepth/SweepPlanner/PriceMath, DexTxn (composite taker only), FundingCoins, CoinLock; SourcePick (glue)
 minimaapi/  the vendored Minima Core IPC SDK sources (from apks/pandadex) — the ONLY way this app reaches the node
 ```
 

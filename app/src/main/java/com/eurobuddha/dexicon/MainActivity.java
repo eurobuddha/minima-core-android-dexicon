@@ -38,6 +38,17 @@ import com.eurobuddha.dexicon.maker.MyOrder;
 import com.eurobuddha.dexicon.relay.HttpTransport;
 import com.eurobuddha.dexicon.relay.RelayClient;
 import com.eurobuddha.dexicon.relay.RelayStore;
+import com.eurobuddha.dexicon.resting.BookRepository;
+import com.eurobuddha.dexicon.resting.CompositeRouter;
+import com.eurobuddha.dexicon.resting.DexContract;
+import com.eurobuddha.dexicon.resting.DexTxn;
+import com.eurobuddha.dexicon.resting.Order5;
+import com.eurobuddha.dexicon.resting.Pool;
+import com.eurobuddha.dexicon.resting.PoolLiquidityRepository;
+import com.eurobuddha.dexicon.resting.PoolRouter;
+import com.eurobuddha.dexicon.resting.PriceMath;
+import com.eurobuddha.dexicon.resting.SourcePick;
+import com.eurobuddha.dexicon.resting.SweepPlanner;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -45,6 +56,7 @@ import org.json.JSONObject;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -62,6 +74,14 @@ public class MainActivity extends AppCompatActivity {
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
+    /** PandaDEX TradeView quoteExec: composite routing is CPU work, never on the UI thread. */
+    private final ExecutorService quoteExec = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-quote"); t.setDaemon(true); return t; });
+
+    // RESTING layer (vendored PandaDEX 0.4.23): V5 covenant book + PandaPools, taken through DexTxn.fillComposite.
+    private BookRepository restingRepo;
+    private PoolLiquidityRepository poolRepo;
+    private DexTxn restingTxn;
+    private boolean v5Ready, v5Registering;
 
     private NodeApi node;
     private DexDb db;
@@ -119,6 +139,11 @@ public class MainActivity extends AppCompatActivity {
             if (enabled) onPaired();
             repaint();
         });
+        restingRepo = new BookRepository(node);
+        poolRepo = new PoolLiquidityRepository(node);
+        restingTxn = new DexTxn(node);
+        restingRepo.subscribe((orders, syncing) -> repaint());
+        poolRepo.subscribe((pools, syncing) -> repaint());
         changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { settleStage(); repaint(); retryIfDue(); restIfDue(); } };
         ContextCompat.registerReceiver(this, changedReceiver, new IntentFilter(MakerService.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
         nodeReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { if (paired) { readBalances(); readBlock(); } } };
@@ -138,7 +163,33 @@ public class MainActivity extends AppCompatActivity {
     private void onPaired() {
         readBalances(); readBlock();
         if (me == null) deriveIdentity();
+        refreshResting();
     }
+
+    /** BOOK/POOL use the mainnet MxUSD id baked into the V5 covenant and the pool scan; a dev dollar-token
+     *  override (Settings) means there is no such liquidity on this chain, so the layer stays off. */
+    boolean restingOn() { return Tokens.MXUSD_MAINNET.equalsIgnoreCase(Tokens.MXUSD()); }
+
+    /** PandaDEX MainActivity order: verify + register the V5 covenant (trackall:false) once, then scan book and pools.
+     *  Both repositories are single-flight and throttled (4 s book, 8 s pools), so calling this per block is safe. */
+    private void refreshResting() {
+        if (!paired || !restingOn() || restingRepo == null) return;
+        if (!v5Ready) {
+            if (v5Registering) return;
+            v5Registering = true;
+            DexContract.ensureScript(node, new DexContract.Ready() {
+                @Override public void ok() { v5Registering = false; v5Ready = true; refreshResting(); }
+                @Override public void failed(String why) { v5Registering = false; setStage("BOOK layer unavailable: " + why); }
+            });
+            return;
+        }
+        restingRepo.refresh();
+        poolRepo.refresh();
+    }
+
+    Map<String, Order5> restingBook() { return restingRepo == null || !restingOn() ? java.util.Collections.emptyMap() : restingRepo.book(); }
+    /** PandaDEX MainActivity.pools(): only a current scan is tradeable liquidity. */
+    List<Pool> pools() { return poolRepo == null || !restingOn() || !poolRepo.current() ? java.util.Collections.emptyList() : poolRepo.pools(); }
 
     private void deriveIdentity() {
         if (deriving) return;
@@ -161,7 +212,14 @@ public class MainActivity extends AppCompatActivity {
 
     private void readBlock() {
         node.cmd("block", new NodeApi.Cb() {
-            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); try { chainBlock = Long.parseLong(r.optString("block", "0")); } catch (Exception ignored) {} repaintHeader(); }
+            public void onResult(JSONObject j) {
+                JSONObject r = j.optJSONObject("response");
+                long was = chainBlock;
+                try { chainBlock = Long.parseLong(r.optString("block", "0")); } catch (Exception ignored) {}
+                restingRepo.setChainBlock(chainBlock); restingTxn.setChainBlock(chainBlock);
+                if (chainBlock != was) refreshResting();   // book + pools follow the chain, once per new block
+                repaintHeader();
+            }
             public void onError(String m) {}
         });
     }
@@ -180,7 +238,7 @@ public class MainActivity extends AppCompatActivity {
             public void onError(String m) {}
         });
         if (receiveAddr.isEmpty()) node.cmd("getaddress", new NodeApi.Cb() {
-            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); if (r != null) receiveAddr = r.optString("address", ""); repaint(); }
+            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); if (r != null) receiveAddr = r.optString("address", ""); restingTxn.setPayout(receiveAddr); repaint(); }
             public void onError(String m) {}
         });
     }
@@ -224,16 +282,53 @@ public class MainActivity extends AppCompatActivity {
 
     // ---- order desk ----
 
-    /** BUY/SELL from the panel: if the book crosses at this price, TAKE the best order (one maker per take); else REST. */
-    void placeOrder(boolean buy, BigDecimal price, BigDecimal amount) {
-        if (me == null || engine == null) { toast("Identity not ready — is Dexicon enabled in Minima Core?"); return; }
-        if (busy) { toast("A transaction is in progress"); return; }
-        Envelope best = null;
+    /** Best FAST order on the opposite side that a limit at {@code price} crosses (never mine, never unbacked). */
+    private Envelope bestFastCross(boolean buy, BigDecimal price) {
         for (Envelope e : relay.orders(buy ? "sell" : "buy")) {
             if (isMine(e) || e.coins.isEmpty()) continue;
             BigDecimal p = new BigDecimal(e.price);
-            if (buy ? p.compareTo(price) <= 0 : p.compareTo(price) >= 0) { best = e; break; }
+            if (buy ? p.compareTo(price) <= 0 : p.compareTo(price) >= 0) return e;
         }
+        return null;
+    }
+
+    /**
+     * BUY/SELL from the panel. A crossing order takes the best SINGLE source for the first level (see
+     * {@link SourcePick}): a FAST relay order through the two-party co-signed take, or BOOK/POOL liquidity through
+     * PandaDEX's composite transaction (quoted off the UI thread, exactly as PandaDEX TradeView.submit). Nothing
+     * crosses → the order rests on the relays as a FAST order.
+     */
+    void placeOrder(boolean buy, BigDecimal price, BigDecimal amount) {
+        if (me == null || engine == null) { toast("Identity not ready — is Dexicon enabled in Minima Core?"); return; }
+        if (busy) { toast("A transaction is in progress"); return; }
+        final Envelope best = bestFastCross(buy, price);
+        final List<Order5> orders = new ArrayList<>(restingBook().values());
+        final List<Pool> pools = new ArrayList<>(pools());
+        if (orders.isEmpty() && pools.isEmpty()) { placeFast(buy, price, amount, best); return; }
+        final long block = chainBlock;
+        final BigDecimal fastQty = best == null ? null : amount.min(new BigDecimal(best.amount));
+        busy = true; setStage("Calculating quote…"); repaint();
+        quoteExec.execute(() -> {
+            CompositeRouter.Plan full = null, head = null;
+            String error = null;
+            try {
+                full = CompositeRouter.plan(orders, pools, buy, amount, price, block);
+                head = fastQty == null ? full : CompositeRouter.plan(orders, pools, buy, fastQty, price, block);
+            } catch (RuntimeException invalid) { error = "Could not calculate this quote. Refresh and check the amounts."; }
+            final CompositeRouter.Plan fFull = full, fHead = head; final String fError = error;
+            ui.post(() -> {
+                if (closed) return;
+                busy = false; setStage(""); repaint();
+                if (fError != null) { toast(fError); return; }
+                if (SourcePick.restingFirst(fHead, fastQty, best == null ? null : new BigDecimal(best.price), buy))
+                    confirmComposite(fFull, buy, amount, price, best);
+                else placeFast(buy, price, amount, best);
+            });
+        });
+    }
+
+    /** The FAST path (unchanged from 0.1.7): take the best crossing fast order, else rest as a fast order. */
+    private void placeFast(boolean buy, BigDecimal price, BigDecimal amount, Envelope best) {
         if (best != null) {
             BigDecimal now = amount.min(new BigDecimal(best.amount)), rest = amount.subtract(now);
             try { db.setMeta("retry", new JSONObject().put("buy", buy).put("price", price.toPlainString()).put("amount", amount.toPlainString()).put("rest", rest.toPlainString()).put("tried", new org.json.JSONArray().put(best.orderId)).toString()); } catch (Exception ignored) {}
@@ -250,6 +345,73 @@ public class MainActivity extends AppCompatActivity {
                         repaint();
                     });
                 });
+    }
+
+    /** PandaDEX MainActivity.confirmComposite: list every BOOK and POOL part, effective and worst price, then DexTxn. */
+    private void confirmComposite(CompositeRouter.Plan plan, boolean buy, BigDecimal amount, BigDecimal price, Envelope fastBest) {
+        BigDecimal rest = amount.subtract(plan.totalMinima).max(BigDecimal.ZERO);
+        StringBuilder sb = new StringBuilder();
+        sb.append(buy ? "Buying " : "Selling ").append(PriceMath.fmt(plan.totalMinima)).append(" MINIMA now from on-chain liquidity\n");
+        sb.append("Effective ").append(PriceMath.fmtPrice(plan.effectivePrice)).append("  ·  ").append(PriceMath.fmt(plan.totalMxusd)).append(" MxUSD\n");
+        if (plan.orderMinima.signum() > 0) {
+            sb.append("BOOK ").append(PriceMath.fmt(plan.orderMinima)).append(" MINIMA / ").append(PriceMath.fmt(plan.orderMxusd)).append(" MxUSD across ")
+              .append(plan.orderTakes.size()).append(plan.orderTakes.size() == 1 ? " order\n" : " orders\n");
+        }
+        if (plan.poolMinima.signum() > 0) {
+            sb.append("POOL ").append(PriceMath.fmt(plan.poolMinima)).append(" MINIMA / ").append(PriceMath.fmt(plan.poolMxusd)).append(" MxUSD across ")
+              .append(plan.poolCount()).append(plan.poolCount() == 1 ? " pool\n" : " pools\n");
+            String impact = poolImpact(plan);
+            if (!impact.isEmpty()) sb.append("Price impact ").append(impact).append("\n");
+        }
+        if (plan.worstMarginalPrice.signum() > 0) sb.append("Worst marginal ").append(PriceMath.fmtPrice(plan.worstMarginalPrice)).append("\n");
+        for (SweepPlanner.Take t : plan.orderTakes) {
+            sb.append("  • BOOK ").append(PriceMath.fmt(t.minima)).append(" @ ").append(PriceMath.fmtPrice(t.order.price())).append(t.partial ? "  (partial)" : "")
+              .append("\n     order coin ").append(t.order.coinid).append("\n");
+        }
+        if (plan.poolRoute != null) for (PoolRouter.Alloc a : plan.poolRoute.allocs) {
+            BigDecimal m = buy ? a.quote.outAmount : a.quote.inAmount, u = buy ? a.quote.inAmount : a.quote.outAmount;
+            sb.append("  • POOL ").append(PriceMath.fmt(m)).append(" MINIMA / ").append(PriceMath.fmt(u)).append(" MxUSD")
+              .append("\n     pool ").append(a.pool.address).append("\n");
+        }
+        if (fastBest != null) sb.append("\nBeats the best FAST ").append(buy ? "ask" : "bid").append(" @ ").append(fastBest.price).append(" for this size; FAST is not used in this trade.\n");
+        if (rest.signum() > 0) sb.append("\nThe remaining ").append(PriceMath.fmt(rest)).append(" MINIMA is NOT traded or rested by this transaction — place it again once it confirms.\n");
+        sb.append("\nOne atomic transaction, signed by your node; final after one block.");
+        new AlertDialog.Builder(this, Design.dialogTheme())
+                .setTitle(buy ? "Confirm buy · BOOK/POOL" : "Confirm sell · BOOK/POOL")
+                .setMessage(sb.toString())
+                .setPositiveButton("Execute", (d, w) -> executeComposite(plan, buy))
+                .setNegativeButton("Back", null)
+                .show();
+    }
+
+    private void executeComposite(CompositeRouter.Plan plan, boolean buy) {
+        if (busy) { toast("A transaction is in progress"); return; }
+        busy = true;
+        setStage((buy ? "Buy" : "Sell") + " accepted · selecting wallet coins for " + plan.poolCount() + " pool(s) and " + plan.orderTakes.size() + " book order(s)");
+        repaint();
+        restingTxn.fillComposite(plan, buy, new DexTxn.Result() {
+            @Override public void onProgress(String message) { setStage(message); }
+            @Override public void onPosted(String txpowid) {
+                busy = false;
+                setStage("Posted " + txpowid + " — waiting for a block to confirm your " + (buy ? "buy" : "sell") + " of " + PriceMath.fmt(plan.totalMinima) + " MINIMA");
+                refreshResting(); readBalances(); repaint();
+            }
+            @Override public void onFailed(String message) {
+                busy = false;
+                setStage("Trade failed — " + message);
+                toast(message); refreshResting(); repaint();
+            }
+        });
+    }
+
+    /** PandaDEX MainActivity.poolImpact. */
+    private static String poolImpact(CompositeRouter.Plan plan) {
+        if (plan == null || plan.poolRoute == null || !plan.poolRoute.ok
+                || plan.poolRoute.spotBefore.signum() <= 0 || plan.effectivePrice.signum() <= 0) return "";
+        BigDecimal pct = plan.effectivePrice.subtract(plan.poolRoute.spotBefore).abs()
+                .multiply(new BigDecimal("100"), PriceMath.MC)
+                .divide(plan.poolRoute.spotBefore, 2, java.math.RoundingMode.HALF_UP);
+        return pct.toPlainString() + "%";
     }
 
     /** Mirror of the MiniDapp's retryNextLevel: a take from the order form that lost the race re-plans the same limit
@@ -442,7 +604,7 @@ public class MainActivity extends AppCompatActivity {
         header.addView(verPill, vp);
         TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾", Design.SURFACE2(), Design.DIM());
         themePill.setMinWidth(Design.dp(this, 48)); themePill.setMinHeight(Design.dp(this, 48));
-        themePill.setOnClickListener(v -> { Design.toggle(this); setContentView(buildChrome()); selectTab(tab); });
+        themePill.setOnClickListener(v -> { Design.toggle(this); if (trade != null) trade.close(); setContentView(buildChrome()); selectTab(tab); });
         Design.pressable(themePill);
         header.addView(themePill);
         root.addView(header);
@@ -537,8 +699,11 @@ public class MainActivity extends AppCompatActivity {
         ui.removeCallbacksAndMessages(null);
         if (changedReceiver != null) try { unregisterReceiver(changedReceiver); } catch (Exception ignored) {}
         if (nodeReceiver != null) try { unregisterReceiver(nodeReceiver); } catch (Exception ignored) {}
+        if (trade != null) trade.close();
+        if (restingRepo != null) restingRepo.close();
         if (node != null) node.onDestroy();
         net.shutdownNow();
+        quoteExec.shutdownNow();
         super.onDestroy();
     }
 }
