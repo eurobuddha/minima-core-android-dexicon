@@ -50,24 +50,9 @@ public final class AssetsTab extends LinearLayout {
 
     public void render() {
         body.removeAllViews();
-        // in my resting orders
-        BigDecimal ordersM = BigDecimal.ZERO, ordersU = BigDecimal.ZERO;
-        for (MyOrder o : act.myOrders()) {
-            if (!o.live()) continue;
-            if ("sell".equals(o.side)) ordersM = ordersM.add(Util.dec(o.remaining));
-            else ordersU = ordersU.add(FillPlan.up8(Util.dec(o.remaining).multiply(Util.dec(o.price), FillPlan.MC)));
-        }
-        // settling: what my unconfirmed fills will bring in
-        BigDecimal settM = BigDecimal.ZERO, settU = BigDecimal.ZERO;
-        for (JSONObject f : act.db().fills(500)) {
-            if (!"settling".equals(f.optString("status"))) continue;
-            boolean buy = "buy".equals(f.optString("side")), maker = "maker".equals(f.optString("role"));
-            BigDecimal m = Util.dec(f.optString("filled", "0"));
-            BigDecimal u = maker ? Util.dec(f.optString("received", "0")) : Util.dec(f.optString("got", "0"));
-            if (buy) settM = settM.add(m); else settU = settU.add(u);
-        }
-        assetCard("MINIMA", act.minimaSendable(), act.minimaConfirmed(), ordersM, settM);
-        assetCard("MxUSD", act.mxusdSendable(), act.mxusdConfirmed(), ordersU, settU);
+        Funds f = Funds.of(act);   // the same numbers the TRADE funds panel shows
+        assetCard("MINIMA", f.minimaAvailable, act.minimaConfirmed(), f.minimaInOrders, f.minimaSettling);
+        assetCard("MxUSD", f.mxusdAvailable, act.mxusdConfirmed(), f.mxusdInOrders, f.mxusdSettling);
 
         LinearLayout recv = card();
         recv.addView(t("RECEIVE", Design.DIM(), 10f, Design.sansBold()));
@@ -114,9 +99,9 @@ public final class AssetsTab extends LinearLayout {
             c.addView(t(act.paired() ? "Waiting for wallet balances from Minima Core." : "Pair with Minima Core (Apps → enable Dexicon).", Design.DIM2(), 10f, Design.sans()));
             return;
         }
-        c.addView(t(Util.fmt(sendable), Design.IN(), 18f, Design.monoBold()));
-        c.addView(t("confirmed " + Util.fmt(confirmed) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM2(), 9.5f, Design.mono()));
-        c.addView(t("in orders " + Util.fmt(inOrders) + "  ·  settling +" + Util.fmt(settling), Design.ACCENT(), 9.5f, Design.mono()));
+        c.addView(t(Util.fmtBal(sendable), Design.IN(), 18f, Design.monoBold()));
+        c.addView(t("confirmed " + Util.fmtBal(confirmed) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM2(), 9.5f, Design.mono()));
+        c.addView(t("in orders " + Util.fmtBal(inOrders) + "  ·  settling +" + Util.fmtBal(settling), Design.ACCENT(), 9.5f, Design.mono()));
         c.addView(t("Orders are backed by wallet coins that stay spendable; the same coin cannot back two orders.", Design.DIM2(), 9f, Design.sans()));
     }
 }

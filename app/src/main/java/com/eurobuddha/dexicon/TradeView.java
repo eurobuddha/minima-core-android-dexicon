@@ -58,6 +58,11 @@ public final class TradeView extends LinearLayout {
 
     private boolean buyMode = true;
     private TextView buyTab, sellTab, totalTv, ctaBtn;
+    // funds panel + live order preview (owner 2026-10-22: balances must be visible where you trade)
+    private TextView fundsMinima, fundsMxusd, fundsValue, availTv, warnTv;
+    private java.util.List<OrderPreview.Lvl> lastAsks = new ArrayList<>(), lastBids = new ArrayList<>();
+    private BigDecimal lastMid;
+    private boolean canAfford = true;
     private EditText priceIn, amountIn;
     private final Runnable totalTask = this::updateTotal;
 
@@ -76,7 +81,7 @@ public final class TradeView extends LinearLayout {
         setOrientation(VERTICAL);
         int pad = dp(12);
         setPadding(pad, pad, pad, pad);
-        buildTicker(); buildLadder(); buildOrderPanel(); buildOrders();
+        buildTicker(); buildFunds(); buildLadder(); buildOrderPanel(); buildOrders();
     }
 
     private int dp(int v) { return Design.dp(getContext(), v); }
@@ -130,6 +135,41 @@ public final class TradeView extends LinearLayout {
         col.addView(v);
         row.addView(col, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         return v;
+    }
+
+    // ---- funds ----
+    private void buildFunds() {
+        LinearLayout c = card();
+        LinearLayout top = new LinearLayout(getContext());
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.addView(tv("YOUR FUNDS", 10f, Design.DIM(), Design.sansBold()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        fundsValue = tv("", 10f, Design.DIM(), Design.mono());
+        top.addView(fundsValue);
+        c.addView(top);
+        LinearLayout cols = new LinearLayout(getContext());
+        fundsMinima = tv("MINIMA\n—", 11f, Design.TEXT(), Design.mono());
+        fundsMxusd = tv("MxUSD\n—", 11f, Design.TEXT(), Design.mono());
+        cols.addView(fundsMinima, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        cols.addView(fundsMxusd, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        LayoutParams cl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); cl.topMargin = dp(4);
+        c.addView(cols, cl);
+    }
+
+    private void renderFunds() {
+        if (fundsMinima == null) return;
+        if (!act.paired()) { fundsMinima.setText("MINIMA\nnot paired"); fundsMxusd.setText("MxUSD\nnot paired"); fundsValue.setText(""); return; }
+        Funds f = Funds.of(act);
+        fundsMinima.setText(fundsBlock("MINIMA", f.minimaAvailable, f.minimaInOrders, f.minimaSettling, f.minimaTotal()));
+        fundsMxusd.setText(fundsBlock("MxUSD", f.mxusdAvailable, f.mxusdInOrders, f.mxusdSettling, f.mxusdTotal()));
+        BigDecimal v = f.valueAt(lastMid);
+        fundsValue.setText(v == null ? "" : "≈ " + Util.fmt(v.setScale(4, RoundingMode.DOWN)) + " MxUSD @ mid " + Util.fmtPrice(lastMid));
+    }
+
+    private static String fundsBlock(String name, BigDecimal avail, BigDecimal orders, BigDecimal settling, BigDecimal total) {
+        return name + "\n" + Util.fmtBal(avail) + "  available"
+                + "\n" + Util.fmtBal(orders) + "  in your orders"
+                + "\n+" + Util.fmtBal(settling) + "  settling"
+                + "\n" + Util.fmtBal(total) + "  total";
     }
 
     // ---- ladder ----
@@ -240,6 +280,10 @@ public final class TradeView extends LinearLayout {
         priceIn = input("Price (MxUSD per MINIMA)");
         amountIn = input("Amount (MINIMA)");
         c.addView(priceIn); c.addView(amountIn);
+        availTv = tv("Available: —", 11f, Design.ACCENT(), Design.mono());
+        availTv.setPadding(0, dp(6), 0, 0);
+        availTv.setOnClickListener(v -> applyPercent(100));   // tap = use everything free on this side
+        c.addView(availTv);
         LinearLayout pct = new LinearLayout(getContext());
         for (int p : new int[]{25, 50, 75, 100}) {
             TextView b = tv(p + "%", 10f, Design.DIM(), Design.mono());
@@ -255,6 +299,9 @@ public final class TradeView extends LinearLayout {
         totalTv = tv("Total: —", 11f, Design.DIM(), Design.mono());
         totalTv.setPadding(0, dp(6), 0, 0);
         c.addView(totalTv);
+        warnTv = tv("", 11f, Design.RED(), Design.monoBold());
+        warnTv.setPadding(0, dp(4), 0, 0);
+        c.addView(warnTv);
         c.addView(tv("Crosses the book → takes the best source for the first level: a FAST relay order (one maker per take, co-signed) or BOOK/POOL on-chain liquidity (one atomic transaction). The confirm dialog says which. Otherwise rests on the relays as your FAST order.", 9.5f, Design.DIM2(), Design.sans()));
         ctaBtn = tv("BUY MINIMA", 14f, Design.ON_ACCENT(), Design.sansBold());
         ctaBtn.setGravity(Gravity.CENTER); ctaBtn.setPadding(0, dp(12), 0, dp(12));
@@ -303,17 +350,49 @@ public final class TradeView extends LinearLayout {
         BigDecimal price = Util.dec(priceIn.getText().toString());
         if (buyMode) {
             if (price.signum() <= 0) return;
-            BigDecimal usd = act.mxusdSendable().multiply(new BigDecimal(pct)).divide(new BigDecimal(100), 8, RoundingMode.DOWN);
+            BigDecimal usd = Funds.of(act).freeFor(true).multiply(new BigDecimal(pct)).divide(new BigDecimal(100), 8, RoundingMode.DOWN);
             amountIn.setText(usd.divide(price, 8, RoundingMode.DOWN).stripTrailingZeros().toPlainString());
         } else {
-            amountIn.setText(act.minimaSendable().multiply(new BigDecimal(pct)).divide(new BigDecimal(100), 8, RoundingMode.DOWN).stripTrailingZeros().toPlainString());
+            amountIn.setText(Funds.of(act).freeFor(false).multiply(new BigDecimal(pct)).divide(new BigDecimal(100), 8, RoundingMode.DOWN).stripTrailingZeros().toPlainString());
         }
         updateTotal();
     }
 
     private void updateTotal() {
+        if (totalTv == null) return;
+        boolean buy = buyMode;
+        Funds f = act.paired() ? Funds.of(act) : null;
+        if (availTv != null) availTv.setText(f == null ? "Available: — (not paired)"
+                : "Available: " + Util.fmtBal(f.freeFor(buy)) + (buy ? " MxUSD" : " MINIMA") + "  ·  tap for max"
+                  + "\n(" + Util.fmtBal(f.minimaAvailable) + " MINIMA · " + Util.fmtBal(f.mxusdAvailable) + " MxUSD in wallet)");
         BigDecimal p = Util.dec(priceIn.getText().toString()), a = Util.dec(amountIn.getText().toString());
-        totalTv.setText(p.signum() > 0 && a.signum() > 0 ? "Total: " + Util.fmt(a.multiply(p).setScale(8, RoundingMode.UP)) + " MxUSD" : "Total: —");
+        canAfford = true;
+        if (p.signum() <= 0 || a.signum() <= 0 || f == null) { totalTv.setText("Total: —"); warnTv.setText(""); paintCta(); return; }
+        OrderPreview v = OrderPreview.of(buy, p, a, buy ? lastAsks : lastBids, f, lastMid);
+        StringBuilder sb = new StringBuilder();
+        BigDecimal total = a.multiply(p).setScale(8, buy ? RoundingMode.UP : RoundingMode.DOWN);
+        sb.append(buy ? "You pay up to " + Util.fmt(total) + " MxUSD\nYou receive " + Util.fmt(a) + " MINIMA"
+                      : "You pay " + Util.fmt(a) + " MINIMA\nYou receive at least " + Util.fmt(total) + " MxUSD");
+        if (v.fillNow.signum() > 0)
+            sb.append("\nFills now ≈ ").append(Util.fmt(v.fillNow)).append(" MINIMA @ avg ").append(Util.fmtPrice(v.avgFill))
+              .append(v.rest.signum() > 0 ? "\nRests " + Util.fmt(v.rest) + " MINIMA as your FAST order @ " + Util.fmtPrice(p) : "");
+        else sb.append("\nNothing crosses: all of it rests as your FAST order @ ").append(Util.fmtPrice(p));
+        if (v.vsBestPct != null) sb.append("\n").append(signed(v.vsBestPct)).append("% vs best ").append(buy ? "ask " : "bid ").append(Util.fmtPrice(v.best));
+        if (v.vsMidPct != null) sb.append("  ·  ").append(signed(v.vsMidPct)).append("% vs mid");
+        sb.append("\nAfter the immediate fill: ").append(Util.fmtBal(v.afterMinima)).append(" MINIMA · ").append(Util.fmtBal(v.afterMxusd)).append(" MxUSD");
+        totalTv.setText(sb.toString());
+        canAfford = v.shortfall.signum() == 0;
+        warnTv.setText(canAfford ? "" : "Exceeds your free " + (buy ? "MxUSD" : "MINIMA") + " by " + Util.fmt(v.shortfall)
+                + " (free " + Util.fmtBal(v.free) + ")");
+        paintCta();
+    }
+
+    private static String signed(BigDecimal pct) { return (pct.signum() > 0 ? "+" : "") + pct.toPlainString(); }
+
+    private void paintCta() {
+        if (ctaBtn == null) return;
+        boolean ok = canAfford && !act.isBusy();
+        ctaBtn.setEnabled(ok); ctaBtn.setAlpha(ok ? 1f : 0.45f);
     }
 
     private void submit() {
@@ -339,8 +418,9 @@ public final class TradeView extends LinearLayout {
         for (com.eurobuddha.dexicon.relay.RelayClient.Status s : act.relay().status().values()) if (s.ok) anyOk = true;
         syncDot.setText(relays == 0 ? "● no relays" : anyOk ? "● live" : "● connecting");
         syncDot.setTextColor(anyOk ? Design.IN() : Design.DIM());
-        ctaBtn.setAlpha(act.isBusy() ? 0.5f : 1f); ctaBtn.setEnabled(!act.isBusy());
+        paintCta();
         renderLadder(book);
+        renderFunds();
         renderOrders();
     }
 
@@ -392,6 +472,10 @@ public final class TradeView extends LinearLayout {
         // Ticker = best of all three sources: the exact best price behind the best displayed level on each side.
         BigDecimal bestAsk = askList.isEmpty() ? null : askList.get(0).getValue().exact, bestBid = bidList.isEmpty() ? null : bidList.get(0).getValue().exact;
         BigDecimal mid = bestBid != null && bestAsk != null ? bestBid.add(bestAsk).divide(new BigDecimal(2), 8, RoundingMode.HALF_UP) : bestBid != null ? bestBid : bestAsk;
+        lastAsks = new ArrayList<>(); for (Map.Entry<BigDecimal, Level> e : asks.entrySet()) lastAsks.add(new OrderPreview.Lvl(e.getValue().exact != null ? e.getValue().exact : e.getKey(), e.getValue().total()));
+        lastBids = new ArrayList<>(); for (Map.Entry<BigDecimal, Level> e : bids.entrySet()) lastBids.add(new OrderPreview.Lvl(e.getValue().exact != null ? e.getValue().exact : e.getKey(), e.getValue().total()));
+        lastMid = mid;
+        updateTotal();
         centerPriceTv.setText(mid == null ? "—" : Util.fmtPrice(mid));
         midTv.setText(mid == null ? "—" : Util.fmtPrice(mid));
         spreadTv.setText(bestBid != null && bestAsk != null ? "spread " + Util.fmt(bestAsk.subtract(bestBid)) : "");

@@ -26,6 +26,14 @@ public final class Util {
         return s.isEmpty() ? "0" : s;
     }
 
+    /** Balances: at most 6 decimals, TRUNCATED (never rounded up — a shown balance is never more than you hold),
+     *  trailing zeros dropped. A node balance can carry 40+ digits; nobody needs them on a trading screen. */
+    public static String fmtBal(BigDecimal v) {
+        if (v == null) return "0";
+        String s = v.setScale(6, RoundingMode.DOWN).stripTrailingZeros().toPlainString();
+        return s.isEmpty() || s.equals("-0") ? "0" : s;
+    }
+
     /** Prices at a fixed width (a ladder must line up); display only. */
     public static String fmtPrice(BigDecimal v) {
         if (v == null) return "—";
