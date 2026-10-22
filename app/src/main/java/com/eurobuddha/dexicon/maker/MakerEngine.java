@@ -52,6 +52,7 @@ public final class MakerEngine {
 
     private final Context ctx;
     private final NodeApi node;
+    public NodeApi node() { return node; }
     private final DexDb db;
     private final RelayClient relay;
     private final DexIdentity me;
@@ -141,12 +142,14 @@ public final class MakerEngine {
 
     // ---- market-maker split ----
 
-    /** ONE self-send turning free coins of {@code tokenid} into {@code parts} coins of {@code per} (+ change), so each
-     *  ladder rung gets its own backing coin. Coins backing live orders are never touched. cb(err, txnId). */
-    public void split(String tokenid, int parts, BigDecimal per, java.util.function.BiConsumer<String, String> cb) {
+    /** ONE self-send turning coins of {@code tokenid} into {@code parts} coins of {@code per} (+ change), so each
+     *  ladder rung gets its own backing coin. Coins backing live orders are never touched, except those of the orders
+     *  in {@code own} (the ladder's rungs, re-backed on the next pass). cb(err, txnId). */
+    public void split(String tokenid, int parts, BigDecimal per, Set<String> own, java.util.function.BiConsumer<String, String> cb) {
         walletCoins(node, tokenid, (e, coins) -> {
             if (e != null) { cb.accept(e, null); return; }
-            Set<String> ex = new HashSet<>(); for (String id : coinsBackingOthers(db.myOrders(), null)) ex.add(id.toLowerCase(Locale.ROOT));
+            Set<String> ex = new HashSet<>();
+            for (MyOrder o : db.myOrders()) if (o.live() && !own.contains(o.orderId)) for (String id : o.coins) ex.add(id.toLowerCase(Locale.ROOT));
             List<Coin> free = new ArrayList<>(); for (Coin c : coins) if (!ex.contains(c.coinid.toLowerCase(Locale.ROOT))) free.add(c);
             BigDecimal need = per.multiply(BigDecimal.valueOf(parts));
             FillPlan.Pick p = FillPlan.pick(free, need, MAX_COINS);

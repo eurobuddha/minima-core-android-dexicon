@@ -50,15 +50,19 @@ public final class LadderRunner {
         if (c.peg && MexcFeed.unusable()) { cancelAll(ids, "WITHDRAWN — no usable MEXC price (" + MexcFeed.describe() + "). Re-quotes when the feed is back.", done); return; }
         double widen = c.peg ? MexcFeed.widen() : 1;
         List<Ladder.Rung> want = Ladder.desired(c, c.peg ? MexcFeed.mid() : 0, widen);
-        reconcile(c, want, ids, 0, new ArrayList<>(), new ArrayList<>(), done, widen);
+        MakerEngine.walletCoins(engine.node(), Tokens.MINIMA, (ea, mc) -> MakerEngine.walletCoins(engine.node(), Tokens.MXUSD(), (eb, uc) -> {
+            java.util.Set<String> inWallet = null;   // null = a read failed: don't judge backing this pass
+            if (ea == null && eb == null) { inWallet = new java.util.HashSet<>(); for (com.eurobuddha.dexicon.fill.Coin x : mc) inWallet.add(x.coinid.toLowerCase(java.util.Locale.ROOT)); for (com.eurobuddha.dexicon.fill.Coin x : uc) inWallet.add(x.coinid.toLowerCase(java.util.Locale.ROOT)); }
+            reconcile(c, want, ids, 0, new ArrayList<>(), new ArrayList<>(), done, widen, inWallet);
+        }));
     }
 
     private JSONObject ids() { try { return new JSONObject(db.meta(IDS, "{}")); } catch (Exception e) { return new JSONObject(); } }
 
-    private void reconcile(Ladder.Config c, List<Ladder.Rung> want, JSONObject ids, int i, List<String> errors, List<Ladder.Rung> unbacked, Runnable done, double widen) {
+    private void reconcile(Ladder.Config c, List<Ladder.Rung> want, JSONObject ids, int i, List<String> errors, List<Ladder.Rung> unbacked, Runnable done, double widen, java.util.Set<String> inWallet) {
         if (i >= want.size()) { finish(c, want, ids, errors, unbacked, done, widen); return; }
         Ladder.Rung r = want.get(i);
-        Runnable next = () -> reconcile(c, want, ids, i + 1, errors, unbacked, done, widen);
+        Runnable next = () -> reconcile(c, want, ids, i + 1, errors, unbacked, done, widen, inWallet);
         MyOrder o = db.myOrder(ids.optString(r.key, ""));
         String price = FillPlan.plain(r.price), amount = FillPlan.plain(r.amount);
         if (o == null || !o.live() || !o.side.equals(r.side)) {
@@ -70,7 +74,9 @@ public final class LadderRunner {
             });
             return;
         }
-        if (Ladder.needsEdit(r, FillPlan.d(o.price), FillPlan.d(o.remaining), c.peg, c.reprice)) {
+        boolean gone = false;   // a backing coin left the wallet (a split or a fill spent it) → re-back now
+        if (inWallet != null) for (String id : o.coins) if (!inWallet.contains(id.toLowerCase(java.util.Locale.ROOT))) gone = true;
+        if (gone || Ladder.needsEdit(r, FillPlan.d(o.price), FillPlan.d(o.remaining), c.peg, c.reprice)) {
             engine.edit(o.orderId, price, amount, (err, x) -> {
                 if (err != null) { errors.add(r.key + ": " + err); if (err.startsWith("not enough free")) unbacked.add(r); }
                 next.run();
@@ -92,16 +98,21 @@ public final class LadderRunner {
         s.append(live > 0 ? "LIVE · " + asks + " ask" + (asks == 1 ? "" : "s") + " · " + bids + " bid" + (bids == 1 ? "" : "s") : "NOT LIVE");
         if (c.peg) s.append(widen > 1.0001 ? " · MEXC feed STALE, spread ×" + new BigDecimal(widen).setScale(1, RoundingMode.HALF_UP).toPlainString() : " · tracking MEXC");
         for (String e : errors) s.append("\n").append(e);
-        splitIfShort(unbacked, s, () -> { setStatus(s.toString()); done.run(); });
+        splitIfShort(want, ids, unbacked, s, () -> { setStatus(s.toString()); done.run(); });
     }
 
-    /** One self-send per short token, at most every 3 minutes: rung-sized coins so each rung has its own backing. */
-    private void splitIfShort(List<Ladder.Rung> unbacked, StringBuilder s, Runnable done) {
+    /** A side with an unbackable rung is re-cut into one coin per rung of that side (the ladder's own rung coins
+     *  included — manual orders' coins never), at most every 3 minutes per token. */
+    private void splitIfShort(List<Ladder.Rung> want, JSONObject ids, List<Ladder.Rung> unbacked, StringBuilder s, Runnable done) {
+        java.util.Set<String> own = new java.util.HashSet<>();
+        for (Iterator<String> it = ids.keys(); it.hasNext(); ) own.add(ids.optString(it.next()));
+        boolean shortAsks = false, shortBids = false;
+        for (Ladder.Rung r : unbacked) { if ("sell".equals(r.side)) shortAsks = true; else shortBids = true; }
         List<Ladder.Rung> asks = new ArrayList<>(), bids = new ArrayList<>();
-        for (Ladder.Rung r : unbacked) ("sell".equals(r.side) ? asks : bids).add(r);
-        splitSide(asks, true, s, () -> splitSide(bids, false, s, done));
+        for (Ladder.Rung r : want) { if ("sell".equals(r.side)) { if (shortAsks) asks.add(r); } else if (shortBids) bids.add(r); }
+        splitSide(asks, true, own, s, () -> splitSide(bids, false, own, s, done));
     }
-    private void splitSide(List<Ladder.Rung> rungs, boolean asks, StringBuilder s, Runnable done) {
+    private void splitSide(List<Ladder.Rung> rungs, boolean asks, java.util.Set<String> own, StringBuilder s, Runnable done) {
         if (rungs.isEmpty()) { done.run(); return; }
         String tok = asks ? Tokens.MINIMA : Tokens.MXUSD(), name = asks ? "MINIMA" : "MxUSD";
         long now = System.currentTimeMillis();
@@ -114,7 +125,7 @@ public final class LadderRunner {
         }
         lastSplit.put(tok, now);
         final BigDecimal fPer = per;
-        engine.split(tok, rungs.size(), per, (err, txn) -> {
+        engine.split(tok, rungs.size(), per, own, (err, txn) -> {
             if (err != null) { s.append("\ncannot split ").append(name).append(" for the ladder: ").append(err); lastSplit.remove(tok); }
             else { s.append("\nsplit ").append(name).append(" into ").append(rungs.size()).append(" × ").append(FillPlan.plain(fPer)).append(" — rungs go live after one block"); log.line("ladder split " + name + " " + rungs.size() + " × " + FillPlan.plain(fPer)); }
             done.run();
