@@ -111,7 +111,7 @@ public final class DoorHost {
         minima = new MinimaHtlc(node);
         db = new SwapDb(app);
         engine = new SwapEngine(node, minima, db, wallet, h, new SwapEngine.Notifier() {
-            @Override public void notify(String title, String body) { Notifier.alert(app, "Doors · " + title, body.replace("mxUSDT", "MxUSD")); }
+            @Override public void notify(String title, String body) { Notifier.alert(app, "AtomiX · " + title, body.replace("mxUSDT", "MxUSD")); }
             @Override public void onSwapsChanged() { changed(); }
         });
         rpc = new EthRpc(net.defaultRpc);
@@ -162,7 +162,7 @@ public final class DoorHost {
         }
         if (ids.size() < MARKETS.length && !identityDeriving) deriveIdentities();
         if (wallet.ready() && minima.ready()) IdentityWatch.check(node, wallet, minima, prefs, h, new SwapEngine.Notifier() {
-            @Override public void notify(String title, String body) { Notifier.alert(app, "Doors HALTED", "This node's seed no longer matches the keys the doors use. New door swaps are stopped; in-flight swaps keep settling."); }
+            @Override public void notify(String title, String body) { Notifier.alert(app, "AtomiX HALTED", "This node's seed no longer matches the keys AtomiX uses. New AtomiX swaps are stopped; in-flight swaps keep settling."); }
             @Override public void onSwapsChanged() { changed(); }
         });
     }
@@ -276,9 +276,9 @@ public final class DoorHost {
      * A forward is queued per part when {@code to} is set. Returns an error message, or null when started.
      */
     public String take(TradingContext market, DoorPlan.Plan plan, String to, Progress pr) {
-        if (!ready()) return "Doors not ready — " + bootNote();
+        if (!ready()) return "AtomiX not ready — " + bootNote();
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
-        if (busy || scanning) return "A door swap is already starting — wait for it to finish.";
+        if (busy || scanning) return "An AtomiX swap is already starting — wait for it to finish.";
         if (plan == null || plan.legs.isEmpty()) return "Nothing to fill.";
         if (to != null && !to.trim().isEmpty() && (plan.sell ? !DoorForwards.isEthAddr(to) : !DoorForwards.isMxAddr(to))) return "Bad destination address.";
         busy = true;
@@ -300,15 +300,15 @@ public final class DoorHost {
 
     private void fireLeg(TradingContext market, DoorPlan.Plan plan, String to, int i, int ok, Progress pr) {
         final int total = plan.legs.size();
-        if (i >= total) { endTake(pr, "Door: " + ok + "/" + total + " part" + (total == 1 ? "" : "s") + (plan.sell ? " locked" : " sent") + " — settlement continues in the background.", false); return; }
+        if (i >= total) { endTake(pr, "AtomiX: " + ok + "/" + total + " part" + (total == 1 ? "" : "s") + (plan.sell ? " locked" : " sent") + " — settlement continues in the background.", false); return; }
         final DoorPlan.Leg leg = plan.legs.get(i);
         final String coin = DoorPlan.coin(market);
         if (!SwapOrderBook.makerLive(books.get(market).get(leg.maker.signerPk), DoorPlan.SYM, plan.sell)) {
             endTake(pr, "Stopped at part " + (i + 1) + ": that maker just withdrawn from the " + coin + " market — refresh and try again.", true); return;
         }
-        if (pr != null) pr.stage("Door · locking part " + (i + 1) + "/" + total + " (" + coin + " market)…");
+        if (pr != null) pr.stage("AtomiX · locking part " + (i + 1) + "/" + total + " (" + coin + " market)…");
         final boolean[] answered = {false};
-        arm(() -> { if (!answered[0] && busy) endTake(pr, "Door stalled at part " + (i + 1) + " (no response) — stopped. Locked parts continue; unmatched parts refund.", true); });
+        arm(() -> { if (!answered[0] && busy) endTake(pr, "AtomiX stalled at part " + (i + 1) + " (no response) — stopped. Locked parts continue; unmatched parts refund.", true); });
         SwapEngine.StartCb cb = new SwapEngine.StartCb() {
             @Override public void ok(String hash) {
                 if (answered[0]) return;
@@ -320,13 +320,13 @@ public final class DoorHost {
                     if (leg.maker.commsPublicId != null && !leg.maker.commsPublicId.isEmpty())
                         SwapTake.send(node, crypto.get(market), leg.maker.commsPublicId, ids.get(market).publicId(), hash, market, new CommsTransport.SendCb() {
                             @Override public void onSent(String txpowid) {}
-                            @Override public void onFailed(String message) { Notifier.alert(app, "Doors", "USDT locked, but telling the maker failed (" + message + ") — swap " + hash); }
+                            @Override public void onFailed(String message) { Notifier.alert(app, "AtomiX", "USDT locked, but telling the maker failed (" + message + ") — swap " + hash); }
                         });
                     if (busy) fireLeg(market, plan, to, i + 1, ok + 1, pr);   // a stalled-then-late leg still notifies its maker, but starts nothing new
                     return;
                 }
                 if (!busy) return;
-                if (pr != null) pr.stage("Door · part " + (i + 1) + "/" + total + " lock sent — confirming on chain before the next part…");
+                if (pr != null) pr.stage("AtomiX · part " + (i + 1) + "/" + total + " lock sent — confirming on chain before the next part…");
                 awaitConfirm(hash, 0, pr, i + 1, onChain -> {
                     if (onChain) fireLeg(market, plan, to, i + 1, ok + 1, pr);
                     else endTake(pr, "Part " + (i + 1) + "'s lock did not confirm in time; no further parts started. It refunds at its timelock if unmatched.", true);
@@ -335,7 +335,7 @@ public final class DoorHost {
             @Override public void err(String msg) {
                 if (answered[0]) return;
                 answered[0] = true;
-                if (busy) endTake(pr, "Door stopped at part " + (i + 1) + "/" + total + ": " + msg, true);
+                if (busy) endTake(pr, "AtomiX stopped at part " + (i + 1) + "/" + total + ": " + msg, true);
             }
         };
         if (plan.sell) engine.startMinimaToErc20(leg.maker, leg.minima, DoorPlan.SYM, leg.usdt, cb);
@@ -347,7 +347,7 @@ public final class DoorHost {
      *  round re-arms the stall watchdog: a confirm callback that never returns still releases the take. */
     private void awaitConfirm(String hash, int attempt, Progress pr, int part, Confirmed cb) {
         final boolean[] back = {false};
-        arm(() -> { if (!back[0] && busy) endTake(pr, "Door stalled confirming part " + part + " — stopped. Locked parts continue; unmatched parts refund.", true); });
+        arm(() -> { if (!back[0] && busy) endTake(pr, "AtomiX stalled confirming part " + part + " — stopped. Locked parts continue; unmatched parts refund.", true); });
         engine.confirmMyLock(hash, true, onChain -> {
             if (back[0] || !busy) return;
             back[0] = true;
@@ -381,7 +381,7 @@ public final class DoorHost {
         Done done = (err, tx, uncertain) -> {
             DoorForwards.outcome(f, err, tx, uncertain);
             DoorForwards.save(prefs, f);
-            if (err == null) Notifier.alert(app, "Door forward sent", f.optString("amount") + " " + DoorForwards.label("minima".equals(f.optString("kind")) ? f.optString("coin") : "USDT") + " → " + to + " · tx " + tx);
+            if (err == null) Notifier.alert(app, "AtomiX forward sent", f.optString("amount") + " " + DoorForwards.label("minima".equals(f.optString("kind")) ? f.optString("coin") : "USDT") + " → " + to + " · tx " + tx);
             changed();
             forwardNext(due, i + 1);
         };

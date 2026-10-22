@@ -28,9 +28,9 @@ public class DoorsTabSmokeTest {
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
         View root = a.getWindow().getDecorView();
-        for (String tab : new String[]{"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "DOORS", "RELAYS"}) assertNotNull(tab, find(root, tab));
-        find(root, "DOORS").performClick();
-        assertNotNull("ENTER pane title", find(root, "ENTER — USDT → MxUSD or MINIMA"));
+        for (String tab : new String[]{"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "ATOMIX", "RELAYS"}) assertNotNull(tab, find(root, tab));
+        find(root, "ATOMIX").performClick();
+        assertNotNull("ENTRY pane title", find(root, "ENTRY — USDT → MxUSD or MINIMA"));
         assertNotNull("MxUSD route card", find(root, "● USDT → MxUSD"));
         assertNotNull("MINIMA route card", find(root, "○ USDT → MINIMA"));
         ((View) find(root, "○ USDT → MINIMA").getParent()).performClick();

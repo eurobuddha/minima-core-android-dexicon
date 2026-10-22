@@ -80,7 +80,7 @@ public final class ActivityTab extends LinearLayout {
         long cb = act.chainBlock(), now = System.currentTimeMillis();
         LinearLayout head = card();
         head.addView(tv("ACTIVITY · NEWEST FIRST", 10f, Design.DIM(), Design.sansBold()));
-        head.addView(tv(list.isEmpty() ? "No trades yet. Every BUY/SELL you make, every fill your node co-signs and every DOORS swap shows its live progress here."
+        head.addView(tv(list.isEmpty() ? "No trades yet. Every BUY/SELL you make, every fill your node co-signs and every AtomiX swap shows its live progress here."
                 : "Confirmed / done after " + ActivityLog.CONFIRM_BLOCKS + " blocks. The txpowid is the pre-mining id; inclusion is proven by an output coin. Tap any id to copy it in full.",
                 9.5f, Design.DIM2(), Design.sans()));
         // DOORS swaps (AtomiX taker, both markets) join the timeline by time, each with its own stage and full tx ids.

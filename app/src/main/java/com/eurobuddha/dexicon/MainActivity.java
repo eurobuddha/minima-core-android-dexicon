@@ -70,7 +70,7 @@ public class MainActivity extends AppCompatActivity {
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
     static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6;
-    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "DOORS", "RELAYS"};
+    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "ATOMIX", "RELAYS"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });

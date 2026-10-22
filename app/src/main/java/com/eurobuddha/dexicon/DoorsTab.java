@@ -74,7 +74,7 @@ public final class DoorsTab extends LinearLayout {
         dep.addView(t("Derived from this node’s seed by AtomiX’s rule (seedrandom:ethbridge), never stored — the same address the AtomiX app on this node uses. Tap to copy the full address.", Design.DIM2(), 9.5f, Design.sans()));
 
         LinearLayout seg = new LinearLayout(act);
-        String[] names = {"ENTER", "EXIT", "SWAP"}, keys = {"enter", "exit", "swap"};
+        String[] names = {"ENTRY", "EXIT", "SWAP"}, keys = {"enter", "exit", "swap"};
         for (int i = 0; i < 3; i++) {
             final String k = keys[i];
             paneBtn[i] = segBtn(names[i], () -> { pane = k; render(); });
@@ -109,7 +109,7 @@ public final class DoorsTab extends LinearLayout {
         review.setOnClickListener(v -> openReview());
         p.addView(review);
 
-        addView(t("DOOR SWAPS — every door swap this node started, both legs’ full transaction ids. Settlement runs in the background.", Design.DIM(), 10f, Design.sansBold()));
+        addView(t("ATOMIX SWAPS — every AtomiX swap this node started, both legs’ full transaction ids. Settlement runs in the background.", Design.DIM(), 10f, Design.sansBold()));
         list = new LinearLayout(act); list.setOrientation(VERTICAL);
         LayoutParams ll = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); ll.topMargin = Design.dp(act, 8);
         addView(list, ll);
@@ -124,6 +124,19 @@ public final class DoorsTab extends LinearLayout {
 
     // ------------------------------------------------------------------ view helpers
 
+    // Each door wears its AtomiX market's own identity (apks/atomix TradingContext): the MxUSD track is Tether green
+    // with white ink, the MINIMA track keeps Minima orange on black. Owner, 2026-10-22.
+    static final int USD_GREEN = 0xFF26A17B, USD_GREEN_TOP = 0xFF3DBF93, USD_INK = 0xFFFFFFFF;
+    static int acc(TradingContext m) { return m == TradingContext.MXUSDT ? USD_GREEN : Design.ACCENT(); }
+    static int soft(TradingContext m) { return m == TradingContext.MXUSDT ? (Design.isDark() ? 0x3326A17B : 0x1F26A17B) : Design.ACCENT_SOFT(); }
+    static int ink(TradingContext m) { return m == TradingContext.MXUSDT ? USD_INK : Design.ON_ACCENT(); }
+    private android.graphics.drawable.Drawable cta(TradingContext m) {
+        if (m != TradingContext.MXUSDT) return Design.gradientCta(getContext());
+        android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, new int[]{USD_GREEN_TOP, USD_GREEN});
+        d.setCornerRadius(Design.dp(getContext(), 14));
+        return d;
+    }
+
     private TextView t(String s, int color, float size, android.graphics.Typeface tf) {
         TextView v = new TextView(getContext()); v.setText(s); v.setTextColor(color); v.setTextSize(size); v.setTypeface(tf); return v;
     }
@@ -133,7 +146,7 @@ public final class DoorsTab extends LinearLayout {
         b.setOnClickListener(v -> on.run());
         return b;
     }
-    private void mark(TextView b, boolean on) { b.setTextColor(on ? Design.ON_ACCENT() : Design.DIM()); b.setBackground(on ? Design.roundBg(getContext(), Design.ACCENT(), 10) : null); }
+    private void mark(TextView b, boolean on) { b.setTextColor(on ? ink(route) : Design.DIM()); b.setBackground(on ? Design.roundBg(getContext(), acc(route), 10) : null); }
     private EditText input(String hint, boolean decimal) {
         EditText e = new EditText(getContext());
         e.setHint(hint); e.setTextColor(Design.TEXT()); e.setHintTextColor(Design.DIM2()); e.setTypeface(Design.mono()); e.setTextSize(12f);
@@ -174,6 +187,7 @@ public final class DoorsTab extends LinearLayout {
     public void render() {
         refresh(false);
         paintTop();
+        review.setBackground(cta(route)); review.setTextColor(ink(route));
         String[] keys = {"enter", "exit", "swap"};
         for (int i = 0; i < 3; i++) mark(paneBtn[i], keys[i].equals(pane));
         String c = coin();
@@ -181,7 +195,7 @@ public final class DoorsTab extends LinearLayout {
         dirIn.setText("USDT → " + c); dirOut.setText(c + " → USDT"); mark(dirIn, inward); mark(dirOut, !inward);
         switch (pane) {
             case "enter":
-                title.setText("ENTER — USDT → MxUSD or MINIMA");
+                title.setText("ENTRY — USDT → MxUSD or MINIMA");
                 desc.setText("For ERC20 USDT holders. Both AtomiX markets are quoted side by side; tap the route you want. Your USDT locks on Ethereum first (2 h refund window); the maker locks the coin; this node claims it into its wallet automatically.");
                 break;
             case "exit":
@@ -197,7 +211,7 @@ public final class DoorsTab extends LinearLayout {
         toLabel.setVisibility(showTo ? VISIBLE : GONE); to.setVisibility(showTo ? VISIBLE : GONE);
         toLabel.setText(sell() ? "DESTINATION · Ethereum address, 0x + 40 hex" : "DESTINATION · Minima address — leave empty to keep the " + c + " in this node’s wallet");
         to.setHint(sell() ? "0x…" : "Mx…");
-        review.setText("REVIEW " + pane.toUpperCase(Locale.ROOT) + "  →");
+        review.setText("REVIEW " + ("enter".equals(pane) ? "ENTRY" : pane.toUpperCase(Locale.ROOT)) + "  →");
         quote();
         renderSwaps(list);
     }
@@ -205,7 +219,7 @@ public final class DoorsTab extends LinearLayout {
     private void paintTop() {
         boolean h = IdentityWatch.halted();
         halt.setVisibility(h ? VISIBLE : GONE);
-        if (h) halt.setText(IdentityWatch.fgLine() + " — new door swaps are stopped; in-flight swaps keep settling. Rescue funds, then reinstall Dexicon.");
+        if (h) halt.setText(IdentityWatch.fgLine() + " — new AtomiX swaps are stopped; in-flight swaps keep settling. Rescue funds, then reinstall Dexicon.");
         String a = host.ethAddress();
         ethAddr.setText(a != null ? a : host.bootNote().isEmpty() ? "deriving…" : host.bootNote());
         String usdt = host.usdtRaw == null ? "—" : EthWallet.format(host.usdtRaw, 6, 6);
@@ -245,8 +259,8 @@ public final class DoorsTab extends LinearLayout {
         LinearLayout c = new LinearLayout(getContext());
         c.setOrientation(VERTICAL);
         int p = Design.dp(getContext(), 9); c.setPadding(p, p, p, p);
-        c.setBackground(on ? Design.roundBg(getContext(), Design.ACCENT_SOFT(), 10) : Design.stroked(getContext(), Design.SURFACE2(), 10));
-        c.addView(t((on ? "● " : "○ ") + (s ? r.coin + " → USDT" : "USDT → " + r.coin), on ? Design.ACCENT() : Design.DIM(), 10f, Design.sansBold()));
+        c.setBackground(on ? Design.roundBg(getContext(), soft(r.market), 10) : Design.stroked(getContext(), Design.SURFACE2(), 10));
+        c.addView(t((on ? "● " : "○ ") + (s ? r.coin + " → USDT" : "USDT → " + r.coin), on ? acc(r.market) : Design.DIM(), 10f, Design.sansBold()));
         if (r.plan != null) {
             c.addView(t(s ? "≈ " + trim6(r.plan.totalUsdt) + " USDT" : trim6(r.plan.filledMinima) + " " + r.coin, Design.TEXT(), 13f, Design.monoBold()));
             c.addView(t(s ? "for " + trim6(r.plan.filledMinima) + " " + r.coin : "for ≈ " + trim6(r.plan.totalUsdt) + " USDT", Design.DIM(), 9.5f, Design.mono()));
@@ -293,7 +307,7 @@ public final class DoorsTab extends LinearLayout {
     private String validate(DoorPlan.Plan p) {
         String c = coin(), dest = to.getText().toString().trim();
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
-        if (host.busy()) return "A door swap is still starting — wait for it to finish.";
+        if (host.busy()) return "An AtomiX swap is still starting — wait for it to finish.";
         if (!dest.isEmpty() && (p.sell ? !DoorForwards.isEthAddr(dest) : !DoorForwards.isMxAddr(dest)))
             return p.sell ? "Destination must be an Ethereum address (0x + 40 hex)." : "Destination must be a Minima address (Mx… or 0x + 64 hex).";
         if (needTo() && dest.isEmpty()) return "Enter the destination address.";
@@ -318,7 +332,7 @@ public final class DoorsTab extends LinearLayout {
     // ------------------------------------------------------------------ review → take
 
     private void openReview() {
-        if (!host.ready()) { act.toast("Doors not ready — " + host.bootNote()); return; }
+        if (!host.ready()) { act.toast("AtomiX not ready — " + host.bootNote()); return; }
         DoorPlan.Route r = quoteFor(route);
         if (amt.getText().toString().trim().isEmpty()) { act.toast("Enter an amount first."); return; }
         if (r.plan == null) { act.toast(coin() + " route: " + r.err); return; }
@@ -338,7 +352,7 @@ public final class DoorsTab extends LinearLayout {
                 .setPositiveButton("START", (d, w) -> {
                     String err = host.take(market, plan, dest, new DoorHost.Progress() {
                         @Override public void stage(String s) { act.setStage(s); }
-                        @Override public void done(String m, boolean error) { act.setStage(""); act.toast(m); if (error) Notifier.alert(act, "Door stopped", m); act.repaint(); }
+                        @Override public void done(String m, boolean error) { act.setStage(""); act.toast(m); if (error) Notifier.alert(act, "AtomiX swap stopped", m); act.repaint(); }
                     });
                     if (err != null) act.toast(err); else amt.setText("");
                     render();
@@ -352,7 +366,7 @@ public final class DoorsTab extends LinearLayout {
         into.removeAllViews();
         List<SwapDb.Swap> swaps = host.swaps();
         if (swaps.isEmpty()) {
-            into.addView(t("No door swaps yet. ENTER brings ERC20 USDT in as MxUSD or MINIMA; EXIT takes either out as USDT. MINIMA and MxUSD holders need no door.", Design.DIM2(), 10f, Design.sans()));
+            into.addView(t("No AtomiX swaps yet. ENTRY brings ERC20 USDT in as MxUSD or MINIMA; EXIT takes either out as USDT. MINIMA and MxUSD holders need no AtomiX swap.", Design.DIM2(), 10f, Design.sans()));
             return;
         }
         for (SwapDb.Swap s : swaps) into.addView(swapCard(act, host, s));
@@ -363,7 +377,9 @@ public final class DoorsTab extends LinearLayout {
         JSONObject f = host.forward(s.hash);
         boolean in = "ERC20_TO_MINIMA".equals(s.direction);
         String pill = DoorForwards.pill(s, f);
-        int tone = SwapDb.ST_COMPLETE.equals(s.status) ? Design.IN() : (SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_ERROR.equals(s.status)) ? Design.RED() : Design.ACCENT();
+        boolean usd = "MxUSD".equals(DoorForwards.label(s.buyToken)) || "MxUSD".equals(DoorForwards.label(s.sellToken));
+        int live = usd ? USD_GREEN : Design.ACCENT();   // a dollar swap in progress is AtomiX green, a MINIMA one orange
+        int tone = SwapDb.ST_COMPLETE.equals(s.status) ? Design.IN() : (SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_ERROR.equals(s.status)) ? Design.RED() : live;
         LinearLayout c = new LinearLayout(act);
         c.setOrientation(VERTICAL);
         c.setBackground(Design.card(act, 10));
@@ -371,11 +387,11 @@ public final class DoorsTab extends LinearLayout {
         LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); lp.bottomMargin = Design.dp(act, 9);
         c.setLayoutParams(lp);
         LinearLayout top = new LinearLayout(act); top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(tv(act, (in ? "DOOR IN " : "DOOR OUT ") + s.sellAmount + " " + DoorForwards.label(s.sellToken) + " → " + s.buyAmount + " " + DoorForwards.label(s.buyToken), 11f, tone, Design.monoBold()),
+        top.addView(tv(act, (in ? "ATOMIX ENTRY " : "ATOMIX EXIT ") + s.sellAmount + " " + DoorForwards.label(s.sellToken) + " → " + s.buyAmount + " " + DoorForwards.label(s.buyToken), 11f, tone, Design.monoBold()),
                 new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         top.addView(Design.pill(act, pill, Design.SURFACE2(), tone));
         c.addView(top);
-        c.addView(tv(act, "DOORS · ATOMIX TAKER · " + FMT.format(new Date(s.created)), 9.5f, Design.DIM(), Design.mono()));
+        c.addView(tv(act, "ATOMIX TAKER · " + FMT.format(new Date(s.created)), 9.5f, Design.DIM(), Design.mono()));
         c.addView(tv(act, DoorForwards.statusText(s, f), 10.5f, Design.TEXT(), Design.mono()));
         ident(act, c, "swap", s.hash);
         ident(act, c, "eth contract", s.contractId);
@@ -388,7 +404,7 @@ public final class DoorsTab extends LinearLayout {
             ident(act, c, "forward tx", f.optString("tx"));
             String st = f.optString("status");
             if (DoorForwards.FAILED.equals(st) || DoorForwards.UNCERTAIN.equals(st)) {
-                TextView rb = tv(act, "RETRY FORWARD", 10f, Design.ACCENT(), Design.sansBold());
+                TextView rb = tv(act, "RETRY FORWARD", 10f, live, Design.sansBold());
                 int bp = Design.dp(act, 8); rb.setPadding(bp, bp, bp, bp);
                 rb.setOnClickListener(v -> { host.retryForward(s.hash); act.toast("Forward queued again — the service retries on its next pass."); act.repaint(); });
                 c.addView(rb);
