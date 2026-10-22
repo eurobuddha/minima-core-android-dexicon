@@ -11,8 +11,8 @@ android {
         minSdk 28
         targetSdk 35
         // Every code change bumps BOTH (pre-commit hook .githooks/pre-commit enforces it).
-        versionCode 13
-        versionName "0.1.12"
+        versionCode 14
+        versionName "0.1.13"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -71,9 +71,19 @@ dependencies {
     implementation 'com.goterl:lazysodium-android:5.1.0@aar'
     implementation 'net.java.dev.jna:jna:5.13.0@aar'
 
+    // DOORS (vendored AtomiX taker engine): secp256k1 key derivation, legacy tx signing (RLP) and ABI encode/decode —
+    // the same pure-Java web3j modules AtomiX uses (no okhttp/core; JSON-RPC is EthRpc over HttpURLConnection).
+    implementation 'org.web3j:crypto:4.9.8'
+    implementation 'org.web3j:abi:4.9.8'
+    implementation 'org.web3j:rlp:4.9.8'
+    implementation 'org.web3j:utils:4.9.8'
+
     // ---- Local JVM unit tests (src/test) ----
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
+    // DOORS: the vendored AtomiX engine's own JVM tests (ported with it) mock comms.NodeApi and run SwapDb on Robolectric.
+    testImplementation 'org.mockito:mockito-core:5.12.0'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
     // Desktop libsodium so the REAL identity derivation / seal / sign run in JVM tests (same libsodium as the AAR).
     testImplementation 'com.goterl:lazysodium-java:5.1.4'
     testImplementation 'net.java.dev.jna:jna:5.13.0'

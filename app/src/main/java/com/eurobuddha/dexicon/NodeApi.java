@@ -114,13 +114,17 @@ public class NodeApi {
         return s.contains("too long") || s.contains("max(256000)");
     }
 
-    public void cmd(String command, Cb cb) {
-        if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, cb)); return; }
+    public void cmd(String command, Cb cb) { cmd(command, null, cb); }
+
+    /** As {@link #cmd(String, Cb)}, with a guard re-checked when the command reaches the head of the IPC queue: false →
+     *  nothing is sent and cb gets an error (the vendored AtomiX engine's "market changed" contract, via comms.NodeApi). */
+    public void cmd(String command, java.util.function.BooleanSupplier guard, Cb cb) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, guard, cb)); return; }
         String invalid = CommandSafety.failure(command);
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         if (mReleased) { if (cb != null) mMain.post(() -> cb.onError("Node connection closed.")); return; }
         queuedCommands++;
-        IPC_QUEUE.submit(finish -> dispatch(command, new Cb() {
+        IPC_QUEUE.submit(finish -> guarded(guard, command, new Cb() {
             private boolean delivered;
             public void onResult(JSONObject reply) { complete(reply, null); }
             public void onError(String message) { complete(null, message); }
@@ -176,6 +180,13 @@ public class NodeApi {
         if (r instanceof JSONArray) { JSONArray a = (JSONArray) r; for (int i = 0; i < a.length(); i++) { JSONObject o = a.optJSONObject(i); if (o != null) out.add(o); } }
         else if (r instanceof JSONObject) out.add((JSONObject) r);
         return out;
+    }
+
+    private void guarded(java.util.function.BooleanSupplier guard, String command, Cb cb) {
+        boolean ok;
+        try { ok = guard == null || guard.getAsBoolean(); } catch (RuntimeException e) { ok = false; }
+        if (!ok) { cb.onError("Market changed; refresh and try again. No command was sent."); return; }
+        dispatch(command, cb);
     }
 
     private void dispatch(String command, Cb cb) {
