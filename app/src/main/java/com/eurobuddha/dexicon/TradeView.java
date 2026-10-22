@@ -48,8 +48,10 @@ public final class TradeView extends LinearLayout {
     private TextView midTv, spreadTv, bidsTv, asksTv, syncDot, kindTv;
     private LinearLayout asksBox, bidsBox, groupRow, ordersBox;
     private TextView centerPriceTv;
-    private static final BigDecimal[] GROUPS = {new BigDecimal("0.00001"), new BigDecimal("0.0001"), new BigDecimal("0.001"), new BigDecimal("0.01")};
-    private static final String[] GROUP_LABELS = {"0.00001", "0.0001", "0.001", "0.01"};
+    private static final BigDecimal[] GROUPS = {null, new BigDecimal("0.0001"), new BigDecimal("0.001"), new BigDecimal("0.01")};   // null = EXACT: no bucketing (owner 2026-10-22)
+    /** EXACT mode samples the pool curve every 0.00001 — each sample is a real executable price, not a rounding. */
+    private static final BigDecimal SAMPLE_TICK = new BigDecimal("0.00001");
+    private static final String[] GROUP_LABELS = {"EXACT", "0.0001", "0.001", "0.01"};
     private static final String PREFS = "dexicon_ui", KEY_GROUP = "ladder_group";
     private int groupIdx = 0;
     private static final int MAX_ROWS = 10;
@@ -210,7 +212,7 @@ public final class TradeView extends LinearLayout {
         f.post(() -> { FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) bar.getLayoutParams(); p.width = (int) (f.getWidth() * Math.min(1f, depthFrac)); bar.setLayoutParams(p); });
         LinearLayout row = new LinearLayout(getContext());
         row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(0, dp(3), 0, dp(3));
-        TextView p = tv((lv.mine ? "• " : "") + Util.fmtPrice(price), 11f, ask ? Design.RED() : Design.IN(), Design.mono());
+        TextView p = tv((lv.mine ? "• " : "") + Util.fmtPrice(lv.exact != null ? lv.exact : price), 11f, ask ? Design.RED() : Design.IN(), Design.mono());   // the real best price in the row, never a rounded bucket
         row.addView(p, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.2f));
         String amt = amountText(lv.fast, lv.book, lv.pool);
         TextView am = tv(amt, amt.contains("\n") || amt.contains(" ") ? 9.5f : 11f, Design.TEXT(), Design.mono()); am.setGravity(Gravity.END);
@@ -402,7 +404,7 @@ public final class TradeView extends LinearLayout {
 
     /** Group a price to the tick (asks round up, bids down — PandaDEX levelPrice) and remember the best exact price. */
     private static Level level(TreeMap<BigDecimal, Level> side, BigDecimal p, BigDecimal tick, boolean sell) {
-        BigDecimal g = sell ? p.divide(tick, 0, RoundingMode.CEILING).multiply(tick) : p.divide(tick, 0, RoundingMode.FLOOR).multiply(tick);
+        BigDecimal g = tick == null ? p.stripTrailingZeros() : sell ? p.divide(tick, 0, RoundingMode.CEILING).multiply(tick) : p.divide(tick, 0, RoundingMode.FLOOR).multiply(tick);
         Level lv = side.computeIfAbsent(g, k -> new Level());
         if (lv.exact == null || (sell ? p.compareTo(lv.exact) < 0 : p.compareTo(lv.exact) > 0)) lv.exact = p;
         return lv;
@@ -416,8 +418,8 @@ public final class TradeView extends LinearLayout {
         depthExec.execute(() -> {
             List<SyntheticDepth.Row> asks = new ArrayList<>(), bids = new ArrayList<>();
             try {
-                asks = SyntheticDepth.sample(snapshot, true, tick, 10);
-                bids = SyntheticDepth.sample(snapshot, false, tick, 10);
+                asks = SyntheticDepth.sample(snapshot, true, tick == null ? SAMPLE_TICK : tick, 10);
+                bids = SyntheticDepth.sample(snapshot, false, tick == null ? SAMPLE_TICK : tick, 10);
             } catch (RuntimeException invalid) { /* Invalid depth is never rendered as executable liquidity. */ }
             final List<SyntheticDepth.Row> resultAsks = asks, resultBids = bids;
             ui.post(() -> {

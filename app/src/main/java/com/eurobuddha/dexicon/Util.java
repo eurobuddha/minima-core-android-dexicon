@@ -29,7 +29,8 @@ public final class Util {
     /** Prices at a fixed width (a ladder must line up); display only. */
     public static String fmtPrice(BigDecimal v) {
         if (v == null) return "—";
-        return v.setScale(6, RoundingMode.HALF_UP).toPlainString();
+        BigDecimal s = v.stripTrailingZeros();   // never rounds: pads to 6 dp for alignment, shows every digit it has
+        return (s.scale() < 6 ? s.setScale(6) : s).toPlainString();
     }
 
     /** Display an amount with exactly {@code dp} decimals, truncated down so it never overstates. */
