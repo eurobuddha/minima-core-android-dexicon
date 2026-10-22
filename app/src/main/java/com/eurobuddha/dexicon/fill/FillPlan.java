@@ -23,6 +23,19 @@ public final class FillPlan {
     public static final MathContext MC = new MathContext(64, RoundingMode.DOWN);
 
     public static BigDecimal d(String s) { return (s == null || s.isEmpty()) ? BigDecimal.ZERO : new BigDecimal(s); }
+    /** PandaDEX's default minimum remainder (TradeView "Minimum left on the book after a partial fill" = 1): a partial take
+     *  is SHRUNK to leave exactly this much (SweepPlanner — never inflated past what the taker asked), and the maker refuses
+     *  one that leaves less, so nobody can nibble an order down to unsellable dust. */
+    public static final BigDecimal MIN_REM = BigDecimal.ONE;
+    /** MINIMA a taker may take from an order with {@code available} left when it wants {@code want}; 0 = none. */
+    public static BigDecimal floorTake(BigDecimal want, BigDecimal available) {
+        if (want.compareTo(available) >= 0) return available;
+        if (available.subtract(want).compareTo(MIN_REM) >= 0) return want;
+        BigDecimal t = available.subtract(MIN_REM);
+        return t.signum() > 0 ? t : BigDecimal.ZERO;
+    }
+    /** A remainder under MIN_REM left by an older build: the order is closed rather than dangling on every relay. */
+    public static boolean dust(BigDecimal remaining, BigDecimal amount) { return remaining.signum() > 0 && remaining.compareTo(MIN_REM) < 0 && remaining.compareTo(amount) < 0; }
     public static BigDecimal up8(BigDecimal x) { return x.setScale(GRAIN, RoundingMode.UP); }
     public static BigDecimal down8(BigDecimal x) { return x.setScale(GRAIN, RoundingMode.DOWN); }
     /** Plain decimal string without trailing zeros (decimal.js toFixed()). */
@@ -167,6 +180,9 @@ public final class FillPlan {
             if (received.compareTo(rem) > 0) return Verdict.bad("fill " + plain(received) + " MINIMA exceeds remaining " + plain(rem));
             if (filled.compareTo(down8(received.multiply(price, MC))) > 0) return Verdict.bad("I would pay " + plain(filled) + " MxUSD for " + plain(received) + " MINIMA, above my price");
         }
+        // PandaDEX's min-remainder floor (port 8, default 1 MINIMA): a partial fill may not leave less than MIN_REM behind
+        BigDecimal left = rem.subtract(sell ? filled : received);
+        if (left.signum() > 0 && left.compareTo(MIN_REM) < 0) return Verdict.bad("the fill would leave " + plain(left) + " MINIMA, below the " + plain(MIN_REM) + " MINIMA minimum remainder — take it all or leave at least " + plain(MIN_REM));
         if (hasState) return Verdict.bad("unexpected transaction state");
         return new Verdict(true, null, sell ? plain(filled) : plain(received), plain(received), plain(filled));
     }

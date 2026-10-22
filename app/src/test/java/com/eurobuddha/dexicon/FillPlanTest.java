@@ -59,6 +59,10 @@ public class FillPlanTest {
         assertFalse(FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(under), false, oS, oS.coins, "100", mine).ok);
         // overfill vs remaining
         assertFalse(FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(p), false, oS, oS.coins, "30", mine).ok);
+        // PandaDEX min-remainder floor: 33.33333333 of 33.5 would leave 0.16666667 → refused; of 34.33333333 → 1 left, fine
+        assertTrue(FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(p), false, oS, oS.coins, "33.5", mine).reason.contains("minimum remainder"));
+        assertTrue(FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(p), false, oS, oS.coins, "34.33333333", mine).ok);
+        assertTrue(FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(p), false, oS, oS.coins, "33.33333333", mine).ok);
         // my unadvertised coin spent
         Coin extra = coin("03", Tokens.MINIMA, "5", MCOINADDR);
         List<Coin> ins = new ArrayList<>(viewInputs(p, all)); ins.add(extra);
@@ -128,5 +132,15 @@ public class FillPlanTest {
         assertEquals(Arrays.asList(coins.get(0).coinid, coins.get(1).coinid, coins.get(2).coinid), big.inputs.subList(0, 3));
         // byte-for-byte the same hash as fill.js spreadIndex
         assertEquals(2, FillPlan.spreadIndex("0xabc", 3) == FillPlan.spreadIndex("0xABC", 3) ? 2 : -1);
+    }
+
+    @Test public void pandadexMinimumRemainderFloor() {
+        assertEquals("455.78231293", FillPlan.floorTake(new BigDecimal("500"), new BigDecimal("455.78231293")).toPlainString());
+        assertEquals("454.78231293", FillPlan.floorTake(new BigDecimal("455.78"), new BigDecimal("455.78231293")).toPlainString());   // shrunk to leave 1
+        assertEquals("100", FillPlan.floorTake(new BigDecimal("100"), new BigDecimal("455.78")).toPlainString());
+        assertEquals(0, FillPlan.floorTake(new BigDecimal("0.2"), new BigDecimal("0.5")).signum());
+        assertTrue(FillPlan.dust(new BigDecimal("0.00231293"), new BigDecimal("1000")));
+        assertFalse(FillPlan.dust(new BigDecimal("1"), new BigDecimal("1000")));
+        assertFalse(FillPlan.dust(new BigDecimal("0.5"), new BigDecimal("0.5")));
     }
 }

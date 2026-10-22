@@ -559,6 +559,16 @@ public class MainActivity extends AppCompatActivity {
     long takingSecs() { return run == null ? 0 : (System.currentTimeMillis() - run.t0) / 1000; }
     String takeLog() { return takeLog.toString(); }
     Envelope fastCross(boolean buy, BigDecimal price) { return bestFastCross(buy, price); }
+    /** Exact MINIMA the crossing FAST orders offer at {@code price} (not mine, backed). */
+    BigDecimal offered(boolean buy, BigDecimal price) {
+        BigDecimal t = BigDecimal.ZERO;
+        for (Envelope e : relay.orders(buy ? "sell" : "buy")) {
+            if (isMine(e) || e.coins.isEmpty()) continue;
+            BigDecimal p = new BigDecimal(e.price);
+            if (buy ? p.compareTo(price) <= 0 : p.compareTo(price) >= 0) t = t.add(new BigDecimal(e.amount));
+        }
+        return t;
+    }
 
     private void logStep(String msg) {
         String t = run != null ? String.format(java.util.Locale.ROOT, "+%.1fs  ", (System.currentTimeMillis() - run.t0) / 1000.0)
@@ -635,8 +645,12 @@ public class MainActivity extends AppCompatActivity {
 
     private void tryOrder(Envelope o) {
         TakeRun r = run;
-        BigDecimal now = r.amount.min(new BigDecimal(o.amount)), rest = r.amount.subtract(now);
+        // PandaDEX's min-remainder floor: never leave under 1 MINIMA on the maker's order — shrink the take to leave
+        // exactly 1 (what you asked beyond that rests as yours); an order that can't be part-taken is skipped
+        BigDecimal now = FillPlan.floorTake(r.amount.min(new BigDecimal(o.amount)), new BigDecimal(o.amount)), rest = r.amount.subtract(now);
         r.tried.add(o.orderId);
+        if (now.signum() <= 0) { logStep("Order " + o.orderId + ": a partial take would leave under " + FillPlan.MIN_REM.toPlainString() + " MINIMA — next order"); nextOrder(); return; }
+        if (now.compareTo(r.amount.min(new BigDecimal(o.amount))) < 0) logStep("  taking " + now.toPlainString() + " so " + FillPlan.MIN_REM.toPlainString() + " MINIMA stays on the maker's order (minimum remainder)");
         logStep("Order " + o.orderId + " @ " + o.price + " · " + o.amount + " MINIMA · maker " + o.address);
         List<Coin> have = new ArrayList<>(); List<String> miss = new ArrayList<>();
         for (String id : o.coins) { Coin c = makerCoinCache.get(id); if (c != null) have.add(c); else miss.add(id); }

@@ -304,7 +304,7 @@ public final class MakerEngine {
         List<String> keep = new ArrayList<>(); for (String c : o.coins) if (!spent.contains(c.toLowerCase(Locale.ROOT))) keep.add(c);
         o.coins = keep;
         o.remaining = rem.signum() > 0 ? FillPlan.plain(rem) : "0";
-        if (rem.signum() <= 0) { o.status = "filled"; o.expiry = now() + 600; }
+        if (rem.signum() <= 0 || FillPlan.dust(rem, FillPlan.d(o.amount))) { o.status = "filled"; o.expiry = now() + 600; }   // dust left over closes the order
         o.seq = nextSeq(o);
         publish(o, e -> { db.saveOrder(o); cb.done(e, o); });
     }
@@ -357,6 +357,11 @@ public final class MakerEngine {
         step[0] = () -> {
             if (i[0] >= live.size()) { cb.done(null, n[0], relocked); return; }
             MyOrder o = live.get(i[0]++);
+            if (FillPlan.dust(FillPlan.d(o.remaining), FillPlan.d(o.amount))) {   // a dust remainder from before the floor: close it
+                o.status = "filled"; o.seq = nextSeq(o); o.expiry = now() + 600;
+                publish(o, e -> { db.saveOrder(o); n[0]++; step[0].run(); });
+                return;
+            }
             List<Coin> wallet = "sell".equals(o.side) ? minima : mxusd;
             Set<String> fresh = new HashSet<>();
             for (Coin c : wallet) if (isFresh(c, tip, maxAge)) fresh.add(c.coinid.toLowerCase(Locale.ROOT));

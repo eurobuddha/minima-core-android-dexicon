@@ -103,12 +103,13 @@ public class SyntheticDepthTest {
 
     @Test public void amountTextOmitsZeroBookLabelForPoolOnlyRows() {
         assertEquals("POOL 12.34", TradeView.amountText(BigDecimal.ZERO, new BigDecimal("12.34")));
-        assertEquals("5.00", TradeView.amountText(new BigDecimal("5"), BigDecimal.ZERO));
+        assertEquals("5", TradeView.amountText(new BigDecimal("5"), BigDecimal.ZERO));   // BOOK sizes exact (owner 2026-10-22: never a rounded size)
     }
 
-    @Test public void amountTextTruncatesLadderAmountsToTwoDecimals() {
+    @Test public void amountTextTruncatesPoolBandsButShowsOrdersExact() {
         assertEquals("POOL 12.34", TradeView.amountText(BigDecimal.ZERO, new BigDecimal("12.349")));
-        assertEquals("BOOK 5.67\nPOOL 1.23",
+        assertEquals("FAST 455.78231293", TradeView.amountText(new BigDecimal("455.78231293"), BigDecimal.ZERO, BigDecimal.ZERO));
+        assertEquals("BOOK 5.679\nPOOL 1.23",
                 TradeView.amountText(new BigDecimal("5.679"), new BigDecimal("1.239")));
     }
 }

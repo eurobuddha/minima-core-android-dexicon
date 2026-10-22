@@ -247,12 +247,13 @@ public final class TradeView extends LinearLayout {
     }
 
     /** Amount column text, MiniDapp parity (pd_app.js renderBookRows): FAST and POOL are always tagged, BOOK only
-     *  when another source shares the level; amounts truncated to two decimals; one line per source. */
+     *  when another source shares the level; FAST and BOOK sizes exact (they can be taken in full), POOL bands to two
+     *  decimals (sampled depth); one line per source. */
     public static String amountText(BigDecimal fast, BigDecimal book, BigDecimal pool) {
         List<String> parts = new ArrayList<>();
         boolean hasPool = pool != null && pool.signum() > 0;
-        if (fast != null && fast.signum() > 0) parts.add("FAST " + PriceMath.fmtDown(fast, 2));
-        if (book != null && book.signum() > 0) parts.add((!parts.isEmpty() || hasPool ? "BOOK " : "") + PriceMath.fmtDown(book, 2));
+        if (fast != null && fast.signum() > 0) parts.add("FAST " + fast.stripTrailingZeros().toPlainString());   // exact: a size you can take in full
+        if (book != null && book.signum() > 0) parts.add((!parts.isEmpty() || hasPool ? "BOOK " : "") + book.stripTrailingZeros().toPlainString());
         if (hasPool) parts.add("POOL " + PriceMath.fmtDown(pool, 2));
         return parts.isEmpty() ? PriceMath.fmtDown(BigDecimal.ZERO, 2) : String.join("\n", parts);
     }
@@ -261,7 +262,7 @@ public final class TradeView extends LinearLayout {
     public static String amountText(BigDecimal book, BigDecimal pool) { return amountText(BigDecimal.ZERO, book, pool); }
 
     /** One ladder row with a right-anchored translucent depth bar BEHIND the numbers; tap prefills the exact price. */
-    private View ladderRow(BigDecimal price, Level lv, float depthFrac, boolean ask) {
+    private View ladderRow(BigDecimal price, Level lv, float depthFrac, boolean ask, BigDecimal cumulative) {
         FrameLayout f = new FrameLayout(getContext());
         View bar = new View(getContext());
         bar.setBackgroundColor(ask ? (Design.RED() & 0x00FFFFFF) | 0x22000000 : (Design.IN() & 0x00FFFFFF) | 0x22000000);
@@ -281,7 +282,10 @@ public final class TradeView extends LinearLayout {
         row.addView(to, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         f.addView(row);
         BigDecimal prefill = lv.exact != null ? lv.exact : price;
-        f.setOnClickListener(v -> { priceIn.setText(prefill.stripTrailingZeros().toPlainString()); setMode(ask); });
+        // a row fills the price AND the exact amount on offer up to it, on the side that takes it; in a grouped view the
+        // bucket's boundary price is used, which crosses every order inside the bucket
+        BigDecimal at = GROUPS[groupIdx] == null ? prefill : price;
+        f.setOnClickListener(v -> { setMode(ask); priceIn.setText(at.stripTrailingZeros().toPlainString()); amountIn.setText(cumulative.stripTrailingZeros().toPlainString()); updateTotal(); });
         Design.pressable(f);
         return f;
     }
@@ -372,15 +376,21 @@ public final class TradeView extends LinearLayout {
         updateTotal();
     }
 
+    /** Owner 2026-10-22, MinimaXT's slider: 100 % is 100 % of the EXACT order, never a rounded display. When the price
+     *  crosses FAST orders the % is of the exact MINIMA they offer at that price (capped by your exact free funds);
+     *  otherwise of your exact free funds. Cut DOWN to 8 dp — 100 % of an offer is the offer itself. */
     private void applyPercent(int pct) {
         BigDecimal price = Util.dec(priceIn.getText().toString());
-        if (buyMode) {
-            if (price.signum() <= 0) return;
-            BigDecimal usd = Funds.of(act).freeFor(true).multiply(new BigDecimal(pct)).divide(new BigDecimal(100), 8, RoundingMode.DOWN);
-            amountIn.setText(usd.divide(price, 8, RoundingMode.DOWN).stripTrailingZeros().toPlainString());
-        } else {
-            amountIn.setText(Funds.of(act).freeFor(false).multiply(new BigDecimal(pct)).divide(new BigDecimal(100), 8, RoundingMode.DOWN).stripTrailingZeros().toPlainString());
-        }
+        if (price.signum() <= 0) { act.toast("Enter a price first — or tap a row in the book"); return; }
+        BigDecimal free = Funds.of(act).freeFor(buyMode);
+        BigDecimal cap = (buyMode ? free.divide(price, 8, RoundingMode.DOWN) : free).setScale(8, RoundingMode.DOWN);
+        BigDecimal offer = act.offered(buyMode, price), p = new BigDecimal(pct), amount;
+        if (offer.signum() > 0) {
+            BigDecimal want = offer.multiply(p).divide(new BigDecimal(100), 8, RoundingMode.DOWN);
+            amount = want.min(cap);
+            if (cap.compareTo(want) < 0) act.toast("Your free " + (buyMode ? "MxUSD" : "MINIMA") + " covers " + amount.stripTrailingZeros().toPlainString() + " of the " + offer.stripTrailingZeros().toPlainString() + " MINIMA on offer");
+        } else amount = cap.multiply(p).divide(new BigDecimal(100), 8, RoundingMode.DOWN);
+        amountIn.setText(amount.stripTrailingZeros().toPlainString());
         updateTotal();
     }
 
@@ -493,7 +503,7 @@ public final class TradeView extends LinearLayout {
         List<View> askRows = new ArrayList<>();
         for (Map.Entry<BigDecimal, Level> e : askList) {
             running = running.add(e.getValue().total());
-            askRows.add(ladderRow(e.getKey(), e.getValue(), askMax.signum() == 0 ? 0 : running.divide(askMax, 4, RoundingMode.HALF_UP).floatValue(), true));
+            askRows.add(ladderRow(e.getKey(), e.getValue(), askMax.signum() == 0 ? 0 : running.divide(askMax, 4, RoundingMode.HALF_UP).floatValue(), true, running));
         }
         for (int i = askRows.size() - 1; i >= 0; i--) asksBox.addView(askRows.get(i));   // best ask just above centre
         List<Map.Entry<BigDecimal, Level>> bidList = new ArrayList<>(bids.entrySet()).subList(0, Math.min(MAX_ROWS, bids.size()));
@@ -501,7 +511,7 @@ public final class TradeView extends LinearLayout {
         running = BigDecimal.ZERO;
         for (Map.Entry<BigDecimal, Level> e : bidList) {
             running = running.add(e.getValue().total());
-            bidsBox.addView(ladderRow(e.getKey(), e.getValue(), bidMax.signum() == 0 ? 0 : running.divide(bidMax, 4, RoundingMode.HALF_UP).floatValue(), false));
+            bidsBox.addView(ladderRow(e.getKey(), e.getValue(), bidMax.signum() == 0 ? 0 : running.divide(bidMax, 4, RoundingMode.HALF_UP).floatValue(), false, running));
         }
         // Ticker = best of all three sources: the exact best price behind the best displayed level on each side.
         BigDecimal bestAsk = askList.isEmpty() ? null : askList.get(0).getValue().exact, bestBid = bidList.isEmpty() ? null : bidList.get(0).getValue().exact;
