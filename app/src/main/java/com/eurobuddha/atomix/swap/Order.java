@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.82 app/src/main/java/com/eurobuddha/atomix/swap/Order.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.83 app/src/main/java/com/eurobuddha/atomix/swap/Order.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONArray;
@@ -165,7 +165,11 @@ public final class Order {
     /** Reuse checkLadderCoins' best-price prefix and trimAsks' scalar suppression at final publication.
      *  Exact decimal accounting: a tolerance must not fund an otherwise unbacked tranche.
      *  Only the outgoing/received order is changed; saved market configuration is left intact. */
-    public void clampAsksToBalance(java.math.BigDecimal available) {
+    public void clampAsksToBalance(java.math.BigDecimal available) { clampAsksToBalance(available, false); }
+    /** {@code partial} (READERS only): the first tranche the balance can't fully cover is TRIMMED to what it can,
+     *  when that still meets the pair minimum, instead of dropped — what takers saw before 2026-10-19 (levelCap).
+     *  Publication keeps the strict prefix: a maker never advertises a tranche it can't fully back. */
+    public void clampAsksToBalance(java.math.BigDecimal available, boolean partial) {
         if(available==null||available.signum()<0)available=java.math.BigDecimal.ZERO;
         java.math.BigDecimal remaining=available;
         for(Map.Entry<String,Pair> entry:pairs.entrySet()) {
@@ -175,7 +179,11 @@ public final class Order {
                 int keep=0;
                 for(Level level:pair.asks) {
                     java.math.BigDecimal size=java.math.BigDecimal.valueOf(level.amount);
-                    if(level.amount<pair.min||size.compareTo(remaining)>0)break;
+                    if(level.amount<pair.min)break;
+                    if(size.compareTo(remaining)>0) {
+                        if(partial&&remaining.signum()>0&&remaining.doubleValue()>=pair.min){level.amount=remaining.doubleValue();remaining=java.math.BigDecimal.ZERO;keep++;}
+                        break;
+                    }
                     remaining=remaining.subtract(size);keep++;
                 }
                 trimAsks(entry.getKey(),keep);
@@ -187,7 +195,10 @@ public final class Order {
     }
 
     /** Best-price prefix, as for asks; a bid spends amount * price USDT. */
-    public void clampBidsToBalance(java.math.BigDecimal available) {
+    public void clampBidsToBalance(java.math.BigDecimal available) { clampBidsToBalance(available, false); }
+    /** {@code partial}: as {@link #clampAsksToBalance(java.math.BigDecimal, boolean)} — readers trim the first partly
+     *  backed bid to remaining/price (if it meets the pair minimum) rather than hide the whole bid side. */
+    public void clampBidsToBalance(java.math.BigDecimal available, boolean partial) {
         java.math.BigDecimal remaining=available==null?java.math.BigDecimal.ZERO:available.max(java.math.BigDecimal.ZERO);
         for(Pair pair:pairs.values()) {
             if(pair==null||!pair.enable)continue;
@@ -196,7 +207,12 @@ public final class Order {
                 int keep=0;
                 for(Level level:pair.bids) {
                     java.math.BigDecimal cost=java.math.BigDecimal.valueOf(level.amount).multiply(java.math.BigDecimal.valueOf(level.price));
-                    if(level.amount<pair.min||cost.compareTo(remaining)>0)break;
+                    if(level.amount<pair.min)break;
+                    if(cost.compareTo(remaining)>0) {
+                        double affordable=level.price>0?remaining.doubleValue()/level.price:0;
+                        if(partial&&affordable>0&&affordable>=pair.min){level.amount=affordable;remaining=java.math.BigDecimal.ZERO;keep++;}
+                        break;
+                    }
                     remaining=remaining.subtract(cost);keep++;
                 }
                 while(pair.bids.size()>keep)pair.bids.remove(pair.bids.size()-1);
@@ -287,8 +303,10 @@ public final class Order {
                 if (v != null) r.pairs.put(k, pairFromJson(v, 0));
             }
         }
-        r.clampAsksToBalance(java.math.BigDecimal.valueOf(r.minimaAvail));
-        r.clampBidsToBalance(java.math.BigDecimal.valueOf(r.usdtAvail));
+        // Received orders: a side with NO advertised funds shows nothing (2026-10-19); a partly backed best level is
+        // trimmed to the balance, not hidden — the regression that emptied the MxUSD bid side (owner, 2026-10-22).
+        r.clampAsksToBalance(java.math.BigDecimal.valueOf(r.minimaAvail), true);
+        r.clampBidsToBalance(java.math.BigDecimal.valueOf(r.usdtAvail), true);
         return r;
     }
 

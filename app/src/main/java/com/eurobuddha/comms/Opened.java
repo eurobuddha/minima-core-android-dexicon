@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.82 app/src/main/java/com/eurobuddha/comms/Opened.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.83 app/src/main/java/com/eurobuddha/comms/Opened.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.comms;
 
 /** Result of {@link CryptoProvider#open}: the decrypted message plus whether the sender signature verified. */

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.82 app/src/test/java/com/eurobuddha/atomix/swap/BidBackingTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.83 app/src/test/java/com/eurobuddha/atomix/swap/BidBackingTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -155,6 +155,20 @@ public class BidBackingTest {
         o.clampBidsToBalance(new BigDecimal("0.3"));assertEquals(2,p.bids.size());
         o.clampBidsToBalance(new BigDecimal("0.299999999999"));assertEquals(1,p.bids.size());
         o.clampBidsToBalance(BigDecimal.ZERO);assertEquals(0,p.sell,0);assertTrue(o.effectiveBids("USDT").isEmpty());
+    }
+    /** 2026-10-22 regression, live MxUSD book: 10000 @ 0.99 from a maker advertising 4879.780018 USDT vanished from
+     *  every 0.1.72 taker (0.1.71 showed it capped). Readers trim the best bid to what the balance covers. */
+    @Test public void readersTrimAPartlyBackedBidInsteadOfHidingIt()throws Exception {
+        Order o=new Order();o.usdtAvail=4879.780018;o.minimaAvail=21417.79706305;
+        Order.Pair p=new Order.Pair(true,1.01,0.99,1);p.bids.add(new Order.Level(0.99,10000));p.bids.add(new Order.Level(0.98,10000));p.asks.add(new Order.Level(1.01,10000));o.pairs.put("USDT",p);
+        Order read=Order.fromJson(o.toJson());
+        java.util.List<Order.Level> bids=read.effectiveBids("USDT");
+        assertEquals(1,bids.size());assertEquals(4879.780018/0.99,bids.get(0).amount,1e-6);
+        assertTrue(SwapOrderBook.makerLive(read,"USDT",true));
+        assertEquals(10000,read.effectiveAsks("USDT").get(0).amount,0);
+        // publication stays strict: the maker itself never advertises the partly backed tranche
+        Order own=Order.fromConfigJson(Order.toConfigJson(o));own.clampBidsToBalance(new java.math.BigDecimal("4879.780018"));
+        assertTrue(own.effectiveBids("USDT").isEmpty());
     }
     @Test public void readersRejectOldUnbackedLaddersAndScalarOrders()throws Exception {
         for(boolean ladder:new boolean[]{true,false})for(double balance:new double[]{0,0.5}) {

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.82 app/src/test/java/com/eurobuddha/comms/CommsScannerTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.83 app/src/test/java/com/eurobuddha/comms/CommsScannerTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.comms;
 
 import static org.junit.Assert.assertEquals;
