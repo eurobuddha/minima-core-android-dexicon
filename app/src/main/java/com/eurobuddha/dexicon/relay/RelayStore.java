@@ -16,7 +16,14 @@ public final class RelayStore {
     private static final String PREFS = "dexicon";
     private static SharedPreferences p(Context c) { return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
 
-    public static List<String> load(Context c) { return list(p(c).getString("relays", "[]")); }
+    /** Bootstrap list for a fresh install (no "relays" pref yet) — mirror of the MiniDapp's AX.relay.DEFAULTS.
+     *  Ordinary untrusted relays, not authorities; DISCOVER grows the list and a saved list (even empty) wins. */
+    public static final List<String> DEFAULTS = java.util.Collections.unmodifiableList(java.util.Arrays.asList(
+            "https://eurobuddha.com/dex-relay", "https://store.eurobuddha.com/dex-relay", "https://minimammr.com/dex-relay"));
+    public static List<String> load(Context c) {
+        String saved = p(c).getString("relays", null);
+        return saved == null ? new java.util.ArrayList<>(DEFAULTS) : list(saved);
+    }
     public static Set<String> discovered(Context c) { return new LinkedHashSet<>(list(p(c).getString("relays_discovered", "[]"))); }
 
     public static void save(Context c, List<String> relays, Set<String> discovered) {
