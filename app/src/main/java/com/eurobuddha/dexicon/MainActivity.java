@@ -116,8 +116,8 @@ public class MainActivity extends AppCompatActivity {
             if (paired) { readBalances(); readBlock(); }
             // Not yet enabled in Minima Core → Apps: ask again every tick, so enabling it there pairs this screen
             // without a restart (the maker service already re-registers; the Activity did not — seen on-device 2026-10-21).
-            else if (node != null && pairingKnown) node.reRegister();
-            ui.postDelayed(this, POLL_MS);
+            else if (node != null && pairingKnown) { node.reRegister(); repaintHeader(); }
+            ui.postDelayed(this, paired ? POLL_MS : 3_000);   // unpaired: notice the node's Apps toggle within seconds
         }
     };
 
@@ -167,7 +167,7 @@ public class MainActivity extends AppCompatActivity {
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 91);
         try { ContextCompat.startForegroundService(this, new Intent(this, MakerService.class)); } catch (Exception ignored) {}
-        ui.postDelayed(pollTask, POLL_MS);
+        ui.postDelayed(pollTask, 3_000);
         ui.postDelayed(liveTask, 1000);
     }
 
@@ -673,7 +673,13 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout nodeRow = new LinearLayout(this);
         nodeRow.setGravity(Gravity.CENTER_VERTICAL);
         nodeRow.setPadding(pad, 0, pad, Design.dp(this, 6));
-        pairPill = Design.pill(this, "PAIRING…", Design.SURFACE2(), Design.DIM());
+        pairPill = Design.pill(this, "CONNECTING…", Design.SURFACE2(), Design.DIM());
+        pairPill.setOnClickListener(v -> {   // not paired: one tap to the node app (its Apps screen holds the toggle)
+            if (paired) return;
+            String pkg = NodeApi.nodeApp(this)[0];
+            android.content.Intent open = pkg.isEmpty() ? null : getPackageManager().getLaunchIntentForPackage(pkg);
+            if (open != null) startActivity(open); else toast("Install or start your Minima node app first");
+        });
         nodeRow.addView(pairPill, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         blockPill = Design.pill(this, "# —", Design.SURFACE2(), Design.DIM());
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -745,7 +751,11 @@ public class MainActivity extends AppCompatActivity {
 
     void repaintHeader() {
         if (pairPill == null) return;
-        String ps = !pairingKnown ? "PAIRING…" : !paired ? "ENABLE IN MINIMA CORE → APPS" : me == null ? "PAIRED · deriving identity" : "PAIRED";
+        String nodeName = NodeApi.nodeApp(this)[1];
+        String ps = !pairingKnown ? "CONNECTING TO " + nodeName.toUpperCase(java.util.Locale.ROOT) + "…"
+                : !paired ? (node != null && node.answered() ? "ENABLE DEXICON IN " + nodeName.toUpperCase(java.util.Locale.ROOT) + " → APPS  ▸"
+                                                            : "WAITING FOR " + nodeName.toUpperCase(java.util.Locale.ROOT) + " — OPEN / UNLOCK IT  ▸")
+                : me == null ? "PAIRED · deriving identity" : "PAIRED";
         pairPill.setText(ps);
         pairPill.setTextColor(paired ? Design.IN() : Design.DIM());
         blockPill.setText("# " + (chainBlock > 0 ? String.valueOf(chainBlock) : "—"));
@@ -771,6 +781,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onResume() {
         super.onResume();
         FOREGROUND = true;
+        if (node != null && !paired) node.reRegister();   // back from the node app's Apps screen: re-ask at once
         applySettings();
         bookLoop();
         repaint();

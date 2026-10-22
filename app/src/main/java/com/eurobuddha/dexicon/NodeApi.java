@@ -54,6 +54,10 @@ public class NodeApi {
     private final java.util.HashSet<Runnable> mPending = new java.util.HashSet<>();
     private boolean mReleased = false, destroyRequested = false;
     private Boolean enabled;
+    /** True once a node has REPLIED to a register (even "not enabled"); false while nothing has answered. A reply
+     *  timeout and a real "disabled" used to look identical to the screen (live on the Fold 2026-10-22). */
+    private boolean answered;
+    public boolean answered() { return answered; }
     private long lastOk;
     private int consecutiveTimeouts, queuedCommands;
     private static final SerialQueue IPC_QUEUE = new SerialQueue();
@@ -62,9 +66,18 @@ public class NodeApi {
         mContext = ctx;
         mPairing = pairing;
         mApi = new NodeTransport(ctx, zResponse -> {
-            final boolean en = zResponse.optBoolean("enabled", false);
-            mMain.post(() -> { if (!dead()) noteEnabled(en); });
+            final boolean en = zResponse.optBoolean("enabled", false), ok = zResponse.optBoolean("status", false);
+            mMain.post(() -> { if (!dead()) { answered = ok; noteEnabled(en); } });
         });
+    }
+
+    /** The installed Minima node app this companion pairs with: [package, label]; first found wins. */
+    public static String[] nodeApp(Context c) {
+        String[][] apps = {{"com.eurobuddha.pandamonium", "Pandamonium"}, {"com.eurobuddha.minimablock", "MinimaBlock"}, {"com.eurobuddha.minimacore", "Minima Core"}};
+        for (String[] a : apps) {
+            try { c.getPackageManager().getPackageInfo(a[0], 0); return a; } catch (Exception ignored) {}
+        }
+        return new String[]{"", "your Minima node app"};
     }
 
     public boolean isEnabled() { return Boolean.TRUE.equals(enabled); }
@@ -82,10 +95,10 @@ public class NodeApi {
         if (mReleased || destroyRequested || queuedCommands != 0) return;
         enabled = null;
         mApi.onDestroy();
-        mApi = new NodeTransport(mContext, reply -> noteEnabled(reply.optBoolean("enabled", false)));
+        mApi = new NodeTransport(mContext, reply -> { answered = reply.optBoolean("status", false); noteEnabled(reply.optBoolean("enabled", false)); });
         cmd("__register__", new Cb() {
-            public void onResult(JSONObject reply) { noteEnabled(reply.optBoolean("enabled", false)); }
-            public void onError(String message) { noteEnabled(false); }
+            public void onResult(JSONObject reply) { answered = true; noteEnabled(reply.optBoolean("enabled", false)); }
+            public void onError(String message) { answered = !(message != null && (message.contains("No Minima node replied") || message.contains("Node discovery"))) && answered; noteEnabled(false); }
         });
     }
 
