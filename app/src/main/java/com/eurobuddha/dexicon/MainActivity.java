@@ -69,8 +69,8 @@ public class MainActivity extends AppCompatActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    private static final int TAB_TRADE = 0, TAB_ORDERS = 1, TAB_HISTORY = 2, TAB_ASSETS = 3, TAB_RELAYS = 4;
-    private static final String[] TAB_NAMES = {"TRADE", "ORDERS", "HISTORY", "ASSETS", "RELAYS"};
+    static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_RELAYS = 5;
+    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "RELAYS"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
@@ -94,11 +94,14 @@ public class MainActivity extends AppCompatActivity {
     private BigDecimal minimaSendable = BigDecimal.ZERO, mxusdSendable = BigDecimal.ZERO, minimaConfirmed = BigDecimal.ZERO, mxusdConfirmed = BigDecimal.ZERO;
     private long balanceAtMs;
     private String stage = "";
+    /** The ACTIVITY row the TRADE stage line follows live (null = plain stage text only). */
+    private String liveActId;
     private BroadcastReceiver changedReceiver, nodeReceiver;
     private ActivityResultLauncher<String> saveCsv;
     private String pendingCsv;
 
     private TradeView trade;
+    private ActivityTab activityTab;
     private OrdersTab ordersTab;
     private HistoryTab historyTab;
     private AssetsTab assetsTab;
@@ -115,6 +118,19 @@ public class MainActivity extends AppCompatActivity {
             // without a restart (the maker service already re-registers; the Activity did not — seen on-device 2026-10-21).
             else if (node != null && pairingKnown) node.reRegister();
             ui.postDelayed(this, POLL_MS);
+        }
+    };
+
+    /** Seconds-level clock for live rows ("waiting for the maker (12s)"): the header every second while a trade is
+     *  followed, the ACTIVITY tab every 5 s while it is open. Block-level changes arrive via ACTION_CHANGED. */
+    private int liveTicks;
+    private final Runnable liveTask = new Runnable() {
+        @Override public void run() {
+            if (FOREGROUND) {
+                if (liveActId != null) repaintHeader();
+                if (tab == TAB_ACTIVITY && ++liveTicks % 5 == 0) activityTab.render();
+            }
+            ui.postDelayed(this, 1000);
         }
     };
 
@@ -152,6 +168,7 @@ public class MainActivity extends AppCompatActivity {
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 91);
         try { ContextCompat.startForegroundService(this, new Intent(this, MakerService.class)); } catch (Exception ignored) {}
         ui.postDelayed(pollTask, POLL_MS);
+        ui.postDelayed(liveTask, 1000);
     }
 
     /** Relay list + dev token override are shared prefs; re-read whenever they may have changed. */
@@ -387,18 +404,45 @@ public class MainActivity extends AppCompatActivity {
     private void executeComposite(CompositeRouter.Plan plan, boolean buy) {
         if (busy) { toast("A transaction is in progress"); return; }
         busy = true;
+        final String route = plan.orderMinima.signum() > 0 && plan.poolMinima.signum() > 0 ? "BOOK+POOL" : plan.poolMinima.signum() > 0 ? "POOL" : "BOOK";
+        final String actId = ActivityLog.newId("slow_");
+        final JSONObject[] posted = {new JSONObject()};
+        try {
+            ActivityLog.add(db, new JSONObject().put("id", actId).put("route", route).put("role", "taker").put("side", buy ? "buy" : "sell")
+                    .put("amount", PriceMath.fmt(plan.totalMinima)).put("price", plan.effectivePrice.toPlainString()).put("mxusd", PriceMath.fmt(plan.totalMxusd))
+                    .put("ts", System.currentTimeMillis()).put("stage", ActivityLog.BUILDING).put("reason", "Selecting wallet coins…"));
+        } catch (Exception ignored) {}
+        liveActId = actId;
         setStage((buy ? "Buy" : "Sell") + " accepted · selecting wallet coins for " + plan.poolCount() + " pool(s) and " + plan.orderTakes.size() + " book order(s)");
         repaint();
         restingTxn.fillComposite(plan, buy, new DexTxn.Result() {
-            @Override public void onProgress(String message) { setStage(message); }
+            @Override public void onProgress(String message) {
+                ActivityLog.update(db, actId, a -> a.put("reason", message));
+                setStage("");
+            }
+            @Override public void onPostReply(JSONObject reply) { posted[0] = ActivityLog.fromPostReply(reply, restingTxn.hexAddr()); }
             @Override public void onPosted(String txpowid) {
                 busy = false;
-                setStage("Posted " + txpowid + " — waiting for a block to confirm your " + (buy ? "buy" : "sell") + " of " + PriceMath.fmt(plan.totalMinima) + " MINIMA");
+                JSONObject ids = posted[0];
+                ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.POSTED).put("reason", "").put("txpowid", txpowid)
+                        .put("txnid", ids.optString("txnid")).put("outs", ids.optJSONArray("outs") == null ? new JSONArray() : ids.optJSONArray("outs"))
+                        .put("ins", ids.optJSONArray("ins") == null ? new JSONArray() : ids.optJSONArray("ins"))
+                        .put("postBlock", chainBlock).put("tip", chainBlock).put("postedMs", System.currentTimeMillis()));
+                // BOOK/POOL fills join HISTORY and the CSV like FAST fills; MakerService.settleFills settles them by output coin.
+                try {
+                    db.saveFill(new JSONObject().put("role", "taker").put("orderId", "").put("side", buy ? "buy" : "sell")
+                            .put("price", plan.effectivePrice.toPlainString()).put("filled", PriceMath.fmt(plan.totalMinima))
+                            .put("gave", PriceMath.fmt(buy ? plan.totalMxusd : plan.totalMinima)).put("got", PriceMath.fmt(buy ? plan.totalMinima : plan.totalMxusd))
+                            .put("txpowid", txpowid).put("coins", ids.optJSONArray("outs") == null ? new JSONArray() : ids.optJSONArray("outs"))
+                            .put("counterparty", route).put("ts", MakerEngine.now()).put("status", "settling"));
+                } catch (Exception ignored) {}
+                setStage("");
                 refreshResting(); readBalances(); repaint();
             }
             @Override public void onFailed(String message) {
                 busy = false;
-                setStage("Trade failed — " + message);
+                ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", message));
+                setStage("");
                 toast(message); refreshResting(); repaint();
             }
         });
@@ -419,7 +463,7 @@ public class MainActivity extends AppCompatActivity {
     /** The service answers takes; the screen only said "waiting for the maker" — and kept saying it after the fill
      *  landed (seen on-device 2026-10-21). When no take is pending any more, name the newest fill instead. */
     void settleStage() {
-        if (!stage.startsWith("Take sent")) return;
+        if (!stage.startsWith("Take sent")) return;   // pre-0.1.9 text; takes are now followed live via liveActId
         if (!db.pendings().isEmpty()) return;
         java.util.List<org.json.JSONObject> fills = db.fills(1);
         String last = db.meta("last_refusal", "");
@@ -540,14 +584,23 @@ public class MainActivity extends AppCompatActivity {
 
     /** Taker step 2: build + sign my side, seal the take to the maker, publish to every relay, remember it. */
     private void confirmTake(Envelope order, FillPlan.Plan plan) {
-        busy = true; setStage("Building and signing your side…"); repaint();
+        busy = true; setStage("");
+        final String actId = ActivityLog.newId("fast_");
+        boolean takerBuys = "sell".equals(order.side);
+        try {
+            ActivityLog.add(db, new JSONObject().put("id", actId).put("route", "FAST").put("role", "taker").put("side", takerBuys ? "buy" : "sell")
+                    .put("amount", plan.filled).put("price", order.price).put("mxusd", takerBuys ? plan.takerGives : plan.makerGives)
+                    .put("orderId", order.orderId).put("counterparty", order.address).put("ins", new JSONArray(plan.inputs))
+                    .put("ts", System.currentTimeMillis()).put("stage", ActivityLog.BUILDING).put("reason", "Building and signing your side…"));
+        } catch (Exception ignored) {}
+        liveActId = actId; repaint();
         FillTxn.build(node, plan, (err, hex) -> {
-            if (err != null) { busy = false; setStage("Build failed: " + err); repaint(); return; }
+            if (err != null) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "build failed: " + err)); repaint(); return; }
             try {
                 JSONObject inner = new JSONObject().put("k", "take").put("orderId", order.orderId).put("txn", hex).put("taker", me.publicId());
                 String blob = me.seal(order.pubId, inner.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 String msg = Envelopes.msg(me, order.pubId, blob, MakerEngine.now() + 300);
-                JSONObject pt = new JSONObject().put("order", new JSONObject(order.raw)).put("plan", planJson(plan)).put("sent", System.currentTimeMillis());
+                JSONObject pt = new JSONObject().put("order", new JSONObject(order.raw)).put("plan", planJson(plan)).put("sent", System.currentTimeMillis()).put("act", actId);
                 db.savePending(order.orderId, pt);
                 net.execute(() -> {
                     List<RelayClient.PublishResult> results = relay.publish(msg);
@@ -555,12 +608,15 @@ public class MainActivity extends AppCompatActivity {
                     final int okCount = ok; final String firstErr = results.isEmpty() ? "no relays" : results.get(0).error;
                     ui.post(() -> {
                         busy = false;
-                        if (okCount == 0) { db.removePending(order.orderId); setStage("No relay accepted the take: " + firstErr); }
-                        else setStage("Take sent to " + okCount + " relay(s); waiting for the maker to co-sign…");
+                        if (okCount == 0) { db.removePending(order.orderId); ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "no relay accepted the take: " + firstErr)); }
+                        else ActivityLog.update(db, actId, a -> {   // a fast maker can answer (via another relay) before the slowest publish returns
+                            a.put("relays", okCount).put("sentMs", pt.optLong("sent"));
+                            if (ActivityLog.BUILDING.equals(a.optString("stage"))) a.put("stage", ActivityLog.SENT).put("reason", "");
+                        });
                         repaint();
                     });
                 });
-            } catch (Exception e) { busy = false; setStage("Take failed: " + e.getMessage()); repaint(); }
+            } catch (Exception e) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "take failed: " + e.getMessage())); repaint(); }
         });
     }
 
@@ -625,15 +681,17 @@ public class MainActivity extends AppCompatActivity {
         scroller.addView(content, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
         root.addView(scroller, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); relaysTab = new RelaysTab(this);
-        for (View v : new View[]{trade, ordersTab, historyTab, assetsTab, relaysTab}) { v.setVisibility(View.GONE); content.addView(v); }
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); relaysTab = new RelaysTab(this);
+        for (View v : tabViews()) { v.setVisibility(View.GONE); content.addView(v); }
 
         stageTv = new TextView(this);
         stageTv.setTextSize(10f); stageTv.setTypeface(Design.mono()); stageTv.setTextColor(Design.TEXT());
         stageTv.setPadding(pad, Design.dp(this, 6), pad, Design.dp(this, 6));
         stageTv.setBackgroundColor(Design.SURFACE2());
         stageTv.setVisibility(View.GONE);
-        stageTv.setOnClickListener(v -> copy("Status", stage));
+        // Tap → ACTIVITY while a trade is being followed live; long-press always copies the full line.
+        stageTv.setOnClickListener(v -> { if (liveActId != null) selectTab(TAB_ACTIVITY); else copy("Status", stageTv.getText().toString()); });
+        stageTv.setOnLongClickListener(v -> { copy("Status", stageTv.getText().toString()); return true; });
         root.addView(stageTv);
 
         tabBar = new LinearLayout(this);
@@ -641,7 +699,9 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < TAB_NAMES.length; i++) {
             final int idx = i;
             TextView t = new TextView(this);
-            t.setText(TAB_NAMES[i]); t.setTextSize(10f); t.setTypeface(Design.sansBold()); t.setGravity(Gravity.CENTER);
+            t.setText(TAB_NAMES[i]); t.setTextSize(10f); t.setTypeface(Design.sansBold()); t.setGravity(Gravity.CENTER); t.setMaxLines(1);
+            // Six tabs: a narrow phone shrinks the labels to fit (min 7sp); the Fold keeps 10sp.
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(t, 7, 10, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
             t.setPadding(0, Design.dp(this, 11), 0, Design.dp(this, 11)); t.setMinHeight(Design.dp(this, 48));
             t.setOnClickListener(v -> selectTab(idx));
             tabBar.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -652,7 +712,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void selectTab(int idx) {
         tab = idx;
-        View[] views = {trade, ordersTab, historyTab, assetsTab, relaysTab};
+        View[] views = tabViews();
         for (int i = 0; i < views.length; i++) views[i].setVisibility(i == idx ? View.VISIBLE : View.GONE);
         for (int i = 0; i < tabBar.getChildCount(); i++) {
             TextView t = (TextView) tabBar.getChildAt(i);
@@ -662,14 +722,32 @@ public class MainActivity extends AppCompatActivity {
         repaint();
     }
 
+    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, relaysTab}; }
+
+    /** The live line for the followed ACTIVITY row; null once it has been settled for two minutes. */
+    private String liveLine() {
+        if (liveActId == null || db == null) return null;
+        JSONObject a = db.activity(liveActId);
+        if (a == null) { liveActId = null; return null; }
+        long now = System.currentTimeMillis();
+        if (ActivityLog.settled(a, chainBlock)) {
+            if (!a.has("settledMs")) ActivityLog.update(db, liveActId, x -> x.put("settledMs", now));
+            else if (now - a.optLong("settledMs") > 120_000) { liveActId = null; return null; }
+        }
+        return (a.optString("side").equals("buy") ? "BUY " : "SELL ") + a.optString("amount") + " MINIMA · " + a.optString("route") + " · "
+                + ActivityLog.statusText(a, chainBlock, now) + "   ▸ ACTIVITY";
+    }
+
     void repaintHeader() {
         if (pairPill == null) return;
         String ps = !pairingKnown ? "PAIRING…" : !paired ? "ENABLE IN MINIMA CORE → APPS" : me == null ? "PAIRED · deriving identity" : "PAIRED";
         pairPill.setText(ps);
         pairPill.setTextColor(paired ? Design.IN() : Design.DIM());
         blockPill.setText("# " + (chainBlock > 0 ? String.valueOf(chainBlock) : "—"));
-        stageTv.setText(stage);
-        stageTv.setVisibility(stage.isEmpty() ? View.GONE : View.VISIBLE);
+        String live = liveLine();
+        String line = live == null ? stage : stage.isEmpty() ? live : stage + "\n" + live;
+        stageTv.setText(line);
+        stageTv.setVisibility(line.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     void repaint() {
@@ -677,6 +755,7 @@ public class MainActivity extends AppCompatActivity {
         repaintHeader();
         switch (tab) {
             case TAB_TRADE: trade.render(); break;
+            case TAB_ACTIVITY: activityTab.render(); break;
             case TAB_ORDERS: ordersTab.render(); break;
             case TAB_HISTORY: historyTab.render(); break;
             case TAB_ASSETS: assetsTab.render(); break;

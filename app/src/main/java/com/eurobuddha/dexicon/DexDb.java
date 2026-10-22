@@ -19,10 +19,11 @@ import java.util.List;
  *   fill    — my fills, maker or taker side; status settling | done | lost (service.js 'fill_<txpowid>')
  *   pending — takes I sent and await a reply for (app.js 'pending_takes')
  *   meta    — key/value
+ *   activity — ACTIVITY tab receipts, one per trade (see ActivityLog); added in v2
  */
 public final class DexDb extends SQLiteOpenHelper {
     private static final String DB = "dexicon.db";
-    private static final int V = 1;
+    private static final int V = 2;
 
     public DexDb(Context ctx) {
         super(ctx.getApplicationContext(), DB, null, V);
@@ -35,9 +36,12 @@ public final class DexDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE fill (txpowid TEXT PRIMARY KEY, json TEXT, ts INTEGER)");
         db.execSQL("CREATE TABLE pending (orderid TEXT PRIMARY KEY, json TEXT, ts INTEGER)");
         db.execSQL("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)");
+        onUpgrade(db, 1, V);
     }
     /** Additive migrations only; sideloading an older build must not brick the app. */
-    @Override public void onUpgrade(SQLiteDatabase db, int o, int n) { }
+    @Override public void onUpgrade(SQLiteDatabase db, int o, int n) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS activity (id TEXT PRIMARY KEY, json TEXT, ts INTEGER)");
+    }
     @Override public void onDowngrade(SQLiteDatabase db, int o, int n) { }
 
     // ---- my orders ----
@@ -106,5 +110,28 @@ public final class DexDb extends SQLiteOpenHelper {
     public synchronized void setMeta(String k, String v) {
         ContentValues cv = new ContentValues(); cv.put("k", k); cv.put("v", v);
         getWritableDatabase().insertWithOnConflict("meta", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    // ---- activity (ActivityLog owns the read-modify-write) ----
+    synchronized void saveActivity(JSONObject a) {
+        ContentValues v = new ContentValues();
+        v.put("id", a.optString("id")); v.put("json", a.toString()); v.put("ts", a.optLong("ts", System.currentTimeMillis()));
+        getWritableDatabase().insertWithOnConflict("activity", null, v, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+    synchronized JSONObject activity(String id) {
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT json FROM activity WHERE id=?", new String[]{id})) {
+            if (c.moveToFirst()) return new JSONObject(c.getString(0));
+        } catch (Exception ignored) {}
+        return null;
+    }
+    synchronized List<JSONObject> activities(int limit) {
+        List<JSONObject> out = new ArrayList<>();
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT json FROM activity ORDER BY ts DESC LIMIT " + limit, null)) {
+            while (c.moveToNext()) try { out.add(new JSONObject(c.getString(0))); } catch (Exception ignored) {}
+        }
+        return out;
+    }
+    synchronized void trimActivity(int keep) {
+        getWritableDatabase().execSQL("DELETE FROM activity WHERE id NOT IN (SELECT id FROM activity ORDER BY ts DESC LIMIT " + keep + ")");
     }
 }

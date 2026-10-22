@@ -16,6 +16,7 @@ import android.os.PowerManager;
 
 import androidx.core.app.NotificationCompat;
 
+import com.eurobuddha.dexicon.ActivityLog;
 import com.eurobuddha.dexicon.DexDb;
 import com.eurobuddha.dexicon.MainActivity;
 import com.eurobuddha.dexicon.NodeApi;
@@ -54,6 +55,7 @@ import java.util.concurrent.Executors;
  *             the taker's transaction against MY order, co-sign, post, reply `taken`/`refused`, republish the
  *             remainder; `taken`/`refused` replies to MY pending takes are recorded as fills
  *   tick/30s  settlement tracker: a fill is done once one of its output coins exists on chain
+ *   tick/10s  ACTIVITY tracker (ActivityLog.track) while any trade row can still change: tip, inputs, output coin
  *   tick/60s  maker refresh: re-back orders whose coins moved, relock stale coins, renew expiry
  * A Doze-proof exact alarm ({@link HeartbeatReceiver}) drives a pass when the Handler loop stalls.
  */
@@ -148,6 +150,7 @@ public class MakerService extends Service {
                 if (now - lastRegisterMs >= REREGISTER_GAP_MS) { lastRegisterMs = now; node.reRegister(); }
                 return;
             }
+            ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
             if (me == null) { deriveIdentity(); return; }
             List<String> relays = RelayStore.load(MakerService.this);
             Tokens.setMxUsd(RelayStore.mxusdOverride(MakerService.this));
@@ -190,8 +193,14 @@ public class MakerService extends Service {
         String orderId = inner.optString("orderId", "");
         JSONObject pt = db.pending(orderId);
         if (pt == null) return;
+        final String actId = pt.optString("act", "");
+        final long answeredMs = System.currentTimeMillis();
         if ("taken".equals(inner.optString("k"))) {
-            db.setMeta("rest_due", orderId);   // the Activity rests any unfilled remainder of the limit behind this take
+            db.setMeta("rest_due", orderId);
+            ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.COSIGNED).put("reason", "")
+                    .put("cosignMs", answeredMs - pt.optLong("sent", answeredMs)).put("txpowid", inner.optString("txpowid"))
+                    .put("outs", inner.optJSONArray("coins") == null ? new JSONArray() : inner.optJSONArray("coins"))
+                    .put("amount", inner.optString("filled", a.optString("amount"))));   // the Activity rests any unfilled remainder of the limit behind this take
             try {
                 JSONObject order = pt.getJSONObject("order"), plan = pt.getJSONObject("plan");
                 JSONObject f = new JSONObject().put("role", "taker").put("orderId", orderId)
@@ -204,6 +213,7 @@ public class MakerService extends Service {
         } else {
             String reason = inner.optString("reason", "refused");
             db.setMeta("last_refusal", reason);
+            ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.REFUSED).put("reason", reason).put("cosignMs", answeredMs - pt.optLong("sent", answeredMs)));
             if (reason.matches("(?i).*(taken|not live|advertised|spent|visible|cover).*")) db.setMeta("retry_due", orderId);   // the Activity re-plans at the next level
             Notifier.alert(this, "Take refused", "The maker refused: " + reason);
         }
@@ -239,10 +249,11 @@ public class MakerService extends Service {
         if (o == null || !o.live()) { reply(taker, refused(orderId, "order not live")); next.run(); return; }
         if (!lockCoins(o.coins)) { reply(taker, refused(orderId, "taken")); next.run(); return; }
         log("take received for " + orderId + " from " + taker + " (" + hex.length() / 2 + " bytes)");
-        final List<String> spentByMe = new ArrayList<>();
+        final long receivedMs = System.currentTimeMillis();
+        final List<String> spentByMe = new ArrayList<>(), allIns = new ArrayList<>();
         FillTxn.cosign(node, hex, (ins, outs, hasState) -> {
             FillPlan.Verdict v = FillPlan.verifyAsMaker(ins, outs, hasState, o.asFillOrder(), o.coins, o.remaining, new ArrayList<>(myAddresses));
-            if (v.ok) for (com.eurobuddha.dexicon.fill.Coin c : ins) if (o.coins.contains(c.coinid)) spentByMe.add(c.coinid);
+            if (v.ok) for (com.eurobuddha.dexicon.fill.Coin c : ins) { if (o.coins.contains(c.coinid)) spentByMe.add(c.coinid); allIns.add(c.coinid); }
             return v;
         }, (err, txpowid, verdict, outCoins) -> {
             if (err != null) {
@@ -257,6 +268,10 @@ public class MakerService extends Service {
                         .put("filled", verdict.filled).put("received", verdict.received).put("paid", verdict.paid).put("txpowid", txpowid)
                         .put("coins", new JSONArray(outCoins)).put("counterparty", taker).put("ts", MakerEngine.now()).put("status", "settling");
                 db.saveFill(f);
+                ActivityLog.add(db, new JSONObject().put("id", "maker_" + txpowid).put("route", "FAST").put("role", "maker").put("side", o.side)
+                        .put("amount", verdict.filled).put("price", o.price).put("mxusd", "sell".equals(o.side) ? verdict.received : verdict.paid)
+                        .put("orderId", orderId).put("counterparty", taker).put("txpowid", txpowid).put("outs", new JSONArray(outCoins)).put("ins", new JSONArray(allIns))
+                        .put("ts", receivedMs).put("cosignMs", System.currentTimeMillis() - receivedMs).put("stage", ActivityLog.COSIGNED));
                 reply(taker, new JSONObject().put("k", "taken").put("orderId", orderId).put("txpowid", txpowid).put("filled", verdict.filled).put("coins", new JSONArray(outCoins)));
             } catch (Exception ignored) {}
             Notifier.alert(this, "Order filled", ("sell".equals(o.side) ? "Sold " : "Bought ") + verdict.filled + " MINIMA @ " + o.price + " MxUSD (settling)");

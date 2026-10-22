@@ -1,7 +1,7 @@
 package com.eurobuddha.dexicon.resting;
 /* Vendored from apks/pandadex app/src/main/java/com/eurobuddha/pandadex/DexTxn.java (PandaDEX 0.4.23).
  * Keep as close to verbatim as possible; only the package, the NodeApi/SignGate imports and the minimal Dexicon
- * glue noted inline differ. Per the family naming rule the Minima dollar token is MxUSD in identifiers too
+ * glue noted inline differ (0.1.9: Result.onPostReply for the ACTIVITY tab). Per the family naming rule the Minima dollar token is MxUSD in identifiers too
  * (PandaDEX MXUSD_ID/MXUSD_DP/*Mxusd are MXUSD_ID/MXUSD_DP/*Mxusd here). Re-copy rather than hand-edit when PandaDEX changes. */
 
 
@@ -37,6 +37,9 @@ public class DexTxn {
         default boolean onPrepared(String transactionHandle) { return true; }
         /** Persist the transition before asking the node to post. */
         default boolean beforePost() { return true; }
+        /** Dexicon glue (ACTIVITY tab): the raw txnpost reply, just before onPosted — its body.txn carries the
+         *  output coin ids the activity tracker settles by (the txpowid is the pre-mining id). */
+        default void onPostReply(JSONObject reply) {}
         void onPosted(String txpowid);
         void onFailed(String message);
     }
@@ -286,6 +289,7 @@ public class DexTxn {
                 }
                 public void onProgress(String message) { progress(cb, message); }
                 public boolean beforePost() { return cb.beforePost(); }
+                public void onPostReply(JSONObject reply) { try { cb.onPostReply(reply); } catch (RuntimeException ignored) {} }   // Dexicon glue
                 public void onPosted(String id) { finish(id, null); }
                 public void onFailed(String message) { finish(null, message); }
             };
@@ -321,7 +325,7 @@ public class DexTxn {
                             cb.onFailed("Awaiting node approval; this transaction has not been submitted."); return;
                         }
                         commands.run("txndelete id:" + txid, null);
-                        if (reply.optBoolean("status", false)) cb.onPosted(Util.extractTxpowid(reply, txid));
+                        if (reply.optBoolean("status", false)) { cb.onPostReply(reply); cb.onPosted(Util.extractTxpowid(reply, txid)); }   // Dexicon glue: onPostReply
                         else cb.onFailed(TxValidation.postError(reply));
                     }
                     public void onError(String message) {
