@@ -355,6 +355,7 @@ public class MainActivity extends AppCompatActivity {
         confirm((buy ? "Buy " : "Sell ") + Util.fmt(amount) + " MINIMA @ " + Util.fmt(price) + " MxUSD",
                 "Rests on the relays as your order. Your wallet coins back it; the maker engine co-signs fills while the phone is in your pocket.",
                 () -> {
+                    if (engine == null) { toast("Not paired — try again once PAIRED"); return; }
                     busy = true; setStage("Publishing order…"); repaint();
                     engine.create(buy ? "buy" : "sell", price.toPlainString(), amount.toPlainString(), (err, o) -> {
                         busy = false;
@@ -517,13 +518,16 @@ public class MainActivity extends AppCompatActivity {
     }
 
     void cancelOrder(MyOrder o) {
+        if (engine == null) { toast("Not paired yet — enable Dexicon in your node app (Apps), unlock it, then try again"); return; }
         confirm("Cancel order " + o.orderId + "?", (o.side.equals("sell") ? "SELL " : "BUY ") + Util.fmt(Util.dec(o.remaining)) + " MINIMA @ " + o.price, () -> {
             busy = true; repaint();
+            if (engine == null) { busy = false; toast("Not paired — try again once PAIRED"); repaint(); return; }
             engine.cancel(o.orderId, (err, x) -> { busy = false; setStage(err != null ? "Cancel failed: " + err : "Order cancelled"); repaint(); });
         });
     }
 
     void editOrder(MyOrder o) {
+        if (engine == null) { toast("Not paired yet — enable Dexicon in your node app (Apps), unlock it, then try again"); return; }
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
         int p = Design.dp(this, 16); box.setPadding(p, p, p, 0);
         EditText price = new EditText(this); price.setHint("Price (MxUSD per MINIMA)"); price.setText(o.price);
@@ -532,6 +536,7 @@ public class MainActivity extends AppCompatActivity {
         new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Edit order").setView(box)
                 .setPositiveButton("Update", (d, w) -> {
                     busy = true; repaint();
+                    if (engine == null) { busy = false; toast("Not paired — try again once PAIRED"); repaint(); return; }
                     engine.edit(o.orderId, price.getText().toString().trim(), amount.getText().toString().trim(), (err, x) -> { busy = false; setStage(err != null ? "Edit failed: " + err : "Order updated"); repaint(); });
                 }).setNegativeButton("Back", null).show();
     }
