@@ -11,8 +11,8 @@ android {
         minSdk 28
         targetSdk 35
         // Every code change bumps BOTH (pre-commit hook .githooks/pre-commit enforces it).
-        versionCode 15
-        versionName "0.1.14"
+        versionCode 16
+        versionName "0.1.15"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -51,6 +51,7 @@ android {
         unitTests {
             // A REAL org.json is on the test classpath (see testImplementation); never stub it.
             returnDefaultValues = false
+            includeAndroidResources = true   // Robolectric: the DOORS tab smoke test inflates the real Activity
             all { maxHeapSize = '2g' }
         }
     }

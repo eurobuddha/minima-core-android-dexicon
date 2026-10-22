@@ -72,16 +72,25 @@ public final class ActivityTab extends LinearLayout {
         c.addView(t);
     }
 
+    private static long ts(Object o) { return o instanceof JSONObject ? ((JSONObject) o).optLong("ts") : ((com.eurobuddha.atomix.swap.SwapDb.Swap) o).created; }
+
     public void render() {
         rows.removeAllViews();
         List<JSONObject> list = ActivityLog.list(act.db());
         long cb = act.chainBlock(), now = System.currentTimeMillis();
         LinearLayout head = card();
         head.addView(tv("ACTIVITY · NEWEST FIRST", 10f, Design.DIM(), Design.sansBold()));
-        head.addView(tv(list.isEmpty() ? "No trades yet. Every BUY/SELL you make — and every fill your node co-signs — shows its live progress here."
+        head.addView(tv(list.isEmpty() ? "No trades yet. Every BUY/SELL you make, every fill your node co-signs and every DOORS swap shows its live progress here."
                 : "Confirmed / done after " + ActivityLog.CONFIRM_BLOCKS + " blocks. The txpowid is the pre-mining id; inclusion is proven by an output coin. Tap any id to copy it in full.",
                 9.5f, Design.DIM2(), Design.sans()));
-        for (JSONObject a : list) {
+        // DOORS swaps (AtomiX taker, both markets) join the timeline by time, each with its own stage and full tx ids.
+        com.eurobuddha.dexicon.doors.DoorHost doors = com.eurobuddha.dexicon.doors.DoorHost.get(act);
+        java.util.List<Object> items = new java.util.ArrayList<>(list);
+        items.addAll(doors.swaps());
+        java.util.Collections.sort(items, (x, y) -> Long.compare(ts(y), ts(x)));
+        for (Object item : items) {
+            if (item instanceof com.eurobuddha.atomix.swap.SwapDb.Swap) { rows.addView(DoorsTab.swapCard(act, doors, (com.eurobuddha.atomix.swap.SwapDb.Swap) item)); continue; }
+            JSONObject a = (JSONObject) item;
             LinearLayout c = card();
             boolean buy = "buy".equals(a.optString("side"));
             LinearLayout top = new LinearLayout(getContext());

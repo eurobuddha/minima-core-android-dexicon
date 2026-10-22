@@ -23,6 +23,17 @@ signatures (`spec/vectors/order-v1-vector.json` is a unit test here), same relay
 - **HISTORY** — every fill, net totals, CSV export with stable column names (see below).
 - **ASSETS** — available / in orders / settling per token, receive address and Dexicon publicId (full value,
   tap-to-copy), DEV override of the dollar token for test chains.
+- **DOORS** — USDT in / USDT out for ERC20 holders through the AtomiX HTLC **taker** engine (Dexicon never makes
+  an AtomiX market). Panes **ENTER** (USDT → coin into this node), **EXIT** (coin → USDT, forwarded by one ERC20
+  transfer to an Ethereum address you type; withdraw + forward gas disclosed) and **SWAP** (either direction; the coin
+  to this node or forwarded by one `send` to an Mx address, USDT to an ETH address). Every pane quotes **both AtomiX
+  markets side by side** — USDT ⇄ MxUSD and USDT ⇄ MINIMA: amount out, average price, ceiling (sweepable depth, buys
+  within 2 % slippage) and live makers — and you tap the route to take. The ETH deposit address
+  (`seedrandom modifier:ethbridge`, never stored, same as the AtomiX app on this node) is shown in full, tap to copy.
+  Door swaps list (and appear on ACTIVITY) with their stage — STARTED (your lock sent) → LOCKED (maker locked) →
+  CLAIMING → DONE / FORWARDING, or REFUNDED / ERROR — and every swap hash, ETH contract id, maker key, ETH tx,
+  Minima tx and forward tx in full. Claims, ETH withdraws, refunds and forwards run in MakerService (~every 90 s)
+  with the app closed.
 - **RELAYS** — the relay list with health, add / remove, and bootstrap discovery via `GET /dex/relays`
   (discovered entries are marked; a relay without that endpoint is tolerated).
 - **Maker engine** — a foreground service (`maker/MakerService`) polls the relay inbox, verifies each sealed
@@ -46,6 +57,11 @@ maker/      MyOrder, MakerEngine (create/edit/cancel/afterFill/refresh + relock)
 resting/    PandaDEX 0.4.23 resting layer, vendored near-verbatim (header names each source): BookScanner/BookRepository
             (V5 covenant book), PoolBook/PoolLiquidityRepository (PandaPools), CompositeRouter/PoolRouter/VirtualCurve/
             SyntheticDepth/SweepPlanner/PriceMath, DexTxn (composite taker only), FundingCoins, CoinLock; SourcePick (glue)
+doors/      DoorHost (process-wide AtomiX taker host: derivations, both-market book scan, take, background poll,
+            forwards), DoorPlan (AtomiX MainActivity's sweep math, ported), DoorForwards (naming, tx ids, forward queue)
+            + DoorsTab. com/eurobuddha/{atomix,comms,minimaapi/ethereum}/ = the AtomiX 0.1.82 engine VENDORED VERBATIM
+            (scripts/vendor-atomix.sh; `--check` fails on drift) with two Dexicon-owned shims: comms/NodeApi (adapter
+            onto Dexicon's NodeApi) and atomix/MainActivity (only the SWEEP_ACTIVE flag)
 minimaapi/  the vendored Minima Core IPC SDK sources (from apks/pandadex) — the ONLY way this app reaches the node
 ```
 

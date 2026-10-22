@@ -69,8 +69,8 @@ public class MainActivity extends AppCompatActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_RELAYS = 5;
-    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "RELAYS"};
+    static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6;
+    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "DOORS", "RELAYS"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
@@ -106,6 +106,7 @@ public class MainActivity extends AppCompatActivity {
     private HistoryTab historyTab;
     private AssetsTab assetsTab;
     private RelaysTab relaysTab;
+    private DoorsTab doorsTab;
     private FrameLayout content;
     private LinearLayout tabBar;
     private TextView pairPill, blockPill, stageTv;
@@ -692,7 +693,7 @@ public class MainActivity extends AppCompatActivity {
         scroller.addView(content, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
         root.addView(scroller, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); relaysTab = new RelaysTab(this);
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this);
         for (View v : tabViews()) { v.setVisibility(View.GONE); content.addView(v); }
 
         stageTv = new TextView(this);
@@ -711,8 +712,8 @@ public class MainActivity extends AppCompatActivity {
             final int idx = i;
             TextView t = new TextView(this);
             t.setText(TAB_NAMES[i]); t.setTextSize(10f); t.setTypeface(Design.sansBold()); t.setGravity(Gravity.CENTER); t.setMaxLines(1);
-            // Six tabs: a narrow phone shrinks the labels to fit (min 7sp); the Fold keeps 10sp.
-            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(t, 7, 10, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+            // Seven tabs: a narrow phone (and the Fold's cover screen) shrinks the labels to fit (min 6sp); wide screens keep 10sp.
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(t, 6, 10, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
             t.setPadding(0, Design.dp(this, 11), 0, Design.dp(this, 11)); t.setMinHeight(Design.dp(this, 48));
             t.setOnClickListener(v -> selectTab(idx));
             tabBar.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -733,7 +734,7 @@ public class MainActivity extends AppCompatActivity {
         repaint();
     }
 
-    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, relaysTab}; }
+    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab}; }
 
     /** The live line for the followed ACTIVITY row; null once it has been settled for two minutes. */
     private String liveLine() {
@@ -774,6 +775,7 @@ public class MainActivity extends AppCompatActivity {
             case TAB_ORDERS: ordersTab.render(); break;
             case TAB_HISTORY: historyTab.render(); break;
             case TAB_ASSETS: assetsTab.render(); break;
+            case TAB_DOORS: doorsTab.render(); break;
             default: relaysTab.render();
         }
     }

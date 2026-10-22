@@ -30,3 +30,19 @@ Fill math, verifier rules, envelope shape, relay semantics and CSV column names 
 - Taker: `newscript … trackall:false` before `txninput`, `txninput … scriptmmr:true`; maker: no `txnbasics`.
 - Identifiers are never truncated; tap-to-copy copies the full value. The dollar token is **MxUSD** (never MxUSDT).
 - Never run minimaDesk; never install on a device or publish to a store from an agent session.
+
+## DOORS — the vendored AtomiX taker engine (since 0.1.15)
+
+- `com/eurobuddha/{atomix,comms,minimaapi/ethereum}/**` and their tests are AtomiX's own files, copied VERBATIM by
+  `scripts/vendor-atomix.sh` (one header line each). Never hand-edit them; re-vendor after an AtomiX release and run
+  `scripts/vendor-atomix.sh --check` before every commit that touches `app/src`. Dexicon-owned exceptions:
+  `comms/NodeApi.java` (adapter onto `dexicon.NodeApi`) and `atomix/MainActivity.java` (only `SWEEP_ACTIVE`).
+- **Ethereum RPC endpoint list: no fifth copy.** The list exists here ONLY inside the vendored `atomix/eth/EthRpc.java`
+  / `EthNet.java`, byte-identical to apks/atomix (copy 1 of AtomiX's four-copy rule); `--check` fails on drift and on
+  any other file containing the list. When AtomiX changes its list, re-vendor here (and in mds/dexicon `doors/`).
+- AtomiX's operational rules apply unchanged: drain in-flight door swaps before any wallet / key-mode migration; the
+  persisted `swap_addr`/`swap_pk` (prefs `dexicon_doors`) is adopted, never self-healed — IdentityWatch HALTS new door
+  swaps on a mismatch while settlement continues. Dexicon only TAKES: `SwapEngine.setMyOrder` is never called.
+- Both AtomiX markets: the engine takes in `TradingContext.active()` only, so `DoorHost` selects the route's market
+  (`TradingContext.setActive(m, null)` + `MinimaHtlc.setActiveToken`) for a take and holds it — no book scan, no second
+  take — until every part has called back; book scans run one market at a time. Settlement is market-agnostic.

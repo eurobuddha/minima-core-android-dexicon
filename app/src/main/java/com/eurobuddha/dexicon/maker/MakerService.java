@@ -77,7 +77,7 @@ public class MakerService extends Service {
     private DexIdentity me;
     private MakerEngine engine;
     private boolean started, paired, deriving, ticking;
-    private long lastRegisterMs, ticks;
+    private long lastRegisterMs, ticks, doorTicks;
     private final Map<String, Long> coinLocks = new HashMap<>();   // coinid → unix ms the lock expires (3 min)
     private final Set<String> myAddresses = new HashSet<>();
     private String fgText = "";
@@ -151,6 +151,8 @@ public class MakerService extends Service {
                 return;
             }
             ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
+            // DOORS settlement (AtomiX taker engine): claims, ETH withdraws, refunds and forwards, ~every 90 s, app closed or not.
+            if (doorTicks++ % 9 == 0) try { com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this).poll(); } catch (RuntimeException e) { log("doors poll: " + e); }
             if (me == null) { deriveIdentity(); return; }
             List<String> relays = RelayStore.load(MakerService.this);
             Tokens.setMxUsd(RelayStore.mxusdOverride(MakerService.this));
