@@ -162,11 +162,19 @@ public class MakerService extends Service {
             ticking = true; ticks++;
             final String pk = me.publicId();
             net.execute(() -> {
+                long t0 = System.currentTimeMillis();
                 List<Envelope> msgs = relay.pollInbox(pk, (int) HOLD_SECONDS);
-                h.post(() -> onInbox(msgs));
+                // A relay that answers instantly with nothing is failing: wait for the next tick instead of spinning.
+                final boolean spin = msgs.isEmpty() && System.currentTimeMillis() - t0 < 1000;
+                h.post(() -> { againNow = !spin; onInbox(msgs); });
             });
         }
     };
+
+    /** The inbox is a CONTINUOUS long-poll (like the MiniDapp's inboxLoop): a take or a maker's answer is handled the
+     *  moment it lands, not at the next 10 s tick. TICK_MS stays as the watchdog and the pace when relays fail. */
+    private boolean againNow;
+    private void tickDone() { ticking = false; if (againNow) h.post(tick); }
 
     private void onInbox(List<Envelope> msgs) {
         List<JSONObject> takes = new ArrayList<>();
@@ -184,9 +192,9 @@ public class MakerService extends Service {
             if (ticks % 6 == 0) refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
                 if (e != null) log("refresh failed: " + e);
                 else if (n > 0 || relocked != null) { log("refresh republished " + n + " order(s)" + (relocked != null ? "; relocked stale backing coins " + relocked : "")); changed(); }
-                ticking = false;
+                tickDone();
             }));
-            else ticking = false;
+            else tickDone();
         });
     }
 

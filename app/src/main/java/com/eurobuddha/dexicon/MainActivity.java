@@ -129,6 +129,8 @@ public class MainActivity extends AppCompatActivity {
         @Override public void run() {
             if (FOREGROUND) {
                 if (liveActId != null) repaintHeader();
+                followTake();
+                if (run != null && trade != null) trade.paintCtaPublic();
                 if (tab == TAB_ACTIVITY && ++liveTicks % 5 == 0) activityTab.render();
             }
             ui.postDelayed(this, 1000);
@@ -161,7 +163,7 @@ public class MainActivity extends AppCompatActivity {
         restingTxn = new DexTxn(node);
         restingRepo.subscribe((orders, syncing) -> repaint());
         poolRepo.subscribe((pools, syncing) -> repaint());
-        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { settleStage(); repaint(); retryIfDue(); restIfDue(); } };
+        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { followTake(); settleStage(); repaint(); retryIfDue(); restIfDue(); warmWallet(); } };
         ContextCompat.registerReceiver(this, changedReceiver, new IntentFilter(MakerService.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
         nodeReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { if (paired) { readBalances(); readBlock(); } } };
         ContextCompat.registerReceiver(this, nodeReceiver, new IntentFilter(NodeTransportService.EVENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
@@ -235,7 +237,7 @@ public class MainActivity extends AppCompatActivity {
                 long was = chainBlock;
                 try { chainBlock = Long.parseLong(r.optString("block", "0")); } catch (Exception ignored) {}
                 restingRepo.setChainBlock(chainBlock); restingTxn.setChainBlock(chainBlock);
-                if (chainBlock != was) refreshResting();   // book + pools follow the chain, once per new block
+                if (chainBlock != was) { refreshResting(); warmMakers(); warmWallet(); }   // book + pools follow the chain, once per new block
                 repaintHeader();
             }
             public void onError(String m) {}
@@ -268,7 +270,7 @@ public class MainActivity extends AppCompatActivity {
         bookPolling = true;
         net.execute(() -> {
             int changed = relay.pollBook(25);
-            ui.post(() -> { bookPolling = false; if (closed) return; repaint(); ui.postDelayed(this::bookLoop, changed < 0 ? 2000 : 0); });
+            ui.post(() -> { bookPolling = false; if (closed) return; repaint(); if (changed > 0) warmMakers(); ui.postDelayed(this::bookLoop, changed < 0 ? 2000 : 0); });
         });
     }
 
@@ -345,14 +347,9 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /** The FAST path (unchanged from 0.1.7): take the best crossing fast order, else rest as a fast order. */
+    /** The FAST path: a crossing fast order is taken at once (one click, no dialog), else the order rests as a fast order. */
     private void placeFast(boolean buy, BigDecimal price, BigDecimal amount, Envelope best) {
-        if (best != null) {
-            BigDecimal now = amount.min(new BigDecimal(best.amount)), rest = amount.subtract(now);
-            try { db.setMeta("retry", new JSONObject().put("buy", buy).put("price", price.toPlainString()).put("amount", amount.toPlainString()).put("rest", rest.toPlainString()).put("tried", new org.json.JSONArray().put(best.orderId)).toString()); } catch (Exception ignored) {}
-            if (rest.signum() > 0) toast("Takes " + now.toPlainString() + " now; the remaining " + rest.toPlainString() + " MINIMA rests as your order once the fill is co-signed");
-            previewTake(best, now); return;
-        }
+        if (best != null) { executeTake(buy, price, amount); return; }
         confirm((buy ? "Buy " : "Sell ") + Util.fmt(amount) + " MINIMA @ " + Util.fmt(price) + " MxUSD",
                 "Rests on the relays as your order. Your wallet coins back it; the maker engine co-signs fills while the phone is in your pocket.",
                 () -> {
@@ -496,26 +493,13 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    /** The service flags a lost race with retry_due. A live one-click run moves on by itself (followTake); a take
+     *  orphaned by an app restart is only reported — nothing trades without a click. */
     void retryIfDue() {
         String due = db.meta("retry_due", "");
         if (due.isEmpty()) return;
         db.setMeta("retry_due", "");
-        JSONObject r; try { r = new JSONObject(db.meta("retry", "{}")); } catch (Exception e) { return; }
-        if (!r.has("price")) return;
-        boolean buy = r.optBoolean("buy"); BigDecimal price = new BigDecimal(r.optString("price")), amount = new BigDecimal(r.optString("amount"));
-        org.json.JSONArray tried = r.optJSONArray("tried") == null ? new org.json.JSONArray() : r.optJSONArray("tried");
-        java.util.Set<String> skip = new java.util.HashSet<>(); for (int i = 0; i < tried.length(); i++) skip.add(tried.optString(i));
-        skip.add(due);
-        Envelope next = null;
-        for (Envelope e : relay.orders(buy ? "sell" : "buy")) {
-            if (isMine(e) || e.coins.isEmpty() || skip.contains(e.orderId)) continue;
-            BigDecimal p = new BigDecimal(e.price);
-            if (buy ? p.compareTo(price) <= 0 : p.compareTo(price) >= 0) { next = e; break; }
-        }
-        if (next == null) { setStage("That level was taken and nothing else crosses " + Util.fmt(price) + " — place the order again to rest it."); return; }
-        try { tried.put(next.orderId); r.put("tried", tried); db.setMeta("retry", r.toString()); } catch (Exception ignored) {}
-        toast("That level was taken — next best is " + next.price + ". Review to retry.");
-        previewTake(next, amount.min(new BigDecimal(next.amount)));
+        if (run == null) setStage("Your take of order " + due + " lost the race (" + db.meta("last_refusal", "taken") + "). Nothing was traded.");
     }
 
     void cancelOrder(MyOrder o) {
@@ -542,36 +526,6 @@ public class MainActivity extends AppCompatActivity {
                 }).setNegativeButton("Back", null).show();
     }
 
-    /** Taker step 1: re-fetch the maker's coins, read my coins, plan, show the exact exchange, confirm. */
-    void previewTake(Envelope order, BigDecimal takeAmount) {
-        if (me == null) { toast("Identity not ready"); return; }
-        if (busy) { toast("A transaction is in progress"); return; }
-        busy = true; setStage("Checking the maker's coins…"); repaint();
-        fetchCoins(order.coins, 0, new ArrayList<>(), (err, makerCoins) -> {
-            if (err != null) { busy = false; setStage(err); repaint(); return; }
-            boolean sell = "sell".equals(order.side);
-            MakerEngine.walletCoins(node, sell ? Tokens.MXUSD() : Tokens.MINIMA, (e2, myCoins) -> {
-                if (e2 != null) { busy = false; setStage("Cannot read your coins: " + e2); repaint(); return; }
-                node.cmd("getaddress", new NodeApi.Cb() {
-                    public void onResult(JSONObject j) {
-                        JSONObject r = j.optJSONObject("response");
-                        String addr = r == null ? "" : r.optString("address", "");
-                        FillPlan.Plan plan;
-                        try {
-                            plan = FillPlan.plan(new FillPlan.Order(order.side, order.price, order.amount, order.address, order.coins, order.scripts), takeAmount.toPlainString(), makerCoins, myCoins, addr);
-                        } catch (RuntimeException e) { busy = false; setStage(e.getMessage()); repaint(); return; }
-                        busy = false; repaint();
-                        confirm((sell ? "Buy " : "Sell ") + plan.filled + " MINIMA @ " + order.price,
-                                "You give " + plan.takerGives + (sell ? " MxUSD" : " MINIMA") + " and receive " + plan.makerGives + (sell ? " MINIMA" : " MxUSD")
-                                        + " (" + plan.inputs.size() + " inputs, " + plan.outputs.size() + " outputs). The maker's node co-signs; final after one block.\n\nMaker pay-to address:\n" + order.address,
-                                () -> confirmTake(order, plan));
-                    }
-                    public void onError(String m) { busy = false; setStage("getaddress failed: " + m); repaint(); }
-                });
-            });
-        });
-    }
-
     private interface CoinsCb { void done(String err, List<Coin> coins); }
     private void fetchCoins(List<String> ids, int i, List<Coin> out, CoinsCb cb) {
         if (i >= ids.size()) { cb.done(null, out); return; }
@@ -588,20 +542,159 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    /** Taker step 2: build + sign my side, seal the take to the maker, publish to every relay, remember it. */
-    private void confirmTake(Envelope order, FillPlan.Plan plan) {
-        busy = true; setStage("");
+    // ---- the one-click FAST take (MinimaXT's startTrade): coins fetched ahead, the button locks, a step log ----
+    private final java.util.Map<String, Coin> makerCoinCache = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, List<Coin>> walletCache = new java.util.HashMap<>();
+    private String cachedAddr;
+    private boolean warmingMakers;
+    private final StringBuilder takeLog = new StringBuilder();
+    private String followAct, followStatus;
+    private static final class TakeRun {
+        final long t0 = System.currentTimeMillis(); boolean buy; BigDecimal price, amount;
+        final java.util.Set<String> tried = new java.util.HashSet<>(); String act, orderId; Envelope order;
+    }
+    private TakeRun run;
+
+    boolean taking() { return run != null; }
+    long takingSecs() { return run == null ? 0 : (System.currentTimeMillis() - run.t0) / 1000; }
+    String takeLog() { return takeLog.toString(); }
+    Envelope fastCross(boolean buy, BigDecimal price) { return bestFastCross(buy, price); }
+
+    private void logStep(String msg) {
+        String t = run != null ? String.format(java.util.Locale.ROOT, "+%.1fs  ", (System.currentTimeMillis() - run.t0) / 1000.0)
+                               : new java.text.SimpleDateFormat("HH:mm:ss  ", java.util.Locale.ROOT).format(new java.util.Date());
+        takeLog.append(t).append(msg).append('\n');
+        if (trade != null) trade.paintLog();
+    }
+
+    /** Wallet coins of both tokens + the receive address, ready before any click. */
+    void warmWallet() {
+        if (node == null || !paired) return;
+        for (String tok : new String[]{Tokens.MINIMA, Tokens.MXUSD()})
+            MakerEngine.walletCoins(node, tok, (e, coins) -> { if (e == null) walletCache.put(tok, coins); });
+        node.cmd("getaddress", new NodeApi.Cb() {
+            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); if (r != null && !r.optString("address", "").isEmpty()) cachedAddr = r.optString("address"); }
+            public void onError(String m) {}
+        });
+    }
+
+    /** The backing coins of the best few FAST orders on each side, fetched in the background; spent ones dropped. */
+    void warmMakers() {
+        if (node == null || !paired || warmingMakers) return;
+        List<String> ids = new ArrayList<>();
+        for (String side : new String[]{"sell", "buy"}) {
+            int n = 0;
+            for (Envelope e : relay.orders(side)) {
+                if (isMine(e) || e.coins.isEmpty()) continue;
+                for (String id : e.coins) if (!ids.contains(id)) ids.add(id);
+                if (++n >= 6) break;
+            }
+        }
+        warmingMakers = true;
+        warmStep(ids, 0);
+    }
+    private void warmStep(List<String> ids, int i) {
+        if (i >= ids.size() || closed) { warmingMakers = false; return; }
+        String id = ids.get(i);
+        node.cmdR("coins coinid:" + id, new NodeApi.Cb() {
+            public void onResult(JSONObject j) {
+                List<JSONObject> rows = NodeApi.rows(j);
+                Coin c = rows.isEmpty() ? null : Coin.of(rows.get(0));
+                if (c == null || c.coinid.isEmpty() || c.spent) makerCoinCache.remove(id); else makerCoinCache.put(id, c);
+                warmStep(ids, i + 1);
+            }
+            public void onError(String m) { warmStep(ids, i + 1); }
+        });
+    }
+
+    /** THE click: walk every crossing FAST order best-first; a refusal moves to the next one by itself. */
+    private void executeTake(boolean buy, BigDecimal price, BigDecimal amount) {
+        if (run != null) return;
+        takeLog.setLength(0); followAct = null;
+        run = new TakeRun(); run.buy = buy; run.price = price; run.amount = amount;
+        logStep((buy ? "BUY " : "SELL ") + amount.toPlainString() + " MINIMA @ " + price.toPlainString() + " (limit)");
+        repaint();
+        nextOrder();
+    }
+
+    private void nextOrder() {
+        TakeRun r = run; if (r == null) return;
+        List<Envelope> hits = new ArrayList<>();
+        for (Envelope e : relay.orders(r.buy ? "sell" : "buy")) {
+            if (isMine(e) || e.coins.isEmpty() || r.tried.contains(e.orderId)) continue;
+            BigDecimal p = new BigDecimal(e.price);
+            if (r.buy ? p.compareTo(r.price) <= 0 : p.compareTo(r.price) >= 0) hits.add(e);
+        }
+        if (hits.isEmpty()) {
+            logStep(r.tried.isEmpty() ? "Nothing crosses any more. Place the order again to rest it." : "No other FAST order crosses " + r.price.toPlainString() + ". Nothing was traded and no order was placed.");
+            endRun(); return;
+        }
+        if (r.tried.isEmpty()) logStep("Found " + hits.size() + " FAST order" + (hits.size() == 1 ? "" : "s") + " at or better than your price");
+        tryOrder(hits.get(0));
+    }
+
+    private void tryOrder(Envelope o) {
+        TakeRun r = run;
+        BigDecimal now = r.amount.min(new BigDecimal(o.amount)), rest = r.amount.subtract(now);
+        r.tried.add(o.orderId);
+        logStep("Order " + o.orderId + " @ " + o.price + " · " + o.amount + " MINIMA · maker " + o.address);
+        List<Coin> have = new ArrayList<>(); List<String> miss = new ArrayList<>();
+        for (String id : o.coins) { Coin c = makerCoinCache.get(id); if (c != null) have.add(c); else miss.add(id); }
+        fetchCoins(miss, 0, new ArrayList<>(), (err, got) -> {
+            if (run != r) return;
+            if (err != null) { logStep("  maker coins: " + err + " — next order"); nextOrder(); return; }
+            for (Coin c : got) makerCoinCache.put(c.coinid, c);
+            List<Coin> mc = new ArrayList<>(have); mc.addAll(got);
+            logStep("  maker coins " + (miss.isEmpty() ? "ready" : "fetched") + " (" + mc.size() + ")");
+            boolean sell = "sell".equals(o.side);
+            String tok = sell ? Tokens.MXUSD() : Tokens.MINIMA;
+            withWallet(tok, (e2, myCoins, addr) -> {
+                if (run != r) return;
+                if (e2 != null) { logStep("  " + e2); endRun(); return; }
+                FillPlan.Plan plan;
+                try { plan = FillPlan.plan(new FillPlan.Order(o.side, o.price, o.amount, o.address, o.coins, o.scripts), now.toPlainString(), mc, myCoins, addr); }
+                catch (RuntimeException e) { logStep("  " + e.getMessage() + " — next order"); nextOrder(); return; }
+                logStep("  you give " + plan.takerGives + (sell ? " MxUSD" : " MINIMA") + ", you get " + plan.makerGives + (sell ? " MINIMA" : " MxUSD"));
+                try { db.setMeta("retry", new JSONObject().put("buy", r.buy).put("price", r.price.toPlainString()).put("amount", r.amount.toPlainString()).put("rest", rest.toPlainString()).put("tried", new JSONArray().put(o.orderId)).toString()); } catch (Exception ignored) {}
+                sendTake(o, plan);
+            });
+        });
+    }
+
+    private interface WalletCb { void done(String err, List<Coin> coins, String addr); }
+    private void withWallet(String tok, WalletCb cb) {
+        List<Coin> c = walletCache.get(tok);
+        if (c != null && cachedAddr != null) { cb.done(null, c, cachedAddr); return; }
+        MakerEngine.walletCoins(node, tok, (e, coins) -> {
+            if (e != null) { cb.done("Cannot read your coins: " + e, null, null); return; }
+            walletCache.put(tok, coins);
+            node.cmd("getaddress", new NodeApi.Cb() {
+                public void onResult(JSONObject j) { JSONObject x = j.optJSONObject("response"); cachedAddr = x == null ? null : x.optString("address", null); if (cachedAddr == null || cachedAddr.isEmpty()) cb.done("getaddress failed", null, null); else cb.done(null, coins, cachedAddr); }
+                public void onError(String m) { cb.done("getaddress failed: " + m, null, null); }
+            });
+        });
+    }
+
+    /** Build + sign my side, seal the take to the maker, publish to every relay. */
+    private void sendTake(Envelope order, FillPlan.Plan plan) {
+        final TakeRun r = run;
+        busy = true;
         final String actId = ActivityLog.newId("fast_");
+        final long t = System.currentTimeMillis();
         boolean takerBuys = "sell".equals(order.side);
+        r.act = actId; r.orderId = order.orderId; r.order = order;
         try {
             ActivityLog.add(db, new JSONObject().put("id", actId).put("route", "FAST").put("role", "taker").put("side", takerBuys ? "buy" : "sell")
                     .put("amount", plan.filled).put("price", order.price).put("mxusd", takerBuys ? plan.takerGives : plan.makerGives)
                     .put("orderId", order.orderId).put("counterparty", order.address).put("ins", new JSONArray(plan.inputs))
                     .put("ts", System.currentTimeMillis()).put("stage", ActivityLog.BUILDING).put("reason", "Building and signing your side…"));
         } catch (Exception ignored) {}
-        liveActId = actId; repaint();
+        liveActId = actId;
+        logStep("  signing your side…");
         FillTxn.build(node, plan, (err, hex) -> {
-            if (err != null) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "build failed: " + err)); repaint(); return; }
+            if (err != null) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "build failed: " + err)); logStep("  build failed: " + err); endRun(); return; }
+            logStep(String.format(java.util.Locale.ROOT, "  signed in %.1fs", (System.currentTimeMillis() - t) / 1000.0));
+            walletCache.remove(takerBuys ? Tokens.MXUSD() : Tokens.MINIMA); warmWallet();   // those coins are in flight now
             try {
                 JSONObject inner = new JSONObject().put("k", "take").put("orderId", order.orderId).put("txn", hex).put("taker", me.publicId());
                 String blob = me.seal(order.pubId, inner.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -610,21 +703,69 @@ public class MainActivity extends AppCompatActivity {
                 db.savePending(order.orderId, pt);
                 net.execute(() -> {
                     List<RelayClient.PublishResult> results = relay.publish(msg);
-                    int ok = 0; for (RelayClient.PublishResult r : results) if (r.ok) ok++;
-                    final int okCount = ok; final String firstErr = results.isEmpty() ? "no relays" : results.get(0).error;
+                    int ok = 0; for (RelayClient.PublishResult x : results) if (x.ok) ok++;
+                    final int okCount = ok, total = results.size(); final String firstErr = results.isEmpty() ? "no relays" : results.get(0).error;
                     ui.post(() -> {
                         busy = false;
-                        if (okCount == 0) { db.removePending(order.orderId); ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "no relay accepted the take: " + firstErr)); }
-                        else ActivityLog.update(db, actId, a -> {   // a fast maker can answer (via another relay) before the slowest publish returns
+                        if (okCount == 0) {
+                            db.removePending(order.orderId); ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "no relay accepted the take: " + firstErr));
+                            logStep("  no relay accepted the take: " + firstErr); endRun(); return;
+                        }
+                        ActivityLog.update(db, actId, a -> {   // a fast maker can answer (via another relay) before the slowest publish returns
                             a.put("relays", okCount).put("sentMs", pt.optLong("sent"));
                             if (ActivityLog.BUILDING.equals(a.optString("stage"))) a.put("stage", ActivityLog.SENT).put("reason", "");
                         });
+                        if (run == r && r.act.equals(actId)) logStep("  sent to " + okCount + "/" + total + " relays · waiting for the maker's node to co-sign…");
+                        followTake();
+                        ui.postDelayed(() -> {
+                            if (run == r && actId.equals(r.act) && db.pending(order.orderId) != null) {
+                                logStep("No answer from the maker in 60s. The take stays open for 5 minutes and settles here if the maker co-signs.");
+                                endRun();
+                            }
+                        }, 60_000);
                         repaint();
                     });
                 });
-            } catch (Exception e) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "take failed: " + e.getMessage())); repaint(); }
+            } catch (Exception e) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "take failed: " + e.getMessage())); logStep("  take failed: " + e.getMessage()); endRun(); }
         });
     }
+
+    /** Reads the service's answer off the ACTIVITY row (co-signed / refused) and, after a co-sign, writes the block and
+     *  confirmations into the same log. Runs on every service broadcast and every second. */
+    void followTake() {
+        if (db == null) return;
+        TakeRun r = run;
+        if (r != null && r.act != null) {
+            JSONObject a = db.activity(r.act);
+            String st = a == null ? "" : a.optString("stage");
+            if (ActivityLog.COSIGNED.equals(st)) {
+                logStep(String.format(java.util.Locale.ROOT, "Maker co-signed in %.1fs", a.optLong("cosignMs") / 1000.0));
+                logStep("TRADE DONE: " + a.optString("amount") + " MINIMA @ " + a.optString("price") + " · txpow " + a.optString("txpowid"));
+                logStep("Settling — final after one block.");
+                followAct = r.act; followStatus = null;
+                if (trade != null) trade.clearAmount();
+                endRun();
+            } else if (ActivityLog.REFUSED.equals(st)) {
+                String why = a.optString("reason");
+                for (String id : r.order.coins) makerCoinCache.remove(id);
+                db.setMeta("retry_due", "");
+                logStep("  maker refused: " + why + (why.matches("(?i).*(taken|not live|advertised|spent|visible|cover).*") ? " — next order" : ""));
+                if (why.matches("(?i).*(taken|not live|advertised|spent|visible|cover).*")) { r.act = null; nextOrder(); } else endRun();
+            } else if (ActivityLog.FAILED.equals(st) || ActivityLog.LOST.equals(st)) {
+                logStep("  " + a.optString("reason")); endRun();
+            }
+        }
+        if (run == null && followAct != null) {
+            JSONObject a = db.activity(followAct);
+            if (a == null) { followAct = null; return; }
+            String s = ActivityLog.statusText(a, chainBlock, System.currentTimeMillis());
+            if (followStatus == null) followStatus = s;          // the co-sign line is already in the log
+            else if (!s.equals(followStatus)) { followStatus = s; logStep(s); }
+            if (ActivityLog.settled(a, chainBlock) || ActivityLog.failedTerminal(a)) followAct = null;
+        }
+    }
+
+    private void endRun() { run = null; busy = false; repaint(); }
 
     private static JSONObject planJson(FillPlan.Plan p) throws Exception {
         return new JSONObject().put("filled", p.filled).put("takerGives", p.takerGives).put("makerGives", p.makerGives).put("payToken", p.payToken).put("recvToken", p.recvToken).put("inputs", new JSONArray(p.inputs));

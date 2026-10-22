@@ -57,7 +57,7 @@ public final class TradeView extends LinearLayout {
     private static final int MAX_ROWS = 10;
 
     private boolean buyMode = true;
-    private TextView buyTab, sellTab, totalTv, ctaBtn;
+    private TextView buyTab, sellTab, totalTv, ctaBtn, logTv;
     // funds panel + live order preview (owner 2026-10-22: balances must be visible where you trade)
     private TextView fundsMinima, fundsMxusd, fundsValue, availTv, warnTv;
     private java.util.List<OrderPreview.Lvl> lastAsks = new ArrayList<>(), lastBids = new ArrayList<>();
@@ -302,13 +302,20 @@ public final class TradeView extends LinearLayout {
         warnTv = tv("", 11f, Design.RED(), Design.monoBold());
         warnTv.setPadding(0, dp(4), 0, 0);
         c.addView(warnTv);
-        c.addView(tv("Crosses the book → takes the best source for the first level: a FAST relay order (one maker per take, co-signed) or BOOK/POOL on-chain liquidity (one atomic transaction). The confirm dialog says which. Otherwise rests on the relays as your FAST order.", 9.5f, Design.DIM2(), Design.sans()));
+        c.addView(tv("Crosses a FAST order → the button IS the trade: one click, no dialog, progress in the log below. BOOK/POOL on-chain liquidity still shows a confirm. Nothing crosses → rests on the relays as your FAST order.", 9.5f, Design.DIM2(), Design.sans()));
         ctaBtn = tv("BUY MINIMA", 14f, Design.ON_ACCENT(), Design.sansBold());
         ctaBtn.setGravity(Gravity.CENTER); ctaBtn.setPadding(0, dp(12), 0, dp(12));
         LayoutParams cl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); cl.topMargin = dp(8);
         c.addView(ctaBtn, cl);
         ctaBtn.setOnClickListener(v -> submit());
         Design.pressable(ctaBtn);
+        logTv = tv("", 10.5f, Design.TEXT(), Design.mono());
+        logTv.setPadding(dp(10), dp(8), dp(10), dp(8));
+        logTv.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 8));
+        logTv.setTextIsSelectable(true);   // long-press to copy the full txpowid
+        logTv.setVisibility(GONE);
+        LayoutParams ll = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); ll.topMargin = dp(8);
+        c.addView(logTv, ll);
         setMode(true);
         TextWatcher w = new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a1, int a2, int a3) {}
@@ -391,9 +398,16 @@ public final class TradeView extends LinearLayout {
 
     private void paintCta() {
         if (ctaBtn == null) return;
+        if (act.taking()) { ctaBtn.setText("TRADING… " + act.takingSecs() + "s"); ctaBtn.setEnabled(false); ctaBtn.setAlpha(0.75f); return; }
+        BigDecimal p = Util.dec(priceIn.getText().toString()), a = Util.dec(amountIn.getText().toString());
+        com.eurobuddha.dexicon.envelope.Envelope best = p.signum() > 0 && a.signum() > 0 ? act.fastCross(buyMode, p) : null;
+        ctaBtn.setText(best != null ? (buyMode ? "BUY " : "SELL ") + Util.fmt(a.min(new BigDecimal(best.amount))) + " MINIMA NOW" : buyMode ? "BUY MINIMA" : "SELL MINIMA");
         boolean ok = canAfford && !act.isBusy();
         ctaBtn.setEnabled(ok); ctaBtn.setAlpha(ok ? 1f : 0.45f);
     }
+    void paintCtaPublic() { paintCta(); }
+    void paintLog() { if (logTv == null) return; String t = act.takeLog(); logTv.setText(t.trim()); logTv.setVisibility(t.isEmpty() ? GONE : VISIBLE); }
+    void clearAmount() { if (amountIn != null) amountIn.setText(""); }
 
     private void submit() {
         BigDecimal price = Util.dec(priceIn.getText().toString()), amount = Util.dec(amountIn.getText().toString());
@@ -422,6 +436,7 @@ public final class TradeView extends LinearLayout {
         renderLadder(book);
         renderFunds();
         renderOrders();
+        paintLog();
     }
 
     private void renderLadder(List<Envelope> book) {
