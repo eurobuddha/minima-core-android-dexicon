@@ -76,6 +76,7 @@ public class MakerService extends Service {
     private RelayClient relay;
     private DexIdentity me;
     private MakerEngine engine;
+    private LadderRunner ladder;   // the fast market maker (ORDERS › MARKET MAKER)
     private boolean started, paired, deriving, ticking;
     private long lastRegisterMs, ticks, doorTicks;
     private final Map<String, Long> coinLocks = new HashMap<>();   // coinid → unix ms the lock expires (3 min)
@@ -118,7 +119,7 @@ public class MakerService extends Service {
                 net.execute(() -> {
                     try {
                         DexIdentity id = DexIdentity.fromSeed(ls, seed);
-                        h.post(() -> { me = id; engine = new MakerEngine(MakerService.this, node, db, relay, me); deriving = false; db.setMeta("publicId", me.publicId()); log("booted — publicId " + me.publicId()); refreshAddresses(null); });
+                        h.post(() -> { me = id; engine = new MakerEngine(MakerService.this, node, db, relay, me); ladder = new LadderRunner(engine, db, line -> { log(line); changed(); }); deriving = false; db.setMeta("publicId", me.publicId()); log("booted — publicId " + me.publicId()); refreshAddresses(null); });
                     } catch (Exception e) { h.post(() -> { deriving = false; log("identity derive failed: " + e); }); }
                 });
             }
@@ -189,12 +190,14 @@ public class MakerService extends Service {
         }
         processTakes(takes, 0, () -> {
             if (ticks % 3 == 0) settleFills();
-            if (ticks % 6 == 0) refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
-                if (e != null) log("refresh failed: " + e);
-                else if (n > 0 || relocked != null) { log("refresh republished " + n + " order(s)" + (relocked != null ? "; relocked stale backing coins " + relocked : "")); changed(); }
-                tickDone();
-            }));
-            else tickDone();
+            ladder.pass(() -> {   // the market maker reconciles between takes and the coin refresh, never alongside them
+                if (ticks % 6 == 0) refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
+                    if (e != null) log("refresh failed: " + e);
+                    else if (n > 0 || relocked != null) { log("refresh republished " + n + " order(s)" + (relocked != null ? "; relocked stale backing coins " + relocked : "")); changed(); }
+                    tickDone();
+                }));
+                else tickDone();
+            });
         });
     }
 

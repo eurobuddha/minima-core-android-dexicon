@@ -82,6 +82,10 @@ public final class OrdersTab extends LinearLayout {
     }
 
     private void renderOpen() {
+        MarketMaker.card(act, body);
+        java.util.Map<String, String> rungOf = new java.util.HashMap<>();   // orderId → ladder rung (A1…B6)
+        try { JSONObject ids = new JSONObject(act.db().meta(com.eurobuddha.dexicon.maker.LadderRunner.IDS, "{}"));
+              for (java.util.Iterator<String> it = ids.keys(); it.hasNext(); ) { String k = it.next(); rungOf.put(ids.optString(k), k); } } catch (Exception ignored) {}
         boolean any = false;
         for (JSONObject p : act.db().pendings()) {
             any = true;
@@ -100,7 +104,8 @@ public final class OrdersTab extends LinearLayout {
             LinearLayout top = new LinearLayout(getContext());
             top.setGravity(Gravity.CENTER_VERTICAL);
             boolean sell = "sell".equals(o.side);
-            top.addView(line((sell ? "SELL " : "BUY ") + Util.fmt(Util.dec(o.remaining)) + " MINIMA @ " + Util.fmtPrice(Util.dec(o.price)), sell ? Design.RED() : Design.IN(), 12f),
+            String rung = rungOf.get(o.orderId);
+            top.addView(line((rung != null ? "MAKER " + rung + " · " : "") + (sell ? "SELL " : "BUY ") + Util.fmt(Util.dec(o.remaining)) + " MINIMA @ " + Util.fmtPrice(Util.dec(o.price)), sell ? Design.RED() : Design.IN(), 12f),
                     new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
             TextView edit = line(" ✎ ", Design.DIM(), 14f); edit.setOnClickListener(v -> act.editOrder(o)); top.addView(edit);
             TextView cancel = line(" ✕ ", Design.RED(), 14f); cancel.setOnClickListener(v -> act.cancelOrder(o)); top.addView(cancel);

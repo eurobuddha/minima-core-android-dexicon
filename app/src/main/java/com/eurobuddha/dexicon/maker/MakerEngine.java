@@ -139,6 +139,51 @@ public final class MakerEngine {
         });
     }
 
+    // ---- market-maker split ----
+
+    /** ONE self-send turning free coins of {@code tokenid} into {@code parts} coins of {@code per} (+ change), so each
+     *  ladder rung gets its own backing coin. Coins backing live orders are never touched. cb(err, txnId). */
+    public void split(String tokenid, int parts, BigDecimal per, java.util.function.BiConsumer<String, String> cb) {
+        walletCoins(node, tokenid, (e, coins) -> {
+            if (e != null) { cb.accept(e, null); return; }
+            Set<String> ex = new HashSet<>(); for (String id : coinsBackingOthers(db.myOrders(), null)) ex.add(id.toLowerCase(Locale.ROOT));
+            List<Coin> free = new ArrayList<>(); for (Coin c : coins) if (!ex.contains(c.coinid.toLowerCase(Locale.ROOT))) free.add(c);
+            BigDecimal need = per.multiply(BigDecimal.valueOf(parts));
+            FillPlan.Pick p = FillPlan.pick(free, need, MAX_COINS);
+            if (p == null) { BigDecimal have = BigDecimal.ZERO; for (Coin c : free) have = have.add(c.value); cb.accept("only " + FillPlan.plain(have) + " free (not backing an order), the ladder needs " + FillPlan.plain(need), null); return; }
+            node.cmdR("getaddress", new NodeApi.Cb() {
+                public void onResult(JSONObject j) {
+                    JSONObject r = j.optJSONObject("response");
+                    String addr = r == null ? "" : r.optString("address", "");
+                    if (addr.isEmpty()) { cb.accept("getaddress failed", null); return; }
+                    SignGate.submit(release -> {
+                        String tok = Tokens.isMinima(tokenid) ? "" : " tokenid:" + tokenid;
+                        final String id = "sp" + Long.toString(System.currentTimeMillis(), 36);
+                        List<String> steps = new ArrayList<>();
+                        steps.add("txncreate id:" + id);
+                        for (Coin c : p.coins) steps.add("txninput id:" + id + " coinid:" + c.coinid + " scriptmmr:true");
+                        for (int i = 0; i < parts; i++) steps.add("txnoutput id:" + id + " amount:" + FillPlan.plain(per) + " address:" + addr + tok);
+                        BigDecimal change = p.sum.subtract(need);
+                        if (change.signum() > 0) steps.add("txnoutput id:" + id + " amount:" + FillPlan.plain(change) + " address:" + addr + tok);
+                        steps.add("txnsign id:" + id + " publickey:auto");
+                        steps.add("txnpost id:" + id);
+                        node.seq(steps, new NodeApi.Cb() {
+                            public void onResult(JSONObject x) { finish(null); }
+                            public void onError(String m) { finish(m); }
+                            private void finish(String err) {
+                                node.cmd("txndelete id:" + id, new NodeApi.Cb() {   // every path deletes the txn
+                                    public void onResult(JSONObject x) { release.free(); cb.accept(err, err == null ? id : null); }
+                                    public void onError(String m) { release.free(); cb.accept(err, err == null ? id : null); }
+                                });
+                            }
+                        });
+                    });
+                }
+                public void onError(String m) { cb.accept(m, null); }
+            });
+        });
+    }
+
     // ---- relock ----
 
     /** ONE transaction spending exactly these coins back to my own address (same token) so they become fresh. */
