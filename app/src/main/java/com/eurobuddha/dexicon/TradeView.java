@@ -52,14 +52,16 @@ public final class TradeView extends LinearLayout {
     /** EXACT mode samples the pool curve every 0.00001 — each sample is a real executable price, not a rounding. */
     private static final BigDecimal SAMPLE_TICK = new BigDecimal("0.00001");
     private static final String[] GROUP_LABELS = {"EXACT", "0.0001", "0.001", "0.01"};
-    private static final String PREFS = "dexicon_ui", KEY_GROUP = "ladder_group";
+    private static final String PREFS = "dexicon_ui", KEY_GROUP = "ladder_group", KEY_FUNDS_BIG = "funds_big";
     private int groupIdx = 0;
     private static final int MAX_ROWS = 10;
 
     private boolean buyMode = true;
     private TextView buyTab, sellTab, totalTv, ctaBtn, logTv;
     // funds panel + live order preview (owner 2026-10-22: balances must be visible where you trade)
-    private TextView fundsMinima, fundsMxusd, fundsValue, availTv, warnTv;
+    private TextView fundsMinima, fundsMxusd, fundsValue, fundsTitle, fundsSmall, availTv, warnTv;
+    private LinearLayout fundsCols;
+    private boolean fundsBig;
     private java.util.List<OrderPreview.Lvl> lastAsks = new ArrayList<>(), lastBids = new ArrayList<>();
     private BigDecimal lastMid;
     private boolean canAfford = true;
@@ -138,27 +140,44 @@ public final class TradeView extends LinearLayout {
     }
 
     // ---- funds ----
+    /** YOUR FUNDS has two modes, tap the card to switch (remembered): SMALL = available of each coin on one line,
+     *  BIG = available / in your orders / settling / total per coin. Owner, 2026-10-22. */
     private void buildFunds() {
         LinearLayout c = card();
+        fundsBig = getContext().getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getBoolean(KEY_FUNDS_BIG, false);
         LinearLayout top = new LinearLayout(getContext());
         top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(tv("YOUR FUNDS", 10f, Design.DIM(), Design.sansBold()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        fundsTitle = tv("", 10f, Design.DIM(), Design.sansBold());
+        top.addView(fundsTitle, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         fundsValue = tv("", 10f, Design.DIM(), Design.mono());
         top.addView(fundsValue);
         c.addView(top);
-        LinearLayout cols = new LinearLayout(getContext());
+        fundsSmall = tv("—", 11f, Design.TEXT(), Design.mono());
+        LayoutParams sl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); sl.topMargin = dp(4);
+        c.addView(fundsSmall, sl);
+        fundsCols = new LinearLayout(getContext());
         fundsMinima = tv("MINIMA\n—", 11f, Design.TEXT(), Design.mono());
         fundsMxusd = tv("MxUSD\n—", 11f, Design.TEXT(), Design.mono());
-        cols.addView(fundsMinima, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        cols.addView(fundsMxusd, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        fundsCols.addView(fundsMinima, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        fundsCols.addView(fundsMxusd, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         LayoutParams cl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); cl.topMargin = dp(4);
-        c.addView(cols, cl);
+        c.addView(fundsCols, cl);
+        c.setOnClickListener(v -> {
+            fundsBig = !fundsBig;
+            getContext().getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).edit().putBoolean(KEY_FUNDS_BIG, fundsBig).apply();
+            renderFunds();
+        });
+        Design.pressable(c);
     }
 
     private void renderFunds() {
         if (fundsMinima == null) return;
-        if (!act.paired()) { fundsMinima.setText("MINIMA\nnot paired"); fundsMxusd.setText("MxUSD\nnot paired"); fundsValue.setText(""); return; }
+        fundsTitle.setText(fundsBig ? "YOUR FUNDS  ▾" : "YOUR FUNDS  ▸");
+        fundsSmall.setVisibility(fundsBig ? GONE : VISIBLE);
+        fundsCols.setVisibility(fundsBig ? VISIBLE : GONE);
+        if (!act.paired()) { fundsSmall.setText("not paired"); fundsMinima.setText("MINIMA\nnot paired"); fundsMxusd.setText("MxUSD\nnot paired"); fundsValue.setText(""); return; }
         Funds f = Funds.of(act);
+        fundsSmall.setText(Util.fmtBal(f.minimaAvailable) + " MINIMA  ·  " + Util.fmtBal(f.mxusdAvailable) + " MxUSD  available");
         fundsMinima.setText(fundsBlock("MINIMA", f.minimaAvailable, f.minimaInOrders, f.minimaSettling, f.minimaTotal()));
         fundsMxusd.setText(fundsBlock("MxUSD", f.mxusdAvailable, f.mxusdInOrders, f.mxusdSettling, f.mxusdTotal()));
         BigDecimal v = f.valueAt(lastMid);
