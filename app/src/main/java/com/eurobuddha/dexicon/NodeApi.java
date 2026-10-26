@@ -73,7 +73,7 @@ public class NodeApi {
 
     /** The installed Minima node app this companion pairs with: [package, label]; first found wins. */
     public static String[] nodeApp(Context c) {
-        String[][] apps = {{"com.eurobuddha.pandamonium", "Pandamonium"}, {"com.eurobuddha.minimablock", "MinimaBlock"}, {"com.eurobuddha.minimacore", "Minima Core"}};
+        String[][] apps = {{"com.eurobuddha.pandamonium", "Pandamonium"}, {"com.eurobuddha.minimablock", "MinimaBlock"}, {"com.eurobuddha.minimacore", "Minima Core"}, {"org.minima.core", "Minima Core"}, {"org.minimarex.minimacore", "Minima Core"}};
         for (String[] a : apps) {
             try { c.getPackageManager().getPackageInfo(a[0], 0); return a; } catch (Exception ignored) {}
         }

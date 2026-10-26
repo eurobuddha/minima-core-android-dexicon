@@ -21,6 +21,9 @@
         <package android:name="com.eurobuddha.minimacore" />
         <package android:name="com.eurobuddha.minimablock" />
         <package android:name="com.eurobuddha.pandamonium" />
+        <!-- The official Minima Core, and the legacy org.minimarex build -->
+        <package android:name="org.minima.core" />
+        <package android:name="org.minimarex.minimacore" />
     </queries>
 
     <!-- allowBackup=false is a FUND-SAFETY setting (family-wide scaffold defect): Auto Backup would cloud-copy and
