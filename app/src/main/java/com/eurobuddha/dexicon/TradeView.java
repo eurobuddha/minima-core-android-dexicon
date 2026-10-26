@@ -91,8 +91,10 @@ public final class TradeView extends LinearLayout {
     // the buy/sell ticket and my orders sit beside it on the right.
     private final List<View> cards = new ArrayList<>(), leftCards = new ArrayList<>();
     private Boolean wideNow;
+    private boolean solo = true;   // false while another page sits beside this one: then the phone column
+    void setSolo(boolean s) { solo = s; arrange(); }
     private void arrange() {
-        boolean w = com.eurobuddha.dexicon.ui.Wide.on(getContext());
+        boolean w = solo && com.eurobuddha.dexicon.ui.Wide.on(getContext());
         if (wideNow != null && wideNow == w) return;
         wideNow = w;
         com.eurobuddha.dexicon.ui.Wide.arrange(this, cards, leftCards);
