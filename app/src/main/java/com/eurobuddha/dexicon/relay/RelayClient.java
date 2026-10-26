@@ -49,6 +49,7 @@ public final class RelayClient {
     private final Map<String, Long> cursors = new HashMap<>(), inboxCursors = new HashMap<>();
     private final Map<String, Status> status = new LinkedHashMap<>();
     private final Map<String, Envelope> book = new LinkedHashMap<>();
+    private static final java.util.concurrent.ExecutorService POOL = java.util.concurrent.Executors.newCachedThreadPool(r -> { Thread th = new Thread(r, "dexicon-relay-post"); th.setDaemon(true); return th; });
     private final Set<String> seenMsgs = new HashSet<>();
     private int rr;
 
@@ -174,14 +175,22 @@ public final class RelayClient {
         String path = "/dex/publish";
         try { if ("msg".equals(new JSONObject(raw).optString("t"))) path = "/dex/msg"; }
         catch (Exception e) { results.add(new PublishResult(null, false, "bad json")); return results; }
-        for (String url : relays()) {
+        // Every relay at once (the slowest relay sets the pace, not the sum of all of them).
+        List<String> urls = relays();
+        List<java.util.concurrent.Future<PublishResult>> futures = new ArrayList<>();
+        final String fPath = path;
+        for (String url : urls) futures.add(POOL.submit(() -> {
             boolean ok = false; String err = "";
             try {
-                JSONObject b = new JSONObject(t.post(url + path, raw));
+                JSONObject b = new JSONObject(t.post(url + fPath, raw));
                 ok = b.optBoolean("ok", false); err = b.optString("error", "");
             } catch (Exception e) { err = String.valueOf(e.getMessage()); }
             mark(url, ok || "stale seq".equals(err), err);
-            results.add(new PublishResult(url, ok, err));
+            return new PublishResult(url, ok, err);
+        }));
+        for (int i = 0; i < futures.size(); i++) {
+            try { results.add(futures.get(i).get()); }
+            catch (Exception e) { results.add(new PublishResult(urls.get(i), false, String.valueOf(e.getMessage()))); }
         }
         return results;
     }

@@ -57,7 +57,8 @@ public final class MakerEngine {
     private final RelayClient relay;
     private final DexIdentity me;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-maker-net"); t.setDaemon(true); return t; });
+    // Several workers, so a ladder's orders publish side by side instead of queueing behind each other.
+    private final ExecutorService net = Executors.newFixedThreadPool(8, r -> { Thread t = new Thread(r, "dexicon-maker-net"); t.setDaemon(true); return t; });
 
     public MakerEngine(Context ctx, NodeApi node, DexDb db, RelayClient relay, DexIdentity me) {
         this.ctx = ctx.getApplicationContext(); this.node = node; this.db = db; this.relay = relay; this.me = me;
@@ -233,6 +234,96 @@ public final class MakerEngine {
             int ok = 0; for (RelayClient.PublishResult r : results) if (r.ok) ok++;
             String err = ok > 0 ? null : "no relay accepted the order" + (results.isEmpty() ? " (no relays)" : ": " + results.get(0).error);
             main.post(() -> cb.done(err));
+        });
+    }
+
+    // ---- batch (the ladder) ----
+
+    /** One ladder change for {@link #batch}: a new order ({@code orderId} null) or a re-price / re-back of a live one. */
+    public static final class Op {
+        public final String key, orderId, side, price, amount;
+        public Op(String key, String orderId, String side, String price, String amount) {
+            this.key = key; this.orderId = orderId; this.side = side; this.price = price; this.amount = amount;
+        }
+    }
+    /** Backing chosen for one op: coin ids, or why there are none. */
+    public static final class Alloc { public List<String> coins; public String err; }
+    public interface BatchDone { void done(Map<String, String> errors, Map<String, MyOrder> made); }
+
+    /** Back every op from ONE wallet snapshot, in order, never giving a coin to two orders: each op may reuse its own
+     *  order's coins, never another live order's or a coin an earlier op just took. Pure (tested). */
+    public static List<Alloc> allocate(List<Op> ops, List<Coin> minima, List<Coin> mxusd, List<MyOrder> mine, long tip, int maxAge) {
+        Set<String> taken = new HashSet<>();
+        Map<String, List<String>> own = new HashMap<>();
+        for (MyOrder o : mine) if (o.live()) { for (String id : o.coins) taken.add(id.toLowerCase(Locale.ROOT)); own.put(o.orderId, o.coins); }
+        List<Alloc> out = new ArrayList<>();
+        for (Op op : ops) {
+            Alloc a = new Alloc();
+            List<String> mineNow = op.orderId == null || !own.containsKey(op.orderId) ? new ArrayList<>() : own.get(op.orderId);
+            Set<String> ownLc = new HashSet<>(); for (String id : mineNow) ownLc.add(id.toLowerCase(Locale.ROOT));
+            List<String> excl = new ArrayList<>(); for (String id : taken) if (!ownLc.contains(id)) excl.add(id);
+            try {
+                a.coins = backing(op.side, op.price, op.amount, "sell".equals(op.side) ? minima : mxusd, excl, tip, maxAge);
+                taken.removeAll(ownLc);
+                for (String id : a.coins) taken.add(id.toLowerCase(Locale.ROOT));
+            } catch (RuntimeException e) { a.err = e.getMessage(); }
+            out.add(a);
+        }
+        return out;
+    }
+
+    /** The whole ladder in one go (owner 2026-10-26, like the minimaXT overlay's single book update): ONE address, ONE
+     *  tip, backing planned in memory from the wallet snapshot the caller already read, every envelope signed, then all
+     *  published at once. Edits are saved whatever the relays said (as {@link #edit}); creates only when one accepted. */
+    public void batch(List<Op> ops, List<Coin> minima, List<Coin> mxusd, BatchDone cb) {
+        Map<String, String> errors = new HashMap<>();
+        Map<String, MyOrder> made = new HashMap<>();
+        if (ops.isEmpty()) { cb.done(errors, made); return; }
+        boolean anyCreate = false; for (Op op : ops) if (op.orderId == null) anyCreate = true;
+        java.util.function.Consumer<String> go = addr -> tip(t -> {
+            List<Op> norm = new ArrayList<>();
+            for (Op op : ops) {
+                try {
+                    String price = FillPlan.plain(FillPlan.d(op.price)), amount = FillPlan.plain(FillPlan.down8(FillPlan.d(op.amount)));
+                    if (!DECIMAL.matcher(price).matches() || FillPlan.d(price).signum() <= 0 || FillPlan.d(amount).signum() <= 0) throw new IllegalArgumentException("price and amount must be positive");
+                    norm.add(new Op(op.key, op.orderId, op.side, price, amount));
+                } catch (RuntimeException e) { errors.put(op.key, "bad price or amount"); }
+            }
+            List<Alloc> alloc = allocate(norm, minima, mxusd, db.myOrders(), t, RelayStore.coinMaxAge(ctx));
+            List<MyOrder> send = new ArrayList<>(); List<Op> sendOps = new ArrayList<>();
+            for (int i = 0; i < norm.size(); i++) {
+                Op op = norm.get(i); Alloc a = alloc.get(i);
+                if (a.err != null) { errors.put(op.key, a.err); continue; }
+                MyOrder o;
+                if (op.orderId == null) {
+                    if (addr == null || addr.isEmpty()) { errors.put(op.key, "getaddress failed"); continue; }
+                    o = new MyOrder();
+                    byte[] id = new byte[8]; new SecureRandom().nextBytes(id);
+                    o.orderId = "0x" + Hex.to(id); o.side = op.side; o.address = addr; o.status = "live"; o.created = now(); o.seq = now();
+                } else {
+                    o = db.myOrder(op.orderId);
+                    if (o == null || !o.live()) { errors.put(op.key, "order is not live"); continue; }
+                    o.seq = nextSeq(o);
+                }
+                o.price = op.price; o.amount = op.amount; o.remaining = op.amount; o.coins = a.coins;
+                o.scripts = scriptsFor("sell".equals(op.side) ? minima : mxusd, a.coins); o.expiry = now() + EXPIRY_SECONDS;
+                send.add(o); sendOps.add(op);
+            }
+            if (send.isEmpty()) { cb.done(errors, made); return; }
+            final int[] left = {send.size()};
+            for (int i = 0; i < send.size(); i++) {
+                final MyOrder o = send.get(i); final Op op = sendOps.get(i);
+                publish(o, e -> {   // all in flight together; each answers on the main thread
+                    if (op.orderId != null || e == null) db.saveOrder(o);
+                    if (e != null) errors.put(op.key, e); else made.put(op.key, o);
+                    if (--left[0] == 0) cb.done(errors, made);
+                });
+            }
+        });
+        if (!anyCreate) { go.accept(null); return; }
+        node.cmdR("getaddress", new NodeApi.Cb() {
+            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); go.accept(r == null ? "" : r.optString("address", "")); }
+            public void onError(String m) { go.accept(""); }
         });
     }
 

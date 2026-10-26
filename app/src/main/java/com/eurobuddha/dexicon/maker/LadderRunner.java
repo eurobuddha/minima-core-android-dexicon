@@ -37,7 +37,26 @@ public final class LadderRunner {
 
     public LadderRunner(MakerEngine engine, DexDb db, Log log) { this.engine = engine; this.db = db; this.log = log; }
 
+    private boolean running, again;
+    private final List<Runnable> waiting = new ArrayList<>();
+    public boolean running() { return running; }
+    /** Run {@code r} once the current pass has finished (a take must never be co-signed while the ladder re-backs). */
+    public void afterPass(Runnable r) { if (running) waiting.add(r); else r.run(); }
+
+    /** One pass. Never two at once: a pass asked for while one runs (a SAVE / STOP kick) runs straight after it. */
     public void pass(Runnable done) {
+        if (running) { again = true; done.run(); return; }
+        running = true;
+        passOnce(() -> {
+            running = false;
+            List<Runnable> w = new ArrayList<>(waiting); waiting.clear();
+            for (Runnable r : w) r.run();
+            if (again && !running) { again = false; pass(() -> {}); }
+            done.run();
+        });
+    }
+
+    private void passOnce(Runnable done) {
         long now = System.currentTimeMillis();
         boolean dirty = !db.meta(DIRTY, "").isEmpty();
         Ladder.Config c = Ladder.Config.fromJson(db.meta(CONFIG, ""));
@@ -51,39 +70,50 @@ public final class LadderRunner {
         double widen = c.peg ? MexcFeed.widen() : 1;
         List<Ladder.Rung> want = Ladder.desired(c, c.peg ? MexcFeed.mid() : 0, widen);
         MakerEngine.walletCoins(engine.node(), Tokens.MINIMA, (ea, mc) -> MakerEngine.walletCoins(engine.node(), Tokens.MXUSD(), (eb, uc) -> {
-            java.util.Set<String> inWallet = null;   // null = a read failed: don't judge backing this pass
-            if (ea == null && eb == null) { inWallet = new java.util.HashSet<>(); for (com.eurobuddha.dexicon.fill.Coin x : mc) inWallet.add(x.coinid.toLowerCase(java.util.Locale.ROOT)); for (com.eurobuddha.dexicon.fill.Coin x : uc) inWallet.add(x.coinid.toLowerCase(java.util.Locale.ROOT)); }
-            reconcile(c, want, ids, 0, new ArrayList<>(), new ArrayList<>(), done, widen, inWallet);
+            if (ea != null || eb != null) {   // no wallet snapshot: nothing can be backed this pass; keep what is live
+                List<String> errs = new ArrayList<>(); errs.add("wallet read failed: " + (ea != null ? ea : eb));
+                finish(c, want, ids, errs, new ArrayList<>(), done, widen);
+                return;
+            }
+            java.util.Set<String> inWallet = new java.util.HashSet<>();
+            for (com.eurobuddha.dexicon.fill.Coin x : mc) inWallet.add(x.coinid.toLowerCase(java.util.Locale.ROOT));
+            for (com.eurobuddha.dexicon.fill.Coin x : uc) inWallet.add(x.coinid.toLowerCase(java.util.Locale.ROOT));
+            reconcile(c, want, ids, done, widen, inWallet, mc, uc);
         }));
     }
 
     private JSONObject ids() { try { return new JSONObject(db.meta(IDS, "{}")); } catch (Exception e) { return new JSONObject(); } }
 
-    private void reconcile(Ladder.Config c, List<Ladder.Rung> want, JSONObject ids, int i, List<String> errors, List<Ladder.Rung> unbacked, Runnable done, double widen, java.util.Set<String> inWallet) {
-        if (i >= want.size()) { finish(c, want, ids, errors, unbacked, done, widen); return; }
-        Ladder.Rung r = want.get(i);
-        Runnable next = () -> reconcile(c, want, ids, i + 1, errors, unbacked, done, widen, inWallet);
-        MyOrder o = db.myOrder(ids.optString(r.key, ""));
-        String price = FillPlan.plain(r.price), amount = FillPlan.plain(r.amount);
-        if (o == null || !o.live() || !o.side.equals(r.side)) {
-            if (o != null && o.live()) { engine.cancel(o.orderId, (e, x) -> {}); }
-            engine.create(r.side, price, amount, (err, made) -> {
-                if (err != null) { errors.add(r.key + ": " + err); if (err.startsWith("not enough free")) unbacked.add(r); }
-                else put(ids, r.key, made.orderId);
-                next.run();
-            });
-            return;
+    /** Diff the wanted rungs against the live ones, then send every create / edit as ONE batch (one wallet read, all
+     *  published at once). Edits are in place (a higher seq), so a re-price never leaves a gap on the book. */
+    private void reconcile(Ladder.Config c, List<Ladder.Rung> want, JSONObject ids, Runnable done, double widen, java.util.Set<String> inWallet,
+                           List<com.eurobuddha.dexicon.fill.Coin> minima, List<com.eurobuddha.dexicon.fill.Coin> mxusd) {
+        List<MakerEngine.Op> ops = new ArrayList<>();
+        Map<String, Ladder.Rung> byKey = new HashMap<>();
+        for (Ladder.Rung r : want) {
+            byKey.put(r.key, r);
+            MyOrder o = db.myOrder(ids.optString(r.key, ""));
+            String price = FillPlan.plain(r.price), amount = FillPlan.plain(r.amount);
+            if (o == null || !o.live() || !o.side.equals(r.side)) {
+                if (o != null && o.live()) engine.cancel(o.orderId, (e, x) -> {});
+                ops.add(new MakerEngine.Op(r.key, null, r.side, price, amount));
+                continue;
+            }
+            boolean gone = false;   // a backing coin left the wallet (a split or a fill spent it) → re-back now
+            for (String id : o.coins) if (!inWallet.contains(id.toLowerCase(java.util.Locale.ROOT))) gone = true;
+            if (gone || Ladder.needsEdit(r, FillPlan.d(o.price), FillPlan.d(o.remaining), c.peg, c.reprice))
+                ops.add(new MakerEngine.Op(r.key, o.orderId, r.side, price, amount));
         }
-        boolean gone = false;   // a backing coin left the wallet (a split or a fill spent it) → re-back now
-        if (inWallet != null) for (String id : o.coins) if (!inWallet.contains(id.toLowerCase(java.util.Locale.ROOT))) gone = true;
-        if (gone || Ladder.needsEdit(r, FillPlan.d(o.price), FillPlan.d(o.remaining), c.peg, c.reprice)) {
-            engine.edit(o.orderId, price, amount, (err, x) -> {
-                if (err != null) { errors.add(r.key + ": " + err); if (err.startsWith("not enough free")) unbacked.add(r); }
-                next.run();
-            });
-            return;
-        }
-        next.run();
+        engine.batch(ops, minima, mxusd, (errs, made) -> {
+            List<String> errors = new ArrayList<>(); List<Ladder.Rung> unbacked = new ArrayList<>();
+            for (MakerEngine.Op op : ops) {
+                MyOrder m = made.get(op.key);
+                if (m != null && op.orderId == null) put(ids, op.key, m.orderId);
+                String err = errs.get(op.key);
+                if (err != null) { errors.add(op.key + ": " + err); if (err.startsWith("not enough free")) unbacked.add(byKey.get(op.key)); }
+            }
+            finish(c, want, ids, errors, unbacked, done, widen);
+        });
     }
 
     private void finish(Ladder.Config c, List<Ladder.Rung> want, JSONObject ids, List<String> errors, List<Ladder.Rung> unbacked, Runnable done, double widen) {
@@ -132,17 +162,15 @@ public final class LadderRunner {
         });
     }
 
+    /** Cancel every ladder order at once (each publish runs in parallel), then report. */
     private void cancelAll(JSONObject ids, String status, Runnable done) {
         List<String> keys = new ArrayList<>(); for (Iterator<String> it = ids.keys(); it.hasNext(); ) keys.add(it.next());
-        cancelNext(keys, 0, ids, () -> { db.setMeta(IDS, ids.toString()); setStatus(status); done.run(); });
-    }
-    private void cancelNext(List<String> keys, int i, JSONObject ids, Runnable done) {
-        if (i >= keys.size()) { done.run(); return; }
-        String k = keys.get(i);
-        MyOrder o = db.myOrder(ids.optString(k));
-        ids.remove(k);
-        if (o == null || !o.live()) { cancelNext(keys, i + 1, ids, done); return; }
-        engine.cancel(o.orderId, (e, x) -> { if (e != null) log.line("ladder cancel " + k + " failed: " + e); cancelNext(keys, i + 1, ids, done); });
+        List<MyOrder> live = new ArrayList<>();
+        for (String k : keys) { MyOrder o = db.myOrder(ids.optString(k)); ids.remove(k); if (o != null && o.live()) live.add(o); }
+        Runnable end = () -> { db.setMeta(IDS, ids.toString()); setStatus(status); done.run(); };
+        if (live.isEmpty()) { end.run(); return; }
+        final int[] left = {live.size()};
+        for (MyOrder o : live) engine.cancel(o.orderId, (e, x) -> { if (e != null) log.line("ladder cancel " + o.orderId + " failed: " + e); if (--left[0] == 0) end.run(); });
     }
 
     private void setStatus(String s) {
