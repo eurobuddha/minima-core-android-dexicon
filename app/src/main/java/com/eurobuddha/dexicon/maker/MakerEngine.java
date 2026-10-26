@@ -12,6 +12,7 @@ import com.eurobuddha.dexicon.fill.FillPlan;
 import com.eurobuddha.dexicon.fill.Tokens;
 import com.eurobuddha.dexicon.identity.DexIdentity;
 import com.eurobuddha.dexicon.identity.Hex;
+import com.eurobuddha.dexicon.envelope.Envelope;
 import com.eurobuddha.dexicon.relay.RelayClient;
 import com.eurobuddha.dexicon.relay.RelayStore;
 import com.eurobuddha.dexicon.DexDb;
@@ -234,6 +235,50 @@ public final class MakerEngine {
             int ok = 0; for (RelayClient.PublishResult r : results) if (r.ok) ok++;
             String err = ok > 0 ? null : "no relay accepted the order" + (results.isEmpty() ? " (no relays)" : ": " + results.get(0).error);
             main.post(() -> cb.done(err));
+        });
+    }
+
+    // ---- relays must agree with this phone ----
+
+    /** What {@link #syncRelays} found and fixed. */
+    public static final class SyncReport { public int checked, fixed, failed; public List<String> lines = new ArrayList<>(); }
+
+    /** Pure: of {@code relayHas} (one relay's live orders), which of MY orders must be re-sent — any it shows live
+     *  that is not live here (cancelled / filled), or an older version of one that is. Unknown ids are left alone. */
+    public static List<MyOrder> stale(List<Envelope> relayHas, String mySignPk, Map<String, MyOrder> mine) {
+        List<MyOrder> out = new ArrayList<>();
+        for (Envelope e : relayHas) {
+            if (!e.signPk.equalsIgnoreCase(mySignPk)) continue;
+            MyOrder o = mine.get(e.orderId);
+            if (o == null) continue;
+            if (!o.live() || o.seq > e.seq) out.add(o);
+        }
+        return out;
+    }
+
+    /** Read every relay's book and make it match this phone (owner 2026-10-26: cancelled orders must never stay on
+     *  the book). A cancel / fill is re-sent with a fresh 10-minute expiry (same seq, so it supersedes the relay's live
+     *  copy); a live order with its current state. Runs on the worker; cb on the main thread. */
+    public void syncRelays(java.util.function.Consumer<SyncReport> cb) {
+        Map<String, MyOrder> mine = new HashMap<>();
+        for (MyOrder o : db.myOrders()) mine.put(o.orderId, o);
+        List<MyOrder> touched = new ArrayList<>();
+        net.execute(() -> {
+            SyncReport rep = new SyncReport();
+            for (String url : relay.relays()) {
+                List<Envelope> has = relay.snapshot(url);
+                if (has == null) continue;
+                rep.checked++;
+                for (MyOrder o : stale(has, me.signPkHex(), mine)) {
+                    if (!o.live() && o.expiry <= now() + 60) { o.expiry = now() + 600; touched.add(o); }   // a cancel must still be valid to land
+                    String raw;
+                    try { raw = envelopeFor(o); } catch (RuntimeException e) { rep.failed++; continue; }
+                    RelayClient.PublishResult r = relay.publishTo(url, raw);
+                    if (r.ok || "stale seq".equals(r.error)) { rep.fixed++; rep.lines.add("relay " + url + " still showed " + o.orderId + " — re-sent (" + o.status + ")"); }
+                    else { rep.failed++; rep.lines.add("relay " + url + " still shows " + o.orderId + " and refused the fix: " + r.error); }
+                }
+            }
+            main.post(() -> { for (MyOrder o : touched) db.saveOrder(o); cb.accept(rep); });
         });
     }
 

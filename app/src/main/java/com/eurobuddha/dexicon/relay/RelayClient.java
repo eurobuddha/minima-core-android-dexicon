@@ -144,6 +144,28 @@ public final class RelayClient {
         return out;
     }
 
+    /** One relay's live orders right now (a since=0 snapshot), signature-checked; null when it could not be read. */
+    public List<Envelope> snapshot(String url) {
+        String text;
+        try { text = t.get(url + "/dex/book?market=" + enc(market) + "&since=0&hold=0"); } catch (Exception e) { return null; }
+        List<Envelope> out = new ArrayList<>();
+        for (String raw : rawObjects(text, "orders")) {
+            try { Envelope v = Envelope.parse(raw, now.getAsLong()); if (v.kind == Envelope.Kind.ORDER) out.add(v); } catch (RuntimeException ignored) {}
+        }
+        return out;
+    }
+
+    /** Publish one envelope to ONE relay. */
+    public PublishResult publishTo(String url, String raw) {
+        boolean ok = false; String err = "";
+        try {
+            JSONObject b = new JSONObject(t.post(url + "/dex/publish", raw));
+            ok = b.optBoolean("ok", false); err = b.optString("error", "");
+        } catch (Exception e) { err = String.valueOf(e.getMessage()); }
+        mark(url, ok || "stale seq".equals(err), err);
+        return new PublishResult(url, ok, err);
+    }
+
     public int pollBook(int hold) {
         String url = next();
         if (url == null) return -1;

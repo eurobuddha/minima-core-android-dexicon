@@ -204,14 +204,16 @@ public class MakerService extends Service {
         }
         processTakes(takes, 0, () -> {
             if (ticks % 3 == 0) settleFills();
-            ladder.pass(() -> {   // the market maker reconciles between takes and the coin refresh, never alongside them
+            ladder.pass(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
+                for (String l : rep.lines) log(l);
+                if (rep.fixed > 0) changed();
                 if (ticks % 6 == 0) refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
                     if (e != null) log("refresh failed: " + e);
                     else if (n > 0 || relocked != null) { log("refresh republished " + n + " order(s)" + (relocked != null ? "; relocked stale backing coins " + relocked : "")); changed(); }
                     tickDone();
                 }));
                 else tickDone();
-            });
+            }));
         });
     }
 

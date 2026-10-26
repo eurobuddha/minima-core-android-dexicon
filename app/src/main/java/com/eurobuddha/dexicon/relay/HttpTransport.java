@@ -17,7 +17,13 @@ public final class HttpTransport implements RelayClient.Transport {
     public HttpTransport() { this(40_000); }
 
     @Override public String get(String url) throws IOException { return req("GET", url, null); }
-    @Override public String post(String url, String body) throws IOException { return req("POST", url, body); }
+    /** A POST on a pooled keep-alive socket the server already closed dies before reaching it, and Android never
+     *  retries a POST: a cancel could silently miss a relay (26 Oct: 4 of 10 never reached hetzner). So a POST uses a
+     *  fresh connection and is retried once; publishing the same envelope twice is harmless (the relay says "stale seq"). */
+    @Override public String post(String url, String body) throws IOException {
+        try { return req("POST", url, body); }
+        catch (IOException first) { return req("POST", url, body); }
+    }
 
     private String req(String method, String url, String body) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
@@ -27,6 +33,7 @@ public final class HttpTransport implements RelayClient.Transport {
             c.setReadTimeout(readTimeoutMs);
             c.setUseCaches(false);
             if (body != null) {
+                c.setRequestProperty("Connection", "close");
                 c.setDoOutput(true);
                 c.setRequestProperty("Content-Type", "application/json");
                 byte[] b = body.getBytes(StandardCharsets.UTF_8);
