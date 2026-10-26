@@ -1,22 +1,25 @@
 package com.eurobuddha.dexicon;
 
 import android.annotation.SuppressLint;
+import android.view.Gravity;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.eurobuddha.dexicon.fill.FillPlan;
+import com.eurobuddha.atomix.TradingContext;
+import com.eurobuddha.atomix.eth.EthWallet;
+import com.eurobuddha.dexicon.doors.DoorHost;
 import com.eurobuddha.dexicon.fill.Tokens;
-import com.eurobuddha.dexicon.maker.MyOrder;
+import com.eurobuddha.dexicon.identity.DexIdentity;
 import com.eurobuddha.dexicon.relay.RelayStore;
-
-import org.json.JSONObject;
+import com.eurobuddha.dexicon.ui.Ui;
 
 import java.math.BigDecimal;
 
-/** ASSETS tab: available / in orders / settling per token, the Minima receive address (Mx…), the node's Ethereum wallet
- *  (address, ETH, ERC20 USDT — the AtomiX tab's deposit address), the Dexicon public id (all full, tap-to-copy), and —
- *  folded under ADVANCED — the dollar-token override that only a test chain needs. */
+/** ASSETS tab: what you hold and who you are. Each asset card shows what is available to trade and folds the rest
+ *  (confirmed, in orders, settling, coins, CONSOLIDATE / SPLIT); the Minima receive address and the node's Ethereum
+ *  wallet in full with a Copy button; YOUR TRADING ID in plain English with the full id and keys folded; and — folded
+ *  under Advanced — the dollar-token override that only a test chain needs. */
 @SuppressLint("ViewConstructor")
 public final class AssetsTab extends LinearLayout {
 
@@ -33,20 +36,17 @@ public final class AssetsTab extends LinearLayout {
         addView(body);
     }
 
-    private TextView t(String s, int color, float size, android.graphics.Typeface tf) {
-        TextView v = new TextView(getContext());
-        v.setText(s); v.setTextColor(color); v.setTextSize(size); v.setTypeface(tf);
-        return v;
-    }
+    private TextView t(String s, int color, float size, android.graphics.Typeface tf) { return Ui.text(getContext(), s, size, color, tf); }
+    private LinearLayout card() { return Ui.card(body); }
 
-    private LinearLayout card() {
-        LinearLayout c = new LinearLayout(getContext());
-        c.setOrientation(VERTICAL);
-        c.setBackground(Design.card(getContext(), 12));
-        int p = Design.dp(getContext(), 12); c.setPadding(p, p, p, p);
-        LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); lp.bottomMargin = Design.dp(getContext(), 10);
-        body.addView(c, lp);
-        return c;
+    /** A full value on its own line: wrapped mono, tap copies the complete value, long-press selects. */
+    private TextView full(String label, String value) {
+        TextView v = t(value, Design.TEXT(), 11.5f, Design.mono());
+        v.setLineSpacing(0, 1.2f);
+        v.setTextIsSelectable(true);
+        v.setFocusableInTouchMode(false);   // the first tap copies
+        v.setOnClickListener(x -> act.copy(label, value));
+        return v;
     }
 
     public void render() {
@@ -56,97 +56,112 @@ public final class AssetsTab extends LinearLayout {
         assetCard("MxUSD", Tokens.MXUSD(), act.mxusdCoins, f.mxusdAvailable, act.mxusdConfirmed(), f.mxusdInOrders, f.mxusdSettling);
 
         LinearLayout recv = card();
-        recv.addView(t("RECEIVE · MINIMA AND MxUSD", Design.DIM(), 10f, Design.sansBold()));
         String addr = act.receiveAddress();
-        recv.addView(t(addr.isEmpty() ? "Address not loaded" : addr, Design.TEXT(), 10f, Design.mono()));
-        recv.addView(t(addr.isEmpty() ? (act.paired() ? "Reading from the node…" : "Pair with Minima Core first") : "Tap to copy", Design.ACCENT(), 9.5f, Design.sans()));
-        if (!addr.isEmpty()) { recv.setOnClickListener(v -> act.copy("Address", addr)); Design.pressable(recv); }
-
-        LinearLayout idc = card();
-        idc.addView(t("DEXICON IDENTITY (publicId = boxPk‖signPk)", Design.DIM(), 10f, Design.sansBold()));
-        String pid = act.identity() == null ? "" : act.identity().publicId();
-        idc.addView(t(pid.isEmpty() ? "Not derived yet (needs the node seed: enable Dexicon with WRITE trust)" : pid, Design.TEXT(), 10f, Design.mono()));
-        idc.addView(t(pid.isEmpty() ? "" : "Tap to copy · derived from your node seed, HKDF context \"decks\"", Design.ACCENT(), 9.5f, Design.sans()));
-        if (!pid.isEmpty()) { idc.setOnClickListener(v -> act.copy("publicId", pid)); Design.pressable(idc); }
+        recv.addView(Ui.copyRow(act, "RECEIVE MINIMA OR MxUSD", "Address", () -> addr));
+        recv.addView(addr.isEmpty() ? Ui.para(act, act.paired() ? "Reading from the node…" : "Pair with Minima Core first") : full("Address", addr), Ui.wide(act, 6, 0));
 
         ethCard();
+        identityCard();
 
-        // ADVANCED (folded): the dollar-token override exists only for TEST chains, where mainnet MxUSD does not exist and
+        // Advanced (folded): the dollar-token override exists only for TEST chains, where mainnet MxUSD does not exist and
         // a test token stands in for it. On mainnet it must stay empty.
         LinearLayout adv = card();
-        adv.addView(t(advOpen ? "ADVANCED  ▾" : "ADVANCED  ▸", Design.DIM(), 10f, Design.sansBold()));
-        adv.setOnClickListener(v -> { advOpen = !advOpen; render(); });
-        Design.pressable(adv);
-        if (!advOpen) return;
-        adv.addView(t("Dollar token override — for TEST chains only. Mainnet MxUSD (" + Tokens.MXUSD_MAINNET + ") does not exist on a test chain, so a test token can stand in for it there. Leave it empty on mainnet.", Design.DIM2(), 9.5f, Design.sans()));
+        LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
+        TextView head = t("", Design.DIM(), 12f, Design.sansBold());
+        head.setMinHeight(Design.dp(act, 44)); head.setGravity(Gravity.CENTER_VERTICAL);
+        adv.addView(head); adv.addView(box);
+        Ui.fold(head, box, head, "Advanced", "fold_assets_advanced");
+        box.addView(Ui.para(act, "Dollar token override — for TEST chains only. Mainnet MxUSD (" + Tokens.MXUSD_MAINNET + ") does not exist on a test chain, so a test token can stand in for it there. Leave it empty on mainnet."));
         EditText in = new EditText(getContext());
         in.setHint("0x… test tokenid"); in.setText(RelayStore.mxusdOverride(getContext()));
-        in.setTextColor(Design.TEXT()); in.setHintTextColor(Design.DIM2()); in.setTypeface(Design.mono()); in.setTextSize(10f);
+        in.setTextColor(Design.TEXT()); in.setHintTextColor(Design.DIM2()); in.setTypeface(Design.mono()); in.setTextSize(11f);
         in.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 8));
         int p = Design.dp(getContext(), 8); in.setPadding(p, p, p, p);
-        in.setOnClickListener(v -> {});   // typing must not fold the card
-        adv.addView(in);
-        TextView save = t("SAVE", Design.ACCENT(), 10.5f, Design.mono());
-        save.setGravity(android.view.Gravity.CENTER); save.setPadding(0, p, 0, p);
-        save.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
+        box.addView(in, Ui.wide(act, 8, 0));
+        TextView save = Ui.button(act, "Save");
         save.setOnClickListener(v -> {
             String tok = in.getText().toString().trim();
             if (!Tokens.setMxUsd(tok)) { act.toast("Not a 0x + 64 hex tokenid"); return; }
             RelayStore.setMxusdOverride(getContext(), tok);
             act.applySettings(); act.toast(tok.isEmpty() ? "Mainnet MxUSD" : "Dollar leg → " + tok); act.repaint();
         });
-        Design.pressable(save);
-        LayoutParams sl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); sl.topMargin = p;
-        adv.addView(save, sl);
+        box.addView(save, Ui.wide(act, 8, 0));
     }
 
-    private boolean advOpen;
     private static long ethReadMs;
 
     /** The node's Ethereum wallet (seedrandom:ethbridge — the same key the AtomiX tab and the AtomiX app derive): address,
      *  ETH for gas and ERC20 USDT. Read through the AtomiX engine at most once a minute. */
     private void ethCard() {
-        com.eurobuddha.dexicon.doors.DoorHost host = com.eurobuddha.dexicon.doors.DoorHost.get(act);
+        DoorHost host = DoorHost.get(act);
         if (System.currentTimeMillis() - ethReadMs > 60_000) { ethReadMs = System.currentTimeMillis(); host.readBalances(() -> act.repaint()); }
         LinearLayout c = card();
-        c.addView(t("ETHEREUM · ERC20 USDT + ETH for gas", Design.DIM(), 10f, Design.sansBold()));
-        c.addView(t("USDT " + (host.usdtRaw == null ? "—" : com.eurobuddha.atomix.eth.EthWallet.format(host.usdtRaw, 6, 6)), Design.IN(), 18f, Design.monoBold()));
-        c.addView(t("ETH " + (host.ethWei == null ? "—" : com.eurobuddha.atomix.eth.EthWallet.format(host.ethWei, 18, 6)), Design.TEXT(), 12f, Design.mono()));
         String a = host.ethAddress();
-        c.addView(t(a != null ? a : host.bootNote().isEmpty() ? "deriving…" : host.bootNote(), Design.TEXT(), 10f, Design.mono()));
-        c.addView(t(a != null ? "Tap to copy · derived from this node's seed, the same address as the ATOMIX tab and the AtomiX app" : "", Design.ACCENT(), 9.5f, Design.sans()));
-        if (a != null) { c.setOnClickListener(v -> act.copy("Ethereum address", a)); Design.pressable(c); }
+        c.addView(Ui.copyRow(act, "ETHEREUM", "Ethereum address", host::ethAddress));
+        LinearLayout row = new LinearLayout(act); row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(t("USDT " + (host.usdtRaw == null ? "—" : EthWallet.format(host.usdtRaw, 6, 6)) + " · ETH " + (host.ethWei == null ? "—" : EthWallet.format(host.ethWei, 18, 6)),
+                Design.TEXT(), 13f, Design.mono()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        c.addView(row, Ui.wide(act, 4, 0));
+        Ui.info(row, c, "info_assets_eth", "ERC20 USDT and a little ETH for gas. This wallet is derived from this node's seed — the same address as the ATOMIX tab and the AtomiX app — and is never stored.");
+        c.addView(a != null ? full("Ethereum address", a) : Ui.para(act, host.bootNote().isEmpty() ? "deriving…" : host.bootNote()), Ui.wide(act, 6, 0));
+    }
+
+    /** YOUR TRADING ID: what it is in plain words; the full id and its two keys folded. */
+    private void identityCard() {
+        LinearLayout c = card();
+        DexIdentity me = act.identity();
+        String pid = me == null ? "" : me.publicId();
+        c.addView(Ui.copyRow(act, "YOUR TRADING ID", "Trading ID", () -> pid));
+        c.addView(Ui.para(act, pid.isEmpty() ? "Not derived yet — it needs the node seed: enable Dexicon with WRITE trust."
+                : "Other traders see this ID when you trade on the fast book. It is made from your node's seed, so it stays the same if you reinstall. It is not an address — never send coins to it."), Ui.wide(act, 6, 0));
+        if (pid.isEmpty()) return;
+        TextView head = t("", Design.DIM(), 12f, Design.sansBold());
+        head.setMinHeight(Design.dp(act, 44)); head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
+        c.addView(head); c.addView(box);
+        Ui.fold(head, box, head, "Show the full ID and keys", "fold_assets_ids");
+        box.addView(Ui.evidence(act, "Trading ID", pid));
+        String[] k = Ledger.keysOf(pid);
+        if (k != null) {
+            box.addView(Ui.evidence(act, "Encryption key (sealed messages to you)", k[0]));
+            box.addView(Ui.evidence(act, "Signing key (proves your orders are yours)", k[1]));
+        }
+        DoorHost host = DoorHost.get(act);
+        for (TradingContext m : DoorHost.MARKETS) {
+            String id = host.myPublicId(m);
+            if (id != null && !id.isEmpty()) box.addView(Ui.evidence(act, "AtomiX ID · " + (m == TradingContext.MXUSDT ? "MxUSD" : "MINIMA") + " market", id));
+        }
+        box.addView(Ui.para(act, "Derived with HKDF context \"" + DexIdentity.CONTEXT + "\" from the node seed."), Ui.wide(act, 4, 0));
     }
 
     private void assetCard(String name, String tokenid, int coins, BigDecimal sendable, BigDecimal confirmed, BigDecimal inOrders, BigDecimal settling) {
         LinearLayout c = card();
-        c.addView(t(name + " · available to trade", Design.DIM(), 10f, Design.sansBold()));
-        if (act.balanceAtMs() <= 0) {
-            c.addView(t("—", Design.TEXT(), 18f, Design.monoBold()));
-            c.addView(t(act.paired() ? "Waiting for wallet balances from Minima Core." : "Pair with Minima Core (Apps → enable Dexicon).", Design.DIM2(), 10f, Design.sans()));
+        LinearLayout head = new LinearLayout(act); head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setMinimumHeight(Design.dp(act, 44));
+        head.addView(t(name, Design.TEXT(), 13f, Design.sansBold()), new LayoutParams(Design.dp(act, 72), LayoutParams.WRAP_CONTENT));
+        boolean known = act.balanceAtMs() > 0;
+        head.addView(t(known ? Util.fmtBal(sendable) : "—", Design.TEXT(), 16f, Design.monoBold()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        c.addView(head);
+        if (!known) {
+            c.addView(Ui.para(act, act.paired() ? "Waiting for wallet balances from Minima Core." : "Pair with Minima Core (Apps → enable Dexicon)."));
             return;
         }
-        c.addView(t(Util.fmtBal(sendable), Design.IN(), 18f, Design.monoBold()));
-        c.addView(t("confirmed " + Util.fmtBal(confirmed) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM2(), 9.5f, Design.mono()));
-        c.addView(t("in orders " + Util.fmtBal(inOrders) + "  ·  settling +" + Util.fmtBal(settling), Design.ACCENT(), 9.5f, Design.mono()));
-        c.addView(t(coins + (coins == 1 ? " coin" : " coins") + " · orders are backed by wallet coins that stay spendable; the same coin cannot back two orders.", Design.DIM2(), 9f, Design.sans()));
+        TextView chev = t("", Design.DIM2(), 11.5f, Design.sans());
+        head.addView(chev);
+        LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
+        c.addView(box);
+        Ui.fold(head, box, chev, "available to trade", "fold_assets_" + name);
+        box.addView(t("confirmed " + Util.fmtBal(confirmed) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 6, 0));
+        box.addView(t("in orders " + Util.fmtBal(inOrders) + "  ·  settling +" + Util.fmtBal(settling), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 4, 0));
+        box.addView(Ui.para(act, coins + (coins == 1 ? " coin" : " coins") + " · orders are backed by wallet coins that stay spendable; the same coin cannot back two orders."), Ui.wide(act, 6, 0));
         // the family's wallet tools (PandaPools consolidate, PandaDEX split) — no trip to another app
         LinearLayout tools = new LinearLayout(getContext());
-        TextView cons = tool("CONSOLIDATE"), split = tool("SPLIT ×" + WalletTools.SPLIT_COUNT);
+        TextView cons = Ui.button(act, "CONSOLIDATE"), split = Ui.button(act, "SPLIT ×" + WalletTools.SPLIT_COUNT);
+        cons.setTextColor(Design.ACCENT()); split.setTextColor(Design.ACCENT());
         cons.setOnClickListener(v -> WalletTools.consolidate(act, tokenid, name, coins));
         split.setOnClickListener(v -> WalletTools.split(act, tokenid, name, sendable));
         LayoutParams l1 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f); l1.rightMargin = Design.dp(getContext(), 6);
         tools.addView(cons, l1); tools.addView(split, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        LayoutParams tl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); tl.topMargin = Design.dp(getContext(), 8);
-        c.addView(tools, tl);
-    }
-
-    private TextView tool(String label) {
-        TextView b = t(label, Design.ACCENT(), 10.5f, Design.monoBold());
-        b.setGravity(android.view.Gravity.CENTER);
-        int p = Design.dp(getContext(), 8); b.setPadding(0, p, 0, p);
-        b.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
-        Design.pressable(b);
-        return b;
+        box.addView(tools, Ui.wide(act, 8, 0));
     }
 }

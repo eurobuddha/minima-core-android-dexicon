@@ -32,7 +32,10 @@ final class MarketMaker {
     static Ladder.Config load(MainActivity act) { return Ladder.Config.fromJson(act.db().meta(LadderRunner.CONFIG, "")); }
     static void save(MainActivity act, Ladder.Config c) {
         act.db().setMeta(LadderRunner.CONFIG, c.toJson().toString());
-        act.db().setMeta(LadderRunner.DIRTY, "1");   // the service reconciles on its next tick, not in 15 s
+        act.db().setMeta(LadderRunner.DIRTY, "1");
+        // and wake the service so it reconciles NOW (owner 2026-10-26: cancel-to-repost was ~18 s of waiting)
+        try { act.startService(new android.content.Intent(act, com.eurobuddha.dexicon.maker.MakerService.class).setAction(com.eurobuddha.dexicon.maker.MakerService.ACTION_LADDER)); }
+        catch (RuntimeException ignored) {}   // service not allowed to start right now: the next tick still picks DIRTY up
     }
 
     /** The card at the top of ORDERS › OPEN. */

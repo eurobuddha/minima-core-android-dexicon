@@ -49,6 +49,7 @@ public final class RelayClient {
     private final Map<String, Long> cursors = new HashMap<>(), inboxCursors = new HashMap<>();
     private final Map<String, Status> status = new LinkedHashMap<>();
     private final Map<String, Envelope> book = new LinkedHashMap<>();
+    private static final java.util.concurrent.ExecutorService POOL = java.util.concurrent.Executors.newCachedThreadPool(r -> { Thread th = new Thread(r, "dexicon-relay-post"); th.setDaemon(true); return th; });
     private final Set<String> seenMsgs = new HashSet<>();
     private int rr;
 
@@ -76,7 +77,15 @@ public final class RelayClient {
     }
     /** Like applyOrder but an invalid envelope THROWS with the reason (shape / signature / expiry). */
     public synchronized boolean applyOrderStrict(String raw) {
-        Envelope v = Envelope.parse(raw, now.getAsLong());
+        Envelope v;
+        try { v = Envelope.parse(raw, now.getAsLong()); }
+        catch (Envelope.Invalid e) {
+            // A cancel received after its 10-minute expiry (app was backgrounded) must still supersede the live copy,
+            // or that copy haunts the book for its 23 h. Re-check it as of just before it expired: signature included.
+            if (!"expired".equals(e.getMessage())) throw e;
+            Object exp = com.eurobuddha.dexicon.envelope.Json.parseObject(raw).get("expiry");
+            v = Envelope.parse(raw, (Long) exp - 1);
+        }
         if (v.kind != Envelope.Kind.ORDER) throw new IllegalArgumentException("not an order");
         Envelope have = book.get(v.key());
         if (have != null && have.seq >= v.seq) return false;
@@ -135,6 +144,28 @@ public final class RelayClient {
         return out;
     }
 
+    /** One relay's live orders right now (a since=0 snapshot), signature-checked; null when it could not be read. */
+    public List<Envelope> snapshot(String url) {
+        String text;
+        try { text = t.get(url + "/dex/book?market=" + enc(market) + "&since=0&hold=0"); } catch (Exception e) { return null; }
+        List<Envelope> out = new ArrayList<>();
+        for (String raw : rawObjects(text, "orders")) {
+            try { Envelope v = Envelope.parse(raw, now.getAsLong()); if (v.kind == Envelope.Kind.ORDER) out.add(v); } catch (RuntimeException ignored) {}
+        }
+        return out;
+    }
+
+    /** Publish one envelope to ONE relay. */
+    public PublishResult publishTo(String url, String raw) {
+        boolean ok = false; String err = "";
+        try {
+            JSONObject b = new JSONObject(t.post(url + "/dex/publish", raw));
+            ok = b.optBoolean("ok", false); err = b.optString("error", "");
+        } catch (Exception e) { err = String.valueOf(e.getMessage()); }
+        mark(url, ok || "stale seq".equals(err), err);
+        return new PublishResult(url, ok, err);
+    }
+
     public int pollBook(int hold) {
         String url = next();
         if (url == null) return -1;
@@ -166,14 +197,22 @@ public final class RelayClient {
         String path = "/dex/publish";
         try { if ("msg".equals(new JSONObject(raw).optString("t"))) path = "/dex/msg"; }
         catch (Exception e) { results.add(new PublishResult(null, false, "bad json")); return results; }
-        for (String url : relays()) {
+        // Every relay at once (the slowest relay sets the pace, not the sum of all of them).
+        List<String> urls = relays();
+        List<java.util.concurrent.Future<PublishResult>> futures = new ArrayList<>();
+        final String fPath = path;
+        for (String url : urls) futures.add(POOL.submit(() -> {
             boolean ok = false; String err = "";
             try {
-                JSONObject b = new JSONObject(t.post(url + path, raw));
+                JSONObject b = new JSONObject(t.post(url + fPath, raw));
                 ok = b.optBoolean("ok", false); err = b.optString("error", "");
             } catch (Exception e) { err = String.valueOf(e.getMessage()); }
             mark(url, ok || "stale seq".equals(err), err);
-            results.add(new PublishResult(url, ok, err));
+            return new PublishResult(url, ok, err);
+        }));
+        for (int i = 0; i < futures.size(); i++) {
+            try { results.add(futures.get(i).get()); }
+            catch (Exception e) { results.add(new PublishResult(urls.get(i), false, String.valueOf(e.getMessage()))); }
         }
         return results;
     }

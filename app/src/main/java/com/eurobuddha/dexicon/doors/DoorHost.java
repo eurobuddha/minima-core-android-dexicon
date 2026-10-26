@@ -20,11 +20,13 @@ import com.eurobuddha.atomix.swap.SwapEngine;
 import com.eurobuddha.atomix.swap.SwapOrderBook;
 import com.eurobuddha.atomix.swap.SwapTake;
 import com.eurobuddha.comms.CommsIdentity;
+import com.eurobuddha.comms.CommsScanner;
 import com.eurobuddha.comms.CommsTransport;
 import com.eurobuddha.comms.CryptoProvider;
 import com.eurobuddha.comms.Hex;
 import com.eurobuddha.comms.LocalEcCryptoProvider;
 import com.eurobuddha.comms.NodeApi;
+import com.eurobuddha.comms.Opened;
 import com.eurobuddha.comms.Sodium;
 import com.eurobuddha.dexicon.Notifier;
 import com.eurobuddha.dexicon.maker.MakerService;
@@ -94,6 +96,7 @@ public final class DoorHost {
     private final Map<TradingContext, CryptoProvider> crypto = new EnumMap<>(TradingContext.class);
     private final Map<TradingContext, Map<String, Order>> books = new EnumMap<>(TradingContext.class);
     private final Map<TradingContext, String> coinBal = new EnumMap<>(TradingContext.class);
+    private final Map<TradingContext, CommsScanner> noticeScanners = new EnumMap<>(TradingContext.class);
 
     private boolean walletDeriving, minimaSettingUp, keysLoaded, keysLoading, identityDeriving, scanning, busy, forwarding;
     private long lastRegisterMs;
@@ -202,12 +205,55 @@ public final class DoorHost {
 
     // ------------------------------------------------------------------ background pass (MakerService ~90 s, DOORS tab)
 
-    /** One settlement pass: boot steps, then the engine's poll (claims / withdraws / refunds), then forwards. */
+    /** One settlement pass: boot steps, then the engine's poll (claims / withdraws / refunds), maker notices, forwards.
+     *  With the node unpaired (or not booted yet) it falls back to {@link #pollEthOnly}: an ETH refund needs no node. */
     public void poll() {
         ensure();
-        if (!ready()) return;
+        if (!dnode.isEnabled() || !ready()) { engine.pollEthOnly(); return; }
         if (!com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) engine.poll();
+        scanNotices();
         processForwards();
+    }
+
+    /** Settlement with no Minima node: ETH refunds and withdraws of door swaps (the engine checks each ETH contract). */
+    public void pollEthOnly() { ensure(); engine.pollEthOnly(); }
+
+    /** Ask for a refund of my lock now; the answer (why not yet, or "refunding") comes back on the main thread. */
+    public void refundNow(String hash, java.util.function.Consumer<String> answer) { engine.refundNow(hash, answer); }
+    public int lastMinimaBlock() { return engine.lastMinimaBlock(); }
+
+    /** Makers seal a "retrying / declined" notice to us on the market's TAKE channel. Dexicon is a taker only, so it
+     *  scans that channel just while a swap it started is still waiting for its maker. */
+    private void scanNotices() {
+        boolean waiting = false;
+        for (SwapDb.Swap s : swaps()) if (SwapDb.ST_STARTED.equals(s.status)) { waiting = true; break; }
+        if (!waiting) return;
+        for (TradingContext m : MARKETS) {
+            CryptoProvider cp = crypto.get(m);
+            if (cp == null) continue;
+            CommsScanner sc = noticeScanners.get(m);
+            if (sc == null) {
+                sc = new CommsScanner(node, cp, new CommsScanner.MetaStore() {   // own bookmarks, namespaced per address by the scanner
+                    @Override public String getMeta(String k, String def) { return prefs.getString("noticemeta_" + k, def); }
+                    @Override public void setMeta(String k, String v) { prefs.edit().putString("noticemeta_" + k, v).apply(); }
+                }, m.takeAddr, (cid, opened, coin) -> routeNotice(m, opened), (ok, n) -> {});
+                noticeScanners.put(m, sc);
+            }
+            sc.scan(0);
+        }
+    }
+
+    /** A notice is accepted only when sealed to MY id for that market by the sender it names (the engine further
+     *  checks it is the maker I notified, for a swap I started). Informational only — it never moves funds. */
+    boolean routeNotice(TradingContext m, Opened opened) {
+        try {
+            JSONObject j = new JSONObject(new String(opened.plaintext, java.nio.charset.StandardCharsets.UTF_8));
+            if (!j.has("notice")) return false;
+            String to = j.optString("to", ""), from = j.optString("from", ""), hash = j.optString("hash", ""), me = myPublicId(m);
+            if (hash.isEmpty() || me == null || !me.equals(to)) return false;
+            if (opened.fromPublicId == null || !opened.fromPublicId.equals(from)) return false;
+            return engine.onMakerNotice(hash, from, j.optString("notice"), j.optString("reason"));
+        } catch (Exception e) { return false; }
     }
 
     // ------------------------------------------------------------------ reads
@@ -317,11 +363,13 @@ public final class DoorHost {
                 changed();
                 if (!plan.sell) {
                     // Hand the maker our hashlock (sealed to its comms id) so it can find the USDT lock — essential, not cosmetic.
-                    if (leg.maker.commsPublicId != null && !leg.maker.commsPublicId.isEmpty())
+                    if (leg.maker.commsPublicId != null && !leg.maker.commsPublicId.isEmpty()) {
+                        engine.noteTakeSent(hash, leg.maker.commsPublicId);   // the only sender whose notice we accept
                         SwapTake.send(node, crypto.get(market), leg.maker.commsPublicId, ids.get(market).publicId(), hash, market, new CommsTransport.SendCb() {
                             @Override public void onSent(String txpowid) {}
                             @Override public void onFailed(String message) { Notifier.alert(app, "AtomiX", "USDT locked, but telling the maker failed (" + message + ") — swap " + hash); }
                         });
+                    }
                     if (busy) fireLeg(market, plan, to, i + 1, ok + 1, pr);   // a stalled-then-late leg still notifies its maker, but starts nothing new
                     return;
                 }

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.83 app/src/main/java/com/eurobuddha/minimaapi/ethereum/EthereumTransactions.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.84 app/src/main/java/com/eurobuddha/minimaapi/ethereum/EthereumTransactions.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.minimaapi.ethereum;
 
 import android.content.Context;

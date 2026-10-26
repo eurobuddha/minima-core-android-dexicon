@@ -29,6 +29,25 @@ public class RelayClientTest {
         return Envelopes.order(me, "MINIMA/MxUSD", side, price, amount, Arrays.asList(COIN), new ArrayList<>(), ADDR, id, seq, expiry);
     }
 
+    /** A cancel that arrives after its own 10-minute expiry (app was in the background) must still kill the live
+     *  copy it supersedes; dropping it as "expired" left a ghost order on the book for the live copy's 23 h. */
+    @Test public void lateExpiredCancelStillRemovesTheLiveOrder() {
+        String live = ord(maker, "0x0000000000000009", 1, "sell", "0.02", "100", TestIds.NOW + 23 * 3600);
+        String cancel = ord(maker, "0x0000000000000009", 2, "sell", "0.02", "0", TestIds.NOW + 600);
+        String staleLive = ord(maker, "0x0000000000000009", 1, "sell", "0.02", "100", TestIds.NOW + 1);
+        final long[] now = {TestIds.NOW};
+        RelayClient c = new RelayClient(null, "MINIMA/MxUSD", () -> now[0]);
+        assertTrue(c.applyOrderStrict(live));
+        assertEquals(1, c.orders(null).size());
+        now[0] = TestIds.NOW + 601;                       // back from the background after the cancel expired
+        assertTrue("expired newer cancel supersedes", c.applyOrderStrict(cancel));
+        assertEquals("ghost gone", 0, c.orders(null).size());
+        assertFalse("an older expired copy changes nothing", c.applyOrderStrict(staleLive));
+        int k = cancel.indexOf("\"sig\":\"0x") + 9;
+        String forged = cancel.substring(0, k) + (cancel.charAt(k) == '0' ? '1' : '0') + cancel.substring(k + 1);
+        try { c.applyOrderStrict(forged); fail("expired envelopes are still signature-checked"); } catch (RuntimeException expected) {}
+    }
+
     @Test public void unionBySeqCancelExpiryAndFanOut() {
         String A1 = ord(maker, "0x0000000000000001", 1, "sell", "0.02", "100", TestIds.NOW + 3600);
         String A2 = ord(maker, "0x0000000000000001", 2, "sell", "0.019", "90", TestIds.NOW + 3600);   // edit

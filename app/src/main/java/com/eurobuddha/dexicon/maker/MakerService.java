@@ -64,6 +64,8 @@ public class MakerService extends Service {
     private static final String CH_FG = "dexicon_maker";
     private static final int FG_ID = 7601;
     public static final String ACTION_HEARTBEAT = "com.eurobuddha.dexicon.HEARTBEAT";
+    /** SAVE / STOP on the market maker: reconcile the ladder NOW, not after the inbox long-poll comes back. */
+    public static final String ACTION_LADDER = "com.eurobuddha.dexicon.LADDER";
     /** Local broadcast (setPackage) telling the Activity that orders / fills changed. */
     public static final String ACTION_CHANGED = "com.eurobuddha.dexicon.CHANGED";
     private static final long TICK_MS = 10_000, HOLD_SECONDS = 8, REREGISTER_GAP_MS = 30_000, LOCK_MS = 180_000;
@@ -101,6 +103,7 @@ public class MakerService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (started && intent != null && ACTION_HEARTBEAT.equals(intent.getAction())) { acquireTimedWakelock(); h.removeCallbacks(tick); h.post(tick); }
+        if (started && intent != null && ACTION_LADDER.equals(intent.getAction())) h.post(this::kickLadder);
         return START_STICKY;
     }
 
@@ -146,14 +149,18 @@ public class MakerService extends Service {
             h.removeCallbacks(this);
             h.postDelayed(this, TICK_MS);
             if (!started || ticking) return;
+            // DOORS settlement (AtomiX taker engine): claims, ETH withdraws, refunds and forwards, ~every 90 s, app closed or
+            // not — and paired or not: unpaired it still refunds/withdraws the ETH legs, which need only Ethereum.
+            if (doorTicks++ % 9 == 0) try {
+                com.eurobuddha.dexicon.doors.DoorHost dh = com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this);
+                if (paired) dh.poll(); else dh.pollEthOnly();
+            } catch (RuntimeException e) { log("doors poll: " + e); }
             if (!paired) {
                 long now = System.currentTimeMillis();
                 if (now - lastRegisterMs >= REREGISTER_GAP_MS) { lastRegisterMs = now; node.reRegister(); }
                 return;
             }
             ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
-            // DOORS settlement (AtomiX taker engine): claims, ETH withdraws, refunds and forwards, ~every 90 s, app closed or not.
-            if (doorTicks++ % 9 == 0) try { com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this).poll(); } catch (RuntimeException e) { log("doors poll: " + e); }
             if (me == null) { deriveIdentity(); return; }
             List<String> relays = RelayStore.load(MakerService.this);
             Tokens.setMxUsd(RelayStore.mxusdOverride(MakerService.this));
@@ -175,9 +182,16 @@ public class MakerService extends Service {
     /** The inbox is a CONTINUOUS long-poll (like the MiniDapp's inboxLoop): a take or a maker's answer is handled the
      *  moment it lands, not at the next 10 s tick. TICK_MS stays as the watchdog and the pace when relays fail. */
     private boolean againNow;
-    private void tickDone() { ticking = false; if (againNow) h.post(tick); }
+    private void tickDone() { ticking = false; chainBusy = false; if (againNow) h.post(tick); }
+
+    /** Takes are being co-signed or the coin refresh runs: the ladder must wait for them (its pass follows in the same
+     *  chain); otherwise it runs right now. */
+    private boolean chainBusy;
+    private void kickLadder() { if (ladder != null && paired && !chainBusy) ladder.pass(this::changed); }
 
     private void onInbox(List<Envelope> msgs) {
+        if (ladder != null && ladder.running()) { ladder.afterPass(() -> onInbox(msgs)); return; }   // a kicked pass is mid-flight
+        chainBusy = true;
         List<JSONObject> takes = new ArrayList<>();
         for (Envelope m : msgs) {
             DexIdentity.Opened o = me.open(m.blob);
@@ -190,14 +204,16 @@ public class MakerService extends Service {
         }
         processTakes(takes, 0, () -> {
             if (ticks % 3 == 0) settleFills();
-            ladder.pass(() -> {   // the market maker reconciles between takes and the coin refresh, never alongside them
+            ladder.pass(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
+                for (String l : rep.lines) log(l);
+                if (rep.fixed > 0) changed();
                 if (ticks % 6 == 0) refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
                     if (e != null) log("refresh failed: " + e);
                     else if (n > 0 || relocked != null) { log("refresh republished " + n + " order(s)" + (relocked != null ? "; relocked stale backing coins " + relocked : "")); changed(); }
                     tickDone();
                 }));
                 else tickDone();
-            });
+            }));
         });
     }
 

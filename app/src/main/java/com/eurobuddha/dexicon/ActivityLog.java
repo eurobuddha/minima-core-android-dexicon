@@ -96,7 +96,7 @@ public final class ActivityLog {
             default: return s;
         }
     }
-    private static String waiting(JSONObject a, long chainBlock) {
+    static String waiting(JSONObject a, long chainBlock) {
         long post = a.optLong("postBlock", 0), t = tip(a, chainBlock);
         long gone = post > 0 && t > post ? t - post : 0;
         return "in the node's mempool, waiting for a block" + (gone > 0 ? " (" + gone + (gone == 1 ? " block" : " blocks") + " since posting)" : "");

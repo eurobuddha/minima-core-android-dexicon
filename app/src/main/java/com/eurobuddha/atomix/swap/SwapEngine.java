@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.83 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.84 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -215,6 +215,7 @@ public final class SwapEngine {
     /** One-time notify when the mxUSDT counter-leg can't be locked (insufficient / too-fragmented) — replaces the
      *  old silent return so an unfillable deal is visible to the LP instead of a mystery hang. */
     private void declineCpNote(String hash, String reason) {
+        recordDecline(hash, reason, false);   // capacity/coins/busy: the maker keeps retrying
         if (!cpNoted.add(hash)) return;
         ui.post(() -> notifier.notify("Can't lock your " + com.eurobuddha.atomix.TradingContext.active().coinLabel, reason));
     }
@@ -376,10 +377,240 @@ public final class SwapEngine {
     }
     public static void endConsolidate() { synchronized (CP_LOCKING) { inflight.remove("consolidate"); } }
 
+    // ---- wallet keeper (maker): keep the active token's coins inside the band the engine can trade with ----
+    // Every sell take lands as a new coin, so a busy maker fragments until the safe coin read (MinimaHtlc
+    // maxSafeCoinRows) refuses and EVERY buy is declined (live 2026-10-26: a 56-coin MxUSD maker). Merge well before
+    // that; split when one coin would serialise concurrent takes. Same commands as the manual Wallet tools. A split
+    // makes 10 coins and merging stops at 30, so the two can never chase each other. Held under beginConsolidate,
+    // which every lock path already treats as "wallet busy, retry next cycle".
+    static final int KEEP_MERGE_ABOVE = 30, KEEP_MERGE_ABOVE_MINIMA = 120, KEEP_MERGE_INPUTS = 20;
+    static final int KEEP_SPLIT_BELOW = 2, KEEP_SPLIT_INTO = 10;
+    private static final long KEEP_GAP_MS = 120_000;
+    private static volatile long keepLastMs = 0;   // static: the Activity and Service engines share one wallet
+
+    /** Pure: "merge", "split" or null (wallet fine, or something still settling). */
+    static String keepPlan(int coins, String sendable, String unconfirmed, boolean minimaToken) {
+        java.math.BigDecimal send, unconf;
+        try { send = new java.math.BigDecimal(sendable); unconf = new java.math.BigDecimal(unconfirmed); }
+        catch (Exception e) { return null; }
+        if (unconf.signum() != 0) return null;                                   // only ever act on a settled wallet
+        if (coins > (minimaToken ? KEEP_MERGE_ABOVE_MINIMA : KEEP_MERGE_ABOVE)) return "merge";
+        if (coins < KEEP_SPLIT_BELOW && send.compareTo(java.math.BigDecimal.valueOf(KEEP_SPLIT_INTO)) >= 0) return "split";
+        return null;
+    }
+
+    /** Maker only (a published order). At most one merge/split in flight; never waits for it. */
+    void keepWallet() {
+        if (myOrder == null || System.currentTimeMillis() - keepLastMs < KEEP_GAP_MS) return;
+        final com.eurobuddha.atomix.TradingContext market = com.eurobuddha.atomix.TradingContext.active();
+        minima.tokenBalance(b -> {
+            final String plan = keepPlan(b.coins, b.sendable, b.unconfirmed, market == com.eurobuddha.atomix.TradingContext.MINIMA);
+            if (plan == null || !beginConsolidate()) return;
+            keepLastMs = System.currentTimeMillis();
+            final String why = "merge".equals(plan)
+                    ? b.coins + " coins (keeping it at or below " + (market == com.eurobuddha.atomix.TradingContext.MINIMA ? KEEP_MERGE_ABOVE_MINIMA : KEEP_MERGE_ABOVE) + ")"
+                    : b.coins + " coin holding " + b.sendable + " (two takes cannot share one coin)";
+            final String title = ("merge".equals(plan) ? "Merging " : "Splitting ") + market.coinLabel + " coins";
+            SwapLog.d("wallet keeper: " + plan + " — " + why);
+            MinimaHtlc.PostCb cb = new MinimaHtlc.PostCb() {
+                @Override public void ok(String txpowid) {
+                    endConsolidate(); keepLastMs = System.currentTimeMillis();
+                    SwapLog.d("wallet keeper " + plan + " posted " + txpowid);
+                    ui.post(() -> notifier.notify(title, why + ". Coins stay in your wallet." + (txpowid == null || txpowid.isEmpty() ? "" : " txpow " + txpowid)));
+                }
+                @Override public void err(String msg) {
+                    endConsolidate(); keepLastMs = System.currentTimeMillis();
+                    SwapLog.w("wallet keeper " + plan + " failed: " + msg);
+                    ui.post(() -> notifier.notify(title + " failed", String.valueOf(msg)));
+                }
+            };
+            if ("merge".equals(plan)) minima.consolidateCoins(KEEP_MERGE_INPUTS, cb);
+            else minima.splitCoins(KEEP_SPLIT_INTO, b.sendable, cb);
+        }, e -> { });
+    }
+
     /** A taker told us (via the sealed handshake) the hashlock of a USDT lock addressed to us. We discover it
      *  by deterministic contractId via getContract (free-RPC-safe) instead of eth_getLogs, then respond. */
-    public void addIncomingHashlock(String hash) {
-        if (hash != null && !hash.isEmpty()) { incoming.add(MinimaHtlc.normKey(hash)); SwapLog.d("RX buy handshake hash=" + hash); }
+    public void addIncomingHashlock(String hash) { addIncomingHashlock(hash, null); }
+    /** {@code fromPublicId} = the taker's comms id from the sealed handshake: where a decline notice goes back to. */
+    public void addIncomingHashlock(String hash, String fromPublicId) {
+        if (hash == null || hash.isEmpty()) return;
+        incoming.add(MinimaHtlc.normKey(hash)); SwapLog.d("RX buy handshake hash=" + hash);
+        if (fromPublicId != null && !fromPublicId.isEmpty()) takerOf.put(MinimaHtlc.normKey(hash), fromPublicId);
+    }
+
+    // ============================================================ swap-status visibility (0.1.84)
+    // Live 2026-10-26: a maker declined a buy ("too many coins") in silence; the taker saw "started" for two hours
+    // and could neither learn why nor act. Now the maker records and SENDS every decline reason (sealed to the
+    // taker), the taker gets its deadlines + a timeout notice, and a refund can be asked for by hand.
+
+    /** Host-supplied sender of a sealed maker→taker notice (it owns the comms identity + node). */
+    public interface NoticeSink { void send(String toPublicId, String hash, String state, String reason,
+                                           com.eurobuddha.atomix.TradingContext market); }
+    public static final String NOTICE_RETRYING = "retrying", NOTICE_DECLINED = "declined";
+    private static final int MAX_NOTICES_PER_HASH = 3;            // each notice is a signed send — keep it bounded
+    private final Map<String,String> takerOf = Collections.synchronizedMap(new HashMap<>());
+    private final Map<String,Integer> noticesSent = Collections.synchronizedMap(new HashMap<>());
+    private volatile NoticeSink noticeSink;
+    private volatile int lastMinimaBlock = 0;
+    public void setNoticeSink(NoticeSink sink) { this.noticeSink = sink; }
+
+    /** Maker: record WHY a buy was not locked, once per (hash, reason), and tell the taker. {@code fin} = never. */
+    void recordDecline(String hash, String reason, boolean fin) {
+        if (hash == null || hash.isEmpty() || reason == null) return;
+        String k = MinimaHtlc.normKey(hash);
+        for (SwapDb.Event e : db.getEvents(k)) if (SwapDb.EV_DECLINED.equals(e.event) && reason.equals(e.note)) return;
+        SwapLog.w("buy " + hash + " not locked: " + reason);
+        db.logEvent(k, SwapDb.EV_DECLINED, "", "", reason);
+        String to = takerOf.get(k); NoticeSink sink = noticeSink;
+        Integer n = noticesSent.get(k);
+        if (to == null || sink == null || (n != null && n >= MAX_NOTICES_PER_HASH)) return;
+        noticesSent.put(k, n == null ? 1 : n + 1);
+        final com.eurobuddha.atomix.TradingContext market = com.eurobuddha.atomix.TradingContext.active();
+        ui.post(() -> { try { sink.send(to, hash, fin ? NOTICE_DECLINED : NOTICE_RETRYING, reason, market); } catch (RuntimeException ignore) { } });
+    }
+
+    /** Taker: remember which maker comms id I told about this lock — the only sender whose notice I accept. */
+    public void noteTakeSent(String hash, String makerPublicId) {
+        if (hash == null || makerPublicId == null || makerPublicId.isEmpty()) return;
+        String k = MinimaHtlc.normKey(hash);
+        if (!db.hasEvent(k, SwapDb.EV_TAKE_SENT)) db.logEvent(k, SwapDb.EV_TAKE_SENT, "", "", makerPublicId);
+    }
+
+    /** Taker: a sealed notice arrived. Accepted only for MY swap, from the maker I notified. Informational only —
+     *  it never changes what the engine does with funds. Returns true when it was new. */
+    public boolean onMakerNotice(String hash, String fromPublicId, String state, String reason) {
+        if (hash == null || fromPublicId == null) return false;
+        String k = MinimaHtlc.normKey(hash);
+        SwapDb.Swap s = db.getSwap(k);
+        if (s == null || !"INITIATOR".equals(s.role)) return false;
+        String maker = null;
+        for (SwapDb.Event e : db.getEvents(k)) if (SwapDb.EV_TAKE_SENT.equals(e.event)) maker = e.note;
+        if (maker == null || !maker.equals(fromPublicId)) return false;
+        String st = NOTICE_DECLINED.equals(state) ? NOTICE_DECLINED : NOTICE_RETRYING;
+        String why = cleanReason(reason);
+        String note = st + "|" + why;
+        for (SwapDb.Event e : db.getEvents(k)) if (SwapDb.EV_MAKER_NOTICE.equals(e.event) && note.equals(e.note)) return false;
+        db.logEvent(k, SwapDb.EV_MAKER_NOTICE, "", "", note);
+        SwapLog.w("maker notice " + hash + ": " + note);
+        ui.post(() -> {
+            notifier.notify(NOTICE_DECLINED.equals(st) ? "Maker declined your swap" : "Maker is retrying your swap",
+                    why + (NOTICE_DECLINED.equals(st) ? " Your lock refunds automatically at its timelock." : ""));
+            notifier.onSwapsChanged();
+        });
+        return true;
+    }
+    static String cleanReason(String r) {
+        String t = r == null ? "" : r.replaceAll("[\\p{Cntrl}]", " ").trim();
+        return t.length() > 240 ? t.substring(0, 240) : t;
+    }
+
+    /** When things happen for a swap I initiated. Unix seconds for an ETH-first lock, blocks for a Minima-first one. */
+    public static final class Deadlines {
+        public final boolean blocks; public final long respondBy, refundAt;
+        Deadlines(boolean blocks, long respondBy, long refundAt) { this.blocks = blocks; this.respondBy = respondBy; this.refundAt = refundAt; }
+    }
+    public static Deadlines deadlines(SwapDb.Swap s) {
+        if (s == null || !"INITIATOR".equals(s.role) || s.myTimelock <= 0) return null;
+        return s.myLegIsMinima ? new Deadlines(true, s.myTimelock - CP_BLOCKS_CHECK, s.myTimelock)
+                               : new Deadlines(false, s.myTimelock - CP_SECS_CHECK, s.myTimelock);
+    }
+    public int lastMinimaBlock() { return lastMinimaBlock; }
+
+    /** What a swap card says about a swap I started — one pure derivation shared by every host's card. */
+    public static final class StatusView {
+        public String deadline = "";      // where we are against the maker / refund deadlines
+        public String notice = "";        // the maker's latest sealed notice, if any
+        public boolean noticeFinal;       // the maker said it will not lock
+        public String refundTx = "";      // my refund broadcast, full tx hash
+        public boolean refundOpen;        // the contract / chain accepts my refund now
+        public String refundLabel = "";   // the button text ("" = no button)
+    }
+    public static StatusView statusView(SwapDb.Swap s, java.util.List<SwapDb.Event> events, long nowUnix, int block) {
+        StatusView v = new StatusView();
+        if (events != null) for (SwapDb.Event e : events) {   // newest first
+            if (SwapDb.EV_MAKER_NOTICE.equals(e.event) && v.notice.isEmpty() && e.note != null) {
+                int bar = e.note.indexOf('|');
+                v.noticeFinal = bar > 0 && NOTICE_DECLINED.equals(e.note.substring(0, bar));
+                v.notice = bar >= 0 ? e.note.substring(bar + 1) : e.note;
+            }
+            if (SwapDb.EV_REFUND_SENT.equals(e.event) && v.refundTx.isEmpty() && e.note != null) v.refundTx = e.note;
+        }
+        Deadlines d = deadlines(s);
+        if (d == null || s.status == null || SwapDb.ST_COMPLETE.equals(s.status) || SwapDb.ST_REFUNDED.equals(s.status)) return v;
+        long now = d.blocks ? block : nowUnix;
+        if (now <= 0) return v;
+        v.refundOpen = now >= d.refundAt;
+        boolean waiting = SwapDb.ST_STARTED.equals(s.status);
+        if (v.refundOpen) v.deadline = v.refundTx.isEmpty() ? "Refund is open — it runs automatically; tap Refund now to send it at once." : "Refund sent — waiting for it to confirm.";
+        else if (waiting && now < d.respondBy) v.deadline = "Maker must lock by " + when(d, d.respondBy) + " (" + left(d, d.respondBy - now) + ").";
+        else if (waiting) v.deadline = "Maker did not lock in time. Your refund opens at " + when(d, d.refundAt) + " (" + left(d, d.refundAt - now) + ") and runs automatically, app open or not.";
+        if (waiting || v.refundOpen) v.refundLabel = v.refundOpen ? "Refund now" : "Refund at " + when(d, d.refundAt);
+        return v;
+    }
+    private static String when(Deadlines d, long at) { return d.blocks ? "block " + at : clock(at); }
+    private static String left(Deadlines d, long n) {
+        long mins = d.blocks ? (n * 50 + 59) / 60 : (n + 59) / 60;
+        return (d.blocks ? n + " blocks, about " : "in ") + mins + " min";
+    }
+
+    /** Taker: once the maker's respond-by deadline passes with no counter-leg, say so ONCE (and when the refund opens). */
+    void noteTimeouts(int minimaBlock) {
+        long now = ethNowSoft();
+        for (SwapDb.Swap s : db.allSwaps()) {
+            if (!SwapDb.ST_STARTED.equals(s.status)) continue;
+            Deadlines d = deadlines(s);
+            if (d == null || (d.blocks ? minimaBlock : now) < d.respondBy || db.hasEvent(s.hash, SwapDb.EV_TIMEOUT)) continue;
+            db.logEvent(s.hash, SwapDb.EV_TIMEOUT, "", "", "");
+            final String when = d.blocks ? "block " + d.refundAt : clock(d.refundAt);
+            SwapLog.w("maker timeout " + s.hash + " — refund opens " + when);
+            ui.post(() -> { notifier.notify("Maker did not respond in time",
+                    "Your " + s.sellAmount + " " + s.sellToken + " refunds automatically after " + when + ", app open or not. Swap " + s.hash);
+                    notifier.onSwapsChanged(); });
+        }
+    }
+    static String clock(long unix) {
+        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("HH:mm:ss z", java.util.Locale.ROOT);
+        return f.format(new java.util.Date(unix * 1000));
+    }
+
+    /** User asked for the refund now. Answers (on the UI thread) exactly why not yet; otherwise clears the retry
+     *  window and runs a settlement pass at once — the same refund path the background service runs. */
+    public void refundNow(String hash, java.util.function.Consumer<String> answer) {
+        submitIo(() -> { final String msg = refundNowBlocking(hash); ui.post(() -> answer.accept(msg)); });
+    }
+    String refundNowBlocking(String hash) {
+        SwapDb.Swap s = hash == null ? null : db.getSwap(MinimaHtlc.normKey(hash));
+        if (s == null) return "No such swap on this device.";
+        if (SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_COMPLETE.equals(s.status)) return "This swap is already " + s.status.toLowerCase(java.util.Locale.ROOT) + ".";
+        Deadlines d = deadlines(s);
+        if (d == null) return "Only a swap you started has a refund of your own lock.";
+        if (d.blocks) {
+            int b = lastMinimaBlock;
+            if (b <= 0 || b < d.refundAt) return "Your lock refunds at block " + d.refundAt
+                    + (b > 0 ? " (" + (d.refundAt - b) + " blocks, about " + ((d.refundAt - b) * 50 / 60) + " min, from now)." : ".") + " It then refunds automatically.";
+        } else {
+            long now = ethNowSoft();
+            if (now < d.refundAt) return "The Ethereum contract only accepts a refund after " + clock(d.refundAt) + " ("
+                    + ((d.refundAt - now + 59) / 60) + " min from now). It then refunds automatically, app open or not.";
+        }
+        ethAttempt.remove("refundE:" + s.hash);
+        if (ready()) poll(); else pollEthOnly();
+        return "Refunding now — you'll get a notification with the transaction id.";
+    }
+
+    /** Settlement with no Minima node (unpaired / node app closed): an ETH refund or withdraw needs only Ethereum. */
+    public void pollEthOnly() {
+        if (rpc == null || net == null || !wallet.ready()) return;
+        submitIo(() -> {
+            try {
+                EthHtlc eth = new EthHtlc(rpc, wallet.creds(), net);
+                for (SwapDb.Swap s : db.allSwaps()) {
+                    if (SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_COMPLETE.equals(s.status) || SwapDb.ST_ERROR.equals(s.status)) continue;
+                    try { checkEthContractFor(eth, s, myEth()); } catch (Exception e) { SwapLog.w("ethOnly " + s.hash + ": " + e.getMessage()); }
+                }
+            } catch (Exception e) { SwapLog.w("ethOnly: " + e.getMessage()); }
+        });
     }
     public SwapDb db() { return db; }
     public void shutdown() {
@@ -758,7 +989,10 @@ public final class SwapEngine {
         if (!ready()) return;
         minima.currentBlock(new MinimaHtlc.BlockCb() {
             @Override public void ok(int block) {
+                lastMinimaBlock = block;
                 runMinimaChecks(block);
+                keepWallet();
+                noteTimeouts(block);
                 submitIo(() -> runEthChecks(block));
                 // H2: the market-history collector scans the WHOLE shared HTLC address (heavy) on the node's
                 // SINGLE command thread. Run it at most every MARKET_MIN_INTERVAL_MS, and SKIP it entirely while
@@ -1259,7 +1493,7 @@ public final class SwapEngine {
             if (c == null) { SwapLog.d("buy " + hash + ": getContract NULL (USDT lock not visible on RPC yet) — retry"); return false; }
             if (c.withdrawn || c.refunded) return true;                   // terminal — stop polling it
             if (c.receiver != null && c.receiver.equalsIgnoreCase(myEth)) { SwapLog.d("buy " + hash + ": USDT lock visible, receiver=me → evaluate"); checkCanCollectEth(eth, c, minimaBlock); }
-            else SwapLog.w("buy " + hash + ": USDT lock receiver=" + (c.receiver == null ? "null" : c.receiver) + " ≠ my eth " + myEth + " (took a stale/foreign order?)");
+            else recordDecline(hash, "Maker declined: your USDT lock pays " + (c.receiver == null ? "nobody" : c.receiver) + ", not this maker's " + myEth + ".", true);
         } catch (Exception ignore) {}
         return false;
     }
@@ -1357,7 +1591,12 @@ public final class SwapEngine {
         if (!ethGasAffordable(hash, EthHtlc.GAS_REFUND)) { inflight.remove("refundE:" + hash); return; }
         try {
             markEthAttempt("refundE:" + hash);
-            eth.refund(contractId);
+            final String tx = eth.refund(contractId);
+            SwapLog.w("refund SENT " + hash + " tx=" + tx);
+            if (tx != null && !tx.isEmpty() && !db.hasEvent(hash, SwapDb.EV_REFUND_SENT)) {
+                db.logEvent(hash, SwapDb.EV_REFUND_SENT, "ETH", "", tx);
+                ui.post(() -> { notifier.notify("Refund sent", "Returning your tokens to " + myEth() + " — tx " + tx); notifier.onSwapsChanged(); });
+            }
         } catch (Exception e) {
             // pre-mine failure → nothing committed; retry next cycle after the window
             SwapLog.w("refundE ERR " + hash + ": " + e.getMessage() + " (retries after the window)");
@@ -1537,6 +1776,7 @@ public final class SwapEngine {
 
     /** Tell the maker (once) why a handshake-announced buy was declined, so a reject isn't silent. */
     private void declineNote(String hash, String reason) {
+        recordDecline(hash, "Maker declined: " + reason, true);
         if (!incoming.contains(MinimaHtlc.normKey(hash)) || !declined.add(MinimaHtlc.normKey(hash))) return;
         ui.post(() -> notifier.notify("Buy request declined", reason));
     }
@@ -1644,6 +1884,7 @@ public final class SwapEngine {
                 attempt.release();
                 if (!report) return;
                 SwapLog.w("Buy " + hash + " counter-leg declined: " + e);
+                if (e != null) recordDecline(hash, "Maker wallet: " + e + " — it consolidates automatically and retries.", false);
                 if (e != null && e.startsWith(MinimaHtlc.ERR_TOO_MANY_COINS) && shouldNoteFragmentation())
                     declineCpNote(hash, e + ". Open Wallet → Consolidate before accepting buys. Deal: " + hash);
             });

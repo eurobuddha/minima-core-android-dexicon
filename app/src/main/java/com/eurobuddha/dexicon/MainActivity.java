@@ -69,7 +69,7 @@ public class MainActivity extends AppCompatActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6;
+    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6;
     private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "ATOMIX", "RELAYS"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -107,10 +107,12 @@ public class MainActivity extends AppCompatActivity {
     private AssetsTab assetsTab;
     private RelaysTab relaysTab;
     private DoorsTab doorsTab;
-    private FrameLayout content;
+    private LinearLayout content;          // the visible page(s): one, or two side by side on a wide screen
+    private ScrollView[] panes;
     private LinearLayout tabBar;
     private TextView pairPill, blockPill, stageTv;
-    private int tab = TAB_TRADE;
+    private int tab = TAB_TRADE, tab2 = -1;   // tab2: the right-hand page when two are open side by side (wide only)
+    private int tabsDown; private int heldTab = -1; private boolean pairMade;
 
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
@@ -131,7 +133,7 @@ public class MainActivity extends AppCompatActivity {
                 if (liveActId != null) repaintHeader();
                 followTake();
                 if (run != null && trade != null) trade.paintCtaPublic();
-                if (tab == TAB_ACTIVITY && ++liveTicks % 5 == 0) activityTab.render();
+                if ((tab == TAB_ACTIVITY || tab2 == TAB_ACTIVITY) && ++liveTicks % 5 == 0) activityTab.render();
             }
             ui.postDelayed(this, 1000);
         }
@@ -294,7 +296,7 @@ public class MainActivity extends AppCompatActivity {
     List<MyOrder> myOrders() { return db.myOrders(); }
     boolean isMine(Envelope e) { return me != null && e.signPk.equalsIgnoreCase(me.signPkHex()); }
 
-    void toast(String s) { Toast.makeText(this, here(s), Toast.LENGTH_SHORT).show(); }
+    public void toast(String s) { Toast.makeText(this, here(s), Toast.LENGTH_SHORT).show(); }
     /** The vendored PandaDEX layer (verbatim) tells you to consolidate "in MinimaCore"; Dexicon has it on ASSETS. */
     static String here(String s) {
         return s == null ? null : s.replace("consolidate this token in MinimaCore", "consolidate this token on ASSETS › CONSOLIDATE")
@@ -302,7 +304,7 @@ public class MainActivity extends AppCompatActivity {
                 .replace("consolidate coins and retry", "consolidate on ASSETS and retry");
     }
     void setStage(String s) { stage = s == null ? "" : here(s); repaintHeader(); }
-    void copy(String label, String value) {
+    public void copy(String label, String value) {
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (cm == null || value == null || value.isEmpty()) return;
         cm.setPrimaryClip(ClipData.newPlainText(label, value));   // the COMPLETE value, never an abbreviation
@@ -890,7 +892,7 @@ public class MainActivity extends AppCompatActivity {
         header.addView(verPill, vp);
         TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾", Design.SURFACE2(), Design.DIM());
         themePill.setMinWidth(Design.dp(this, 48)); themePill.setMinHeight(Design.dp(this, 48));
-        themePill.setOnClickListener(v -> { Design.toggle(this); if (trade != null) trade.close(); setContentView(buildChrome()); selectTab(tab); });
+        themePill.setOnClickListener(v -> { Design.toggle(this); if (trade != null) trade.close(); setContentView(buildChrome()); showPages(tab, tab2); });
         Design.pressable(themePill);
         header.addView(themePill);
         root.addView(header);
@@ -912,13 +914,16 @@ public class MainActivity extends AppCompatActivity {
         nodeRow.addView(blockPill, bp);
         root.addView(nodeRow);
 
-        ScrollView scroller = new ScrollView(this);
-        content = new FrameLayout(this);
-        scroller.addView(content, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
-        root.addView(scroller, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+        content = new LinearLayout(this);
+        root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
         trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this);
-        for (View v : tabViews()) { v.setVisibility(View.GONE); content.addView(v); }
+        View[] tv = tabViews();
+        panes = new ScrollView[tv.length];   // each page scrolls on its own, so two side by side never drag each other
+        for (int i = 0; i < tv.length; i++) {
+            panes[i] = new ScrollView(this);
+            panes[i].addView(tv[i], new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        }
 
         stageTv = new TextView(this);
         stageTv.setTextSize(10f); stageTv.setTypeface(Design.mono()); stageTv.setTextColor(Design.TEXT());
@@ -939,23 +944,62 @@ public class MainActivity extends AppCompatActivity {
             // Seven tabs: a narrow phone (and the Fold's cover screen) shrinks the labels to fit (min 6sp); wide screens keep 10sp.
             androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(t, 6, 10, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
             t.setPadding(0, Design.dp(this, 11), 0, Design.dp(this, 11)); t.setMinHeight(Design.dp(this, 48));
-            t.setOnClickListener(v -> selectTab(idx));
+            // Wide screen (owner 2026-10-26): one tap = that page alone; a second finger on another tab while one is held
+            // (or both tapped together) = the two pages side by side, first touched on the left.
+            t.setOnTouchListener((v, e) -> {
+                int a = e.getActionMasked();
+                if (a == android.view.MotionEvent.ACTION_DOWN) {
+                    if (tabsDown == 0) pairMade = false;
+                    tabsDown++;
+                    if (heldTab >= 0 && heldTab != idx && com.eurobuddha.dexicon.ui.Wide.on(this)) { pairMade = true; showPages(heldTab, idx); }
+                    else if (heldTab < 0) heldTab = idx;
+                } else if (a == android.view.MotionEvent.ACTION_UP || a == android.view.MotionEvent.ACTION_CANCEL) {
+                    tabsDown = Math.max(0, tabsDown - 1);
+                    if (heldTab == idx || tabsDown == 0) heldTab = -1;
+                }
+                return false;
+            });
+            t.setOnClickListener(v -> { if (!pairMade) selectTab(idx); });
             tabBar.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         }
         root.addView(tabBar);
         return root;
     }
 
-    private void selectTab(int idx) {
-        tab = idx;
+    /** Switch to a tab (e.g. ATOMIX → "Finished swaps are in History ›"). */
+    public void showTab(int idx) { selectTab(idx); }
+
+    private void selectTab(int idx) { showPages(idx, -1); }
+
+    /** Show page {@code left} alone, or with {@code right} beside it (wide screens only). */
+    void showPages(int left, int right) {
+        if (right == left || !com.eurobuddha.dexicon.ui.Wide.on(this)) right = -1;
+        tab = left; tab2 = right;
+        content.removeAllViews();
+        int gap = Design.dp(this, 1);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
+        content.addView(panes[left], lp);
+        if (right >= 0) {
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f);
+            rp.leftMargin = gap;
+            content.addView(panes[right], rp);
+        }
         View[] views = tabViews();
-        for (int i = 0; i < views.length; i++) views[i].setVisibility(i == idx ? View.VISIBLE : View.GONE);
+        for (int i = 0; i < views.length; i++) views[i].setVisibility(i == left || i == right ? View.VISIBLE : View.GONE);
+        trade.setSolo(right < 0);
         for (int i = 0; i < tabBar.getChildCount(); i++) {
             TextView t = (TextView) tabBar.getChildAt(i);
-            t.setTextColor(i == idx ? Design.ON_ACCENT() : Design.DIM());
-            t.setBackground(i == idx ? Design.roundBg(this, Design.ACCENT(), 10) : null);
+            boolean on = i == left || i == right;
+            t.setTextColor(on ? Design.ON_ACCENT() : Design.DIM());
+            t.setBackground(on ? Design.roundBg(this, Design.ACCENT(), 10) : null);
         }
         repaint();
+    }
+
+    /** Folding the phone closes the second page. */
+    @Override public void onConfigurationChanged(android.content.res.Configuration c) {
+        super.onConfigurationChanged(c);
+        if (tabBar != null && tab2 >= 0 && !com.eurobuddha.dexicon.ui.Wide.on(this)) selectTab(tab);
     }
 
     private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab}; }
@@ -990,10 +1034,15 @@ public class MainActivity extends AppCompatActivity {
         stageTv.setVisibility(line.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
-    void repaint() {
+    public void repaint() {
         if (closed || trade == null) return;
         repaintHeader();
-        switch (tab) {
+        render(tab);
+        if (tab2 >= 0) render(tab2);
+    }
+
+    private void render(int t) {
+        switch (t) {
             case TAB_TRADE: trade.render(); break;
             case TAB_ACTIVITY: activityTab.render(); break;
             case TAB_ORDERS: ordersTab.render(); break;
