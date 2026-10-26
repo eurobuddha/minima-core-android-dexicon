@@ -25,7 +25,8 @@ public class MinimaAPIReceive extends BroadcastReceiver {
         String action = zIntent.getAction();
 
         //Check is a Response message
-        if (Objects.equals(action, MinimaAPIMessages.MINIMA_API_RESPONSE)) {
+        String prefix = MinimaAPIMessages.prefixOfAction(action);
+        if (prefix != null && Objects.equals(action, MinimaAPIMessages.key(prefix, "RESPONSE"))) {
 
             //Process the response..
             mMinimaAPI.ResponseReceived(zIntent);

@@ -45,4 +45,47 @@ public class MinimaAPIMessages {
     public static final String MINIMA_API_FILE_PATH             = MINIMA_BASE_CLASS +".FILE_PATH";
     public static final String MINIMA_API_FILE_NEWPATH          = MINIMA_BASE_CLASS +".FILE_NEWPATH";
     public static final String MINIMA_API_FILE_URI              = MINIMA_BASE_CLASS +".FILE_URI";
+
+    /**
+     * EVERY CORE A COMPANION MAY TALK TO
+     *
+     * The constants above are the bears' dialect. The official Minima Core speaks the same
+     * protocol under its own package prefix, so each node is {package, action/extra prefix}.
+     */
+    public static final String BLOCK_PACKAGE        = "com.eurobuddha.minimablock";
+    public static final String PANDAMONIUM_PACKAGE  = "com.eurobuddha.pandamonium";
+    public static final String OFFICIAL_PACKAGE     = "org.minima.core";
+    public static final String LEGACY_PACKAGE       = "org.minimarex.minimacore";
+
+    public static final String[][] NODES = {
+            {MINIMA_BASE_CLASS,   MINIMA_BASE_CLASS},
+            {BLOCK_PACKAGE,       MINIMA_BASE_CLASS},
+            {PANDAMONIUM_PACKAGE, MINIMA_BASE_CLASS},
+            {OFFICIAL_PACKAGE,    OFFICIAL_PACKAGE},
+            {LEGACY_PACKAGE,      LEGACY_PACKAGE},
+    };
+
+    public static final String[] PREFIXES = {MINIMA_BASE_CLASS, OFFICIAL_PACKAGE, LEGACY_PACKAGE};
+
+    /** The action/extra prefix a node package listens on (the bears share ours). */
+    public static String prefixOf(String zNodePackage){
+        for (String[] node : NODES) {
+            if (node[0].equals(zNodePackage)) return node[1];
+        }
+        return MINIMA_BASE_CLASS;
+    }
+
+    /** The prefix of a core action like "org.minima.core.RESPONSE", or null if it is not one. */
+    public static String prefixOfAction(String zAction){
+        if (zAction == null) return null;
+        for (String prefix : PREFIXES) {
+            if (zAction.startsWith(prefix + ".") && zAction.indexOf('.', prefix.length() + 1) < 0) return prefix;
+        }
+        return null;
+    }
+
+    /** key("org.minima.core", "CMD") = "org.minima.core.CMD" */
+    public static String key(String zPrefix, String zName){
+        return zPrefix + "." + zName;
+    }
 }
