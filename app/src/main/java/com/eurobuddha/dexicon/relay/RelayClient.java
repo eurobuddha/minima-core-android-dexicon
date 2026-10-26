@@ -76,7 +76,15 @@ public final class RelayClient {
     }
     /** Like applyOrder but an invalid envelope THROWS with the reason (shape / signature / expiry). */
     public synchronized boolean applyOrderStrict(String raw) {
-        Envelope v = Envelope.parse(raw, now.getAsLong());
+        Envelope v;
+        try { v = Envelope.parse(raw, now.getAsLong()); }
+        catch (Envelope.Invalid e) {
+            // A cancel received after its 10-minute expiry (app was backgrounded) must still supersede the live copy,
+            // or that copy haunts the book for its 23 h. Re-check it as of just before it expired: signature included.
+            if (!"expired".equals(e.getMessage())) throw e;
+            Object exp = com.eurobuddha.dexicon.envelope.Json.parseObject(raw).get("expiry");
+            v = Envelope.parse(raw, (Long) exp - 1);
+        }
         if (v.kind != Envelope.Kind.ORDER) throw new IllegalArgumentException("not an order");
         Envelope have = book.get(v.key());
         if (have != null && have.seq >= v.seq) return false;

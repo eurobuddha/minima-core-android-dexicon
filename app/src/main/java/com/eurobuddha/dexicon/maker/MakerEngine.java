@@ -273,7 +273,8 @@ public final class MakerEngine {
         MyOrder o = db.myOrder(orderId);
         if (o == null) { cb.done("unknown order", null); return; }
         o.status = "cancelled"; o.seq = nextSeq(o); o.expiry = now() + 600;
-        publish(o, e -> { db.saveOrder(o); cb.done(e, o); });
+        // "stale seq" = the relay already holds this order at the same or a newer seq — a cancel sent twice in one second.
+        publish(o, e -> { db.saveOrder(o); cb.done(e != null && e.endsWith("stale seq") ? null : e, o); });
     }
 
     /** Edit price and/or amount (null = keep): re-select backing, higher seq, publish. */
