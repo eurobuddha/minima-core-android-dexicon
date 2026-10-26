@@ -21,13 +21,13 @@ import com.eurobuddha.dexicon.doors.DoorForwards;
 import com.eurobuddha.dexicon.doors.DoorHost;
 import com.eurobuddha.dexicon.doors.DoorPlan;
 import com.eurobuddha.dexicon.doors.DoorStatus;
+import com.eurobuddha.dexicon.ui.LedgerView;
+import com.eurobuddha.dexicon.ui.Ui;
 
 import org.json.JSONObject;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
@@ -47,12 +47,13 @@ public final class DoorsTab extends LinearLayout {
     private final TextView halt, ethAddr, bals, title, desc, details, review, amtLabel, toLabel, dirIn, dirOut;
     private final TextView[] paneBtn = new TextView[3];
     private final LinearLayout dirRow, routes, list;
+    private final TextView progressLabel, finished;
+    private final Swaps hooks;
     private final EditText amt, to;
     private String pane = "enter";
     private boolean inward = true;
     private TradingContext route = TradingContext.MXUSDT;
     private long lastRefresh;
-    private static final SimpleDateFormat FMT = new SimpleDateFormat("dd MMM HH:mm:ss", Locale.US);
 
     public DoorsTab(MainActivity act) {
         super(act);
@@ -66,13 +67,15 @@ public final class DoorsTab extends LinearLayout {
         addView(halt);
 
         LinearLayout dep = card(this);
-        dep.addView(t("YOUR ETH DEPOSIT ADDRESS · ERC20 USDT + a little ETH for gas", Design.DIM(), 10f, Design.sansBold()));
+        dep.addView(Ui.copyRow(act, "YOUR ETHEREUM WALLET", "ETH deposit address", host::ethAddress));
         ethAddr = t("—", Design.TEXT(), 12f, Design.mono());
         ethAddr.setOnClickListener(v -> { String a = host.ethAddress(); if (a != null) act.copy("ETH deposit address", a); });
-        dep.addView(ethAddr);
-        bals = t("", Design.DIM(), 10f, Design.mono());
-        dep.addView(bals);
-        dep.addView(t("Derived from this node’s seed by AtomiX’s rule (seedrandom:ethbridge), never stored — the same address the AtomiX app on this node uses. Tap to copy the full address.", Design.DIM2(), 9.5f, Design.sans()));
+        dep.addView(ethAddr, Ui.wide(act, 6, 0));
+        LinearLayout balRow = new LinearLayout(act); balRow.setGravity(Gravity.CENTER_VERTICAL);
+        bals = t("", Design.DIM(), 11f, Design.mono());
+        balRow.addView(bals, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        dep.addView(balRow, Ui.wide(act, 4, 0));
+        Ui.info(balRow, dep, "info_doors_deposit", "Send ERC20 USDT here, plus a little ETH for gas. This address is derived from this node’s seed by AtomiX’s rule (seedrandom:ethbridge) and never stored — it is the same address the AtomiX app on this node uses. Tap the address or Copy to copy it in full.");
 
         LinearLayout seg = new LinearLayout(act);
         String[] names = {"ENTRY", "EXIT", "SWAP"}, keys = {"enter", "exit", "swap"};
@@ -86,7 +89,7 @@ public final class DoorsTab extends LinearLayout {
 
         LinearLayout p = card(this);
         title = t("", Design.TEXT(), 12f, Design.sansBold()); p.addView(title);
-        desc = t("", Design.DIM2(), 9.5f, Design.sans()); p.addView(desc);
+        desc = Ui.para(act, "");
         dirRow = new LinearLayout(act);
         dirIn = segBtn("", () -> { inward = true; render(); });
         dirOut = segBtn("", () -> { inward = false; render(); });
@@ -109,11 +112,19 @@ public final class DoorsTab extends LinearLayout {
         review.setBackground(Design.gradientCta(act)); Design.pressable(review);
         review.setOnClickListener(v -> openReview());
         p.addView(review);
+        Ui.foldText(p, "How this works", "fold_doors_how", desc);
 
-        addView(t("ATOMIX SWAPS — every AtomiX swap this node started, both legs’ full transaction ids. Settlement runs in the background.", Design.DIM(), 10f, Design.sansBold()));
+        progressLabel = Ui.label(act, "IN PROGRESS");
+        progressLabel.setPadding(Design.dp(act, 4), Design.dp(act, 8), 0, Design.dp(act, 6));
+        addView(progressLabel);
         list = new LinearLayout(act); list.setOrientation(VERTICAL);
-        LayoutParams ll = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); ll.topMargin = Design.dp(act, 8);
-        addView(list, ll);
+        addView(list);
+        hooks = new Swaps(act, host);
+        finished = t("", Design.DIM(), 12.5f, Design.sans());
+        finished.setMinHeight(Design.dp(act, 44)); finished.setGravity(Gravity.CENTER_VERTICAL);
+        finished.setPadding(Design.dp(act, 4), 0, 0, 0);
+        finished.setOnClickListener(v -> { if (!host.swaps().isEmpty()) act.showTab(MainActivity.TAB_HISTORY); });
+        addView(finished);
 
         TextWatcher w = new TextWatcher() {
             public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
@@ -201,7 +212,7 @@ public final class DoorsTab extends LinearLayout {
                 break;
             case "exit":
                 title.setText("EXIT — MxUSD or MINIMA → USDT");
-                desc.setText("Both AtomiX markets, each quoted for the amount typed in its own coin; tap the route you want. Your coin locks on Minima (144-block refund window); the maker locks USDT; this node withdraws it and forwards it by one ERC20 transfer to the address you name (both gas fees shown).");
+                desc.setText("Both AtomiX markets, each quoted for the amount typed in its own coin; tap the route you want. Your coin locks on Minima (144-block refund window); the maker locks USDT; this node withdraws it and forwards it by one ERC20 transfer to the address you name (both gas fees are shown when you review).");
                 break;
             default:
                 title.setText("SWAP — the pure lane");
@@ -251,7 +262,7 @@ public final class DoorsTab extends LinearLayout {
         if (picked.plan == null) { details.setTextColor(picked.err == null ? Design.DIM() : Design.RED()); details.setText(picked.err == null ? "" : coin() + " route: " + picked.err); review.setAlpha(0.5f); return; }
         String v = validate(picked.plan);
         details.setTextColor(v.isEmpty() ? Design.TEXT() : Design.RED());
-        details.setText(planText(picked.plan) + (v.isEmpty() ? "" : "\n\n" + v));
+        details.setText(planText(picked.plan, false) + (v.isEmpty() ? "" : "\n\n" + v));
         review.setAlpha(v.isEmpty() ? 1f : 0.5f);
     }
 
@@ -278,7 +289,8 @@ public final class DoorsTab extends LinearLayout {
         return c;
     }
 
-    private String planText(DoorPlan.Plan p) {
+    /** The plan in words. {@code full} (the review dialog only) adds each part's maker id and the ETH gas lines. */
+    private String planText(DoorPlan.Plan p, boolean full) {
         String c = coin(), dest = to.getText().toString().trim();
         StringBuilder b = new StringBuilder();
         b.append(p.sell ? "You give " + trim6(p.filledMinima) + " " + c + " → receive ≈ " + trim6(p.totalUsdt) + " USDT"
@@ -289,16 +301,18 @@ public final class DoorsTab extends LinearLayout {
                 .append("slippage".equals(p.stopReason) ? " — the rest is priced beyond the slippage cap.\n" : " — the rest is not in the book right now.\n");
         for (int i = 0; i < p.legs.size(); i++) {
             DoorPlan.Leg l = p.legs.get(i);
-            b.append("Part ").append(i + 1).append(": ").append(l.minima).append(' ').append(c).append(" @ ").append(px(l.price)).append(" → ").append(l.usdt).append(" USDT · maker ").append(l.maker.signerPk).append('\n');
+            b.append("Part ").append(i + 1).append(": ").append(l.minima).append(' ').append(c).append(" @ ").append(px(l.price)).append(" → ").append(l.usdt).append(" USDT").append(full ? " · maker " + l.maker.signerPk : "").append('\n');
         }
-        if (p.sell) {
-            BigInteger wd = host.gasReserve(EthHtlc.GAS_WITHDRAW), fw = host.gasReserve(EthSend.GAS_ERC20);
-            b.append("ETH gas from the deposit address: withdraw ≈ ").append(eth(wd)).append(" ETH").append(dest.isEmpty() ? "" : " + forward ≈ " + eth(fw) + " ETH");
-        } else {
-            BigInteger lk = host.gasReserve(EthHtlc.GAS_LOCK);
-            b.append("ETH gas from the deposit address: ≈ ").append(eth(lk)).append(" ETH per part (+ a one-time USDT approval on first use)");
+        if (full) {   // the gas lines live in the review dialog only
+            if (p.sell) {
+                BigInteger wd = host.gasReserve(EthHtlc.GAS_WITHDRAW), fw = host.gasReserve(EthSend.GAS_ERC20);
+                b.append("ETH gas from the deposit address: withdraw ≈ ").append(eth(wd)).append(" ETH").append(dest.isEmpty() ? "" : " + forward ≈ " + eth(fw) + " ETH");
+            } else {
+                BigInteger lk = host.gasReserve(EthHtlc.GAS_LOCK);
+                b.append("ETH gas from the deposit address: ≈ ").append(eth(lk)).append(" ETH per part (+ a one-time USDT approval on first use)");
+            }
+            b.append(" (you hold ").append(host.ethWei == null ? "—" : eth(host.ethWei)).append(" ETH)\n");
         }
-        b.append(" (you hold ").append(host.ethWei == null ? "—" : eth(host.ethWei)).append(" ETH)\n");
         if (!dest.isEmpty()) b.append(p.sell ? "USDT" : c).append(" will be forwarded to ").append(dest);
         else if (!p.sell) b.append(c).append(" lands in this node’s wallet.");
         return b.toString();
@@ -344,7 +358,7 @@ public final class DoorsTab extends LinearLayout {
         final String dest = to.getText().toString().trim(), c = coin();
         String head = pane.toUpperCase(Locale.ROOT) + " — " + (plan.sell ? "sell " + trim6(plan.filledMinima) + " " + c + " for ≈ " + trim6(plan.totalUsdt) + " USDT"
                 : "buy " + trim6(plan.filledMinima) + " " + c + " for ≈ " + trim6(plan.totalUsdt) + " USDT");
-        String body = planText(plan) + "\n\n" + (plan.sell ? "This locks your " + c + " on Minima now (block + 144 refund window)." : "This locks your USDT on Ethereum now (2 h refund window).")
+        String body = planText(plan, true) + "\n\n" + (plan.sell ? "This locks your " + c + " on Minima now (block + 144 refund window)." : "This locks your USDT on Ethereum now (2 h refund window).")
                 + " The background service completes the swap; keep this node running.";
         TextView msg = t(body, Design.TEXT(), 10.5f, Design.mono());
         int p = Design.dp(getContext(), 18); msg.setPadding(p, p / 2, p, 0); msg.setTextIsSelectable(true);
@@ -361,125 +375,51 @@ public final class DoorsTab extends LinearLayout {
                 .setNegativeButton("Back", null).show();
     }
 
-    // ------------------------------------------------------------------ door swap cards (shared with ACTIVITY)
+    // ------------------------------------------------------------------ door swaps (IN PROGRESS here; the same lines in ACTIVITY / HISTORY)
 
     private void renderSwaps(LinearLayout into) {
-        into.removeAllViews();
         List<SwapDb.Swap> swaps = host.swaps();
-        if (swaps.isEmpty()) {
-            into.addView(t("No AtomiX swaps yet. ENTRY brings ERC20 USDT in as MxUSD or MINIMA; EXIT takes either out as USDT. MINIMA and MxUSD holders need no AtomiX swap.", Design.DIM2(), 10f, Design.sans()));
-            return;
-        }
-        for (SwapDb.Swap s : swaps) into.addView(swapCard(act, host, s));
+        List<Ledger.Item> live = new java.util.ArrayList<>();
+        for (SwapDb.Swap s : swaps) { Ledger.Item it = hooks.item(s); if (it.live) live.add(it); }
+        LedgerView.sync(act, into, live, "door", hooks);
+        progressLabel.setVisibility(live.isEmpty() ? GONE : VISIBLE);
+        finished.setText(swaps.isEmpty() ? "No AtomiX swaps yet. ENTRY brings ERC20 USDT in as MxUSD or MINIMA; EXIT takes either out as USDT. MINIMA and MxUSD holders need no AtomiX swap."
+                : "Finished swaps are in History ›");
+        finished.setTextColor(swaps.isEmpty() ? Design.DIM2() : Design.DIM());
     }
 
-    /** One door swap: stage pill, plain status, then every id in full on its own line, tap to copy. */
-    static View swapCard(MainActivity act, DoorHost host, SwapDb.Swap s) {
-        JSONObject f = host.forward(s.hash);
-        boolean in = "ERC20_TO_MINIMA".equals(s.direction);
-        String pill = DoorForwards.pill(s, f);
-        boolean usd = "MxUSD".equals(DoorForwards.label(s.buyToken)) || "MxUSD".equals(DoorForwards.label(s.sellToken));
-        int live = usd ? USD_GREEN : Design.ACCENT();   // a dollar swap in progress is AtomiX green, a MINIMA one orange
-        int tone = SwapDb.ST_COMPLETE.equals(s.status) ? Design.IN() : (SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_ERROR.equals(s.status)) ? Design.RED() : live;
-        LinearLayout c = new LinearLayout(act);
-        c.setOrientation(VERTICAL);
-        c.setBackground(Design.card(act, 10));
-        int p = Design.dp(act, 10); c.setPadding(p, p, p, p);
-        LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); lp.bottomMargin = Design.dp(act, 9);
-        c.setLayoutParams(lp);
-        LinearLayout top = new LinearLayout(act); top.setGravity(Gravity.CENTER_VERTICAL);
-        top.addView(tv(act, (in ? "ATOMIX ENTRY " : "ATOMIX EXIT ") + s.sellAmount + " " + DoorForwards.label(s.sellToken) + " → " + s.buyAmount + " " + DoorForwards.label(s.buyToken), 11f, tone, Design.monoBold()),
-                new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        top.addView(Design.pill(act, pill, Design.SURFACE2(), tone));
-        c.addView(top);
-        c.addView(tv(act, "ATOMIX TAKER · " + FMT.format(new Date(s.created)), 9.5f, Design.DIM(), Design.mono()));
-        c.addView(tv(act, DoorForwards.statusText(s, f), 10.5f, Design.TEXT(), Design.mono()));
-        if ("INITIATOR".equals(s.role)) statusBlock(act, host, s, c, live);
-        ident(act, c, "swap", s.hash);
-        ident(act, c, "eth contract", s.contractId);
-        ident(act, c, "maker", s.counterparty);
-        List<List<String>> tx = DoorForwards.txIds(host.events(s.hash));
-        for (String id : tx.get(0)) ident(act, c, "eth tx", id);
-        for (String id : tx.get(1)) ident(act, c, "minima tx", id);
-        if (f != null) {
-            ident(act, c, "forward to", f.optString("to"));
-            ident(act, c, "forward tx", f.optString("tx"));
-            String st = f.optString("status");
-            if (DoorForwards.FAILED.equals(st) || DoorForwards.UNCERTAIN.equals(st)) {
-                TextView rb = tv(act, "RETRY FORWARD", 10f, live, Design.sansBold());
-                int bp = Design.dp(act, 8); rb.setPadding(bp, bp, bp, bp);
-                rb.setOnClickListener(v -> { host.retryForward(s.hash); act.toast("Forward queued again — the service retries on its next pass."); act.repaint(); });
-                c.addView(rb);
-            }
-        }
-        return c;
-    }
-    /** "Refund now" answers, per swap hash, so they survive the list repaint that follows. */
+    /** "Refund now" answers, per swap hash, so they survive the repaint that follows. */
     private static final java.util.Map<String, String> ANSWERS = java.util.Collections.synchronizedMap(new java.util.HashMap<>());
 
-    /** The swap's live status ({@link DoorStatus}): steps with full tx ids, the maker's deadline and word, the refund
-     *  window and a "Refund now" button. While the swap waits on its maker it re-derives every second, repainting the
-     *  lines only when their text changes (so a hash being selected is not torn down) and the button countdown always. */
-    private static void statusBlock(MainActivity act, DoorHost host, SwapDb.Swap s, LinearLayout c, int live) {
-        LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
-        box.setPadding(0, Design.dp(act, 6), 0, Design.dp(act, 4));
-        c.addView(box);
-        TextView refund = tv(act, "", 10.5f, live == USD_GREEN ? USD_INK : Design.ON_ACCENT(), Design.sansBold());
-        refund.setGravity(Gravity.CENTER); int bp = Design.dp(act, 10); refund.setPadding(bp, bp, bp, bp);
-        refund.setBackground(Design.roundBg(act, live, 10));
-        LayoutParams rl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); rl.topMargin = Design.dp(act, 6); rl.bottomMargin = Design.dp(act, 6);
-        refund.setLayoutParams(rl);
-        c.addView(refund);
-        final Runnable paint = () -> {
-            DoorStatus.Card k = DoorStatus.build(s, host.events(s.hash), System.currentTimeMillis() / 1000, host.lastMinimaBlock(),
-                    host.ethAddress(), ANSWERS.get(s.hash), java.util.TimeZone.getDefault());
-            String key = k.linesKey();
-            if (!key.equals(box.getTag())) {
-                box.removeAllViews();
-                for (DoorStatus.Line l : k.lines) box.addView(statusLine(act, l));
-                box.setTag(key);
-            }
-            refund.setVisibility(k.refundLabel == null ? GONE : VISIBLE);
-            if (k.refundLabel != null) { refund.setText(k.refundLabel); refund.setEnabled(k.refundEnabled); refund.setAlpha(k.refundEnabled ? 1f : 0.45f); }
-        };
-        refund.setOnClickListener(v -> {
-            refund.setEnabled(false);
-            ANSWERS.put(s.hash, "Asking for the refund…");
-            paint.run();
-            host.refundNow(s.hash, answer -> { ANSWERS.put(s.hash, answer); paint.run(); act.repaint(); });
-        });
-        paint.run();
-        if (!SwapDb.ST_STARTED.equals(s.status)) return;
-        final Runnable tick = new Runnable() { @Override public void run() { paint.run(); c.postDelayed(this, 1000); } };
-        c.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
-            @Override public void onViewAttachedToWindow(View v) { c.removeCallbacks(tick); c.postDelayed(tick, 1000); }
-            @Override public void onViewDetachedFromWindow(View v) { c.removeCallbacks(tick); }
-        });
-    }
-    private static TextView statusLine(MainActivity act, DoorStatus.Line l) {
-        String mark; int color = Design.TEXT();
-        switch (l.kind) {
-            case DONE: mark = "✓ "; color = Design.IN(); break;
-            case WAIT: mark = "… "; color = Design.DIM(); break;
-            case OK: mark = "✓ "; color = Design.IN(); break;
-            case WARN: mark = "! "; color = Design.ACCENT(); break;
-            case NOTICE: mark = "» "; break;
-            default: mark = "";
-        }
-        TextView t = tv(act, mark + l.text, 10f, color, l.kind == DoorStatus.Kind.NOTICE || l.kind == DoorStatus.Kind.WARN ? Design.monoBold() : Design.mono());
-        t.setTextIsSelectable(true);   // full hashes and addresses: long-press to select / copy
-        int p = Design.dp(act, 3); t.setPadding(0, p, 0, p);
-        if (l.kind == DoorStatus.Kind.NOTICE) { int q = Design.dp(act, 8); t.setPadding(q, q, q, q); t.setBackground(Design.roundBg(act, Design.ACCENT_SOFT(), 8)); }
-        return t;
-    }
+    /** A door swap's ledger line + its actions (refund now, retry forward) and the per-second re-derive while it waits
+     *  on its maker ({@link DoorStatus}). Shared by ACTIVITY, HISTORY and this tab's IN PROGRESS. */
+    public static final class Swaps implements LedgerView.Hooks {
+        private final MainActivity act;
+        private final DoorHost host;
+        private final java.util.Map<String, SwapDb.Swap> byId = new java.util.HashMap<>();
+        public Swaps(MainActivity act, DoorHost host) { this.act = act; this.host = host; }
 
-    private static TextView tv(MainActivity act, String s, float size, int color, android.graphics.Typeface tf) {
-        TextView t = new TextView(act); t.setText(s); t.setTextSize(size); t.setTextColor(color); t.setTypeface(tf); return t;
-    }
-    private static void ident(MainActivity act, LinearLayout c, String label, String value) {
-        if (value == null || value.isEmpty()) return;
-        TextView t = tv(act, label + " " + value, 8.5f, Design.DIM2(), Design.mono());
-        t.setOnClickListener(v -> act.copy(label, value));
-        c.addView(t);
+        public Ledger.Item item(SwapDb.Swap s) {
+            Ledger.Item it = Ledger.swap(s, host.events(s.hash), host.forward(s.hash), System.currentTimeMillis() / 1000, host.lastMinimaBlock(),
+                    host.ethAddress(), ANSWERS.get(s.hash), java.util.TimeZone.getDefault());
+            byId.put(it.id, s);
+            return it;
+        }
+        public SwapDb.Swap swap(String id) { return byId.get(id); }
+        @Override public Ledger.Item tick(String id) { SwapDb.Swap s = byId.get(id); return s == null ? null : item(s); }
+        @Override public void refund(String id) {
+            SwapDb.Swap s = byId.get(id);
+            if (s == null) return;
+            ANSWERS.put(s.hash, "Asking for the refund…");
+            act.repaint();
+            host.refundNow(s.hash, answer -> { ANSWERS.put(s.hash, answer); act.repaint(); });
+        }
+        @Override public void retry(String id) {
+            SwapDb.Swap s = byId.get(id);
+            if (s == null) return;
+            host.retryForward(s.hash);
+            act.toast("Forward queued again — the service retries on its next pass.");
+            act.repaint();
+        }
     }
 }

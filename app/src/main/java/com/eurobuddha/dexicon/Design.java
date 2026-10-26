@@ -115,6 +115,19 @@ public final class Design {
         return t;
     }
 
+    /** The one status chip: outlined, tinted, pill-shaped (ported from PandaPools ActivityView.statusChip). */
+    public static TextView chip(Context c, String text, int color) {
+        TextView t = new TextView(c);
+        t.setText(text); t.setTextSize(10f); t.setTextColor(color); t.setTypeface(sansBold());
+        int h = dp(c, 9), v = dp(c, 3);
+        t.setPadding(h, v, h, v);
+        GradientDrawable g = new GradientDrawable();
+        g.setColor((color & 0x00FFFFFF) | 0x1E000000); g.setCornerRadius(dp(c, 100));
+        g.setStroke(Math.max(1, dp(c, 1)), (color & 0x00FFFFFF) | 0x78000000);
+        t.setBackground(g);
+        return t;
+    }
+
     /** A rounded filled background (no border). */
     public static GradientDrawable roundBg(Context c, int color, int radiusDp) {
         GradientDrawable d = new GradientDrawable();

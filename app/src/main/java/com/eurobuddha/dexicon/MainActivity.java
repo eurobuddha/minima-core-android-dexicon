@@ -69,7 +69,7 @@ public class MainActivity extends AppCompatActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6;
+    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6;
     private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "ATOMIX", "RELAYS"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -294,7 +294,7 @@ public class MainActivity extends AppCompatActivity {
     List<MyOrder> myOrders() { return db.myOrders(); }
     boolean isMine(Envelope e) { return me != null && e.signPk.equalsIgnoreCase(me.signPkHex()); }
 
-    void toast(String s) { Toast.makeText(this, here(s), Toast.LENGTH_SHORT).show(); }
+    public void toast(String s) { Toast.makeText(this, here(s), Toast.LENGTH_SHORT).show(); }
     /** The vendored PandaDEX layer (verbatim) tells you to consolidate "in MinimaCore"; Dexicon has it on ASSETS. */
     static String here(String s) {
         return s == null ? null : s.replace("consolidate this token in MinimaCore", "consolidate this token on ASSETS › CONSOLIDATE")
@@ -302,7 +302,7 @@ public class MainActivity extends AppCompatActivity {
                 .replace("consolidate coins and retry", "consolidate on ASSETS and retry");
     }
     void setStage(String s) { stage = s == null ? "" : here(s); repaintHeader(); }
-    void copy(String label, String value) {
+    public void copy(String label, String value) {
         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (cm == null || value == null || value.isEmpty()) return;
         cm.setPrimaryClip(ClipData.newPlainText(label, value));   // the COMPLETE value, never an abbreviation
@@ -946,6 +946,9 @@ public class MainActivity extends AppCompatActivity {
         return root;
     }
 
+    /** Switch to a tab (e.g. ATOMIX → "Finished swaps are in History ›"). */
+    public void showTab(int idx) { selectTab(idx); }
+
     private void selectTab(int idx) {
         tab = idx;
         View[] views = tabViews();
@@ -990,7 +993,7 @@ public class MainActivity extends AppCompatActivity {
         stageTv.setVisibility(line.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
-    void repaint() {
+    public void repaint() {
         if (closed || trade == null) return;
         repaintHeader();
         switch (tab) {

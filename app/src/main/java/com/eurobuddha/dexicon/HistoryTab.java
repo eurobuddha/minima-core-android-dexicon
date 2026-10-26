@@ -5,22 +5,29 @@ import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import org.json.JSONArray;
+import com.eurobuddha.atomix.swap.SwapDb;
+import com.eurobuddha.dexicon.doors.DoorHost;
+import com.eurobuddha.dexicon.ui.LedgerView;
+import com.eurobuddha.dexicon.ui.Ui;
+
 import org.json.JSONObject;
 
 import java.math.BigDecimal;
-import java.text.SimpleDateFormat;
-import java.util.Date;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
+import java.util.Map;
+import java.util.TimeZone;
 
-/** HISTORY tab: every fill with net totals and the CSV export (stable column names, see TradeExport). */
+/** HISTORY tab: the permanent ledger — every fill and every finished AtomiX swap, one line each, grouped by day, with the
+ *  net of settled trades and the CSV export (stable column names, see TradeExport). Tap a line for its facts and proof. */
 @SuppressLint("ViewConstructor")
 public final class HistoryTab extends LinearLayout {
 
     private final MainActivity act;
     private final LinearLayout rows;
-    private final SimpleDateFormat fmt = new SimpleDateFormat("dd MMM HH:mm", Locale.US);
+    private final TextView netM, netU, counts;
+    private DoorsTab.Swaps hooks;
 
     public HistoryTab(MainActivity act) {
         super(act);
@@ -28,71 +35,58 @@ public final class HistoryTab extends LinearLayout {
         setOrientation(VERTICAL);
         int pad = Design.dp(act, 12);
         setPadding(pad, pad, pad, pad);
+        Ui.titleRow(this, "History", "info_history",
+                "Every trade this node made and every AtomiX swap it finished, newest first. One line each — tap a line for the amounts, "
+                + "block and the full on-chain proof. Net counts settled trades only. The txpow id is the pre-mining id; settlement is proven "
+                + "by the output coins. Export CSV saves every fill for your accounts.");
+        LinearLayout sum = Ui.card(this);
+        LinearLayout row = new LinearLayout(act); row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout net = new LinearLayout(act); net.setOrientation(VERTICAL);
+        net.addView(Ui.label(act, "NET · SETTLED TRADES"));
+        netM = Ui.text(act, "", 13f, Design.TEXT(), Design.mono());
+        netU = Ui.text(act, "", 13f, Design.TEXT(), Design.mono());
+        counts = Ui.text(act, "", 11.5f, Design.DIM2(), Design.sans());
+        net.addView(netM, Ui.wide(act, 4, 0)); net.addView(netU); net.addView(counts, Ui.wide(act, 2, 0));
+        row.addView(net, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        TextView export = Ui.button(act, "Export CSV");
+        export.setOnClickListener(v -> act.exportCsv());
+        row.addView(export);
+        sum.addView(row);
         rows = new LinearLayout(act); rows.setOrientation(VERTICAL);
         addView(rows);
     }
 
-    private TextView tv(String s, float size, int color, android.graphics.Typeface tf) {
-        TextView t = new TextView(getContext());
-        t.setText(s); t.setTextSize(size); t.setTextColor(color); t.setTypeface(tf);
-        return t;
-    }
-
-    private LinearLayout card() {
-        LinearLayout c = new LinearLayout(getContext());
-        c.setOrientation(VERTICAL);
-        c.setBackground(Design.card(getContext(), 10));
-        int p = Design.dp(getContext(), 10); c.setPadding(p, p, p, p);
-        LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); lp.bottomMargin = Design.dp(getContext(), 9);
-        rows.addView(c, lp);
-        return c;
-    }
+    private static String signed(BigDecimal v) { return (v.signum() > 0 ? "+" : v.signum() < 0 ? "−" : "") + Util.fmt(v.abs()); }
 
     public void render() {
-        rows.removeAllViews();
         List<JSONObject> fills = act.db().fills(500);
-        LinearLayout summary = card();
-        summary.addView(tv("MY FILLS", 10f, Design.DIM(), Design.sansBold()));
-        BigDecimal netM = BigDecimal.ZERO, netU = BigDecimal.ZERO; int done = 0;
+        BigDecimal m = BigDecimal.ZERO, u = BigDecimal.ZERO; int done = 0;
         for (JSONObject f : fills) {
             if (!"done".equals(f.optString("status"))) continue;
             done++;
             boolean buy = "buy".equals(f.optString("side"));
-            BigDecimal m = Util.dec(f.optString("filled", "0"));
+            BigDecimal mm = Util.dec(f.optString("filled", "0"));
             boolean maker = "maker".equals(f.optString("role"));
-            BigDecimal u = maker ? Util.dec(buy ? f.optString("paid", "0") : f.optString("received", "0")) : Util.dec(buy ? f.optString("gave", "0") : f.optString("got", "0"));
-            netM = netM.add(buy ? m : m.negate()); netU = netU.add(buy ? u.negate() : u);
+            BigDecimal uu = maker ? Util.dec(buy ? f.optString("paid", "0") : f.optString("received", "0")) : Util.dec(buy ? f.optString("gave", "0") : f.optString("got", "0"));
+            m = m.add(buy ? mm : mm.negate()); u = u.add(buy ? uu.negate() : uu);
         }
-        summary.addView(tv(fills.isEmpty() ? "No fills yet." : "Rows " + fills.size() + " (" + done + " done)   Net " + Util.fmt(netM) + " MINIMA   " + Util.fmt(netU) + " MxUSD", 10.5f, Design.TEXT(), Design.mono()));
-        summary.addView(tv("Net totals count settled fills only. The txpowid is the pre-mining id; settlement is proven by the output coins.", 9.5f, Design.DIM2(), Design.sans()));
-        TextView export = tv("EXPORT CSV", 10.5f, Design.ACCENT(), Design.mono());
-        export.setGravity(Gravity.CENTER); export.setPadding(0, Design.dp(getContext(), 9), 0, Design.dp(getContext(), 9));
-        export.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 10));
-        export.setOnClickListener(v -> act.exportCsv());
-        Design.pressable(export);
-        LayoutParams el = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); el.topMargin = Design.dp(getContext(), 8);
-        summary.addView(export, el);
+        Ui.set(netM, signed(m) + " MINIMA");
+        Ui.set(netU, signed(u) + " MxUSD");
+        netM.setTextColor(m.signum() < 0 ? Design.RED() : m.signum() > 0 ? Design.IN() : Design.TEXT());
+        netU.setTextColor(u.signum() < 0 ? Design.RED() : u.signum() > 0 ? Design.IN() : Design.TEXT());
+        Ui.set(counts, fills.isEmpty() ? "No fills yet." : fills.size() + (fills.size() == 1 ? " fill · " : " fills · ") + done + " settled");
 
-        for (JSONObject f : fills) {
-            LinearLayout c = card();
-            boolean buy = "buy".equals(f.optString("side"));
-            LinearLayout top = new LinearLayout(getContext());
-            top.setGravity(Gravity.CENTER_VERTICAL);
-            top.addView(tv((buy ? "BUY " : "SELL ") + f.optString("filled"), 11f, buy ? Design.IN() : Design.RED(), Design.mono()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-            TextView price = tv(Util.fmtPrice(Util.dec(f.optString("price", "0"))), 11f, Design.TEXT(), Design.mono()); price.setGravity(Gravity.END);
-            top.addView(price);
-            c.addView(top);
-            c.addView(tv(fmt.format(new Date(f.optLong("ts", 0) * 1000)) + "   " + f.optString("role", "").toUpperCase(Locale.ROOT) + "   " + f.optString("status", "").toUpperCase(Locale.ROOT), 9.5f, Design.DIM(), Design.mono()));
-            TextView tx = tv("txpow " + f.optString("txpowid"), 8.5f, Design.DIM2(), Design.mono());
-            tx.setOnClickListener(v -> act.copy("txpow", f.optString("txpowid")));
-            c.addView(tx);
-            JSONArray coins = f.optJSONArray("coins");
-            if (coins != null) for (int i = 0; i < coins.length(); i++) {
-                final String coin = coins.optString(i);
-                TextView ct = tv("coin " + coin, 8.5f, Design.DIM2(), Design.mono());
-                ct.setOnClickListener(v -> act.copy("coin", coin));
-                c.addView(ct);
-            }
+        TimeZone tz = TimeZone.getDefault();
+        Map<String, JSONObject> actByTx = new HashMap<>();
+        for (JSONObject a : ActivityLog.list(act.db())) if (!a.optString("txpowid").isEmpty()) actByTx.put(a.optString("txpowid"), a);
+        List<Ledger.Item> items = new ArrayList<>();
+        for (JSONObject f : fills) items.add(Ledger.fill(f, actByTx.get(f.optString("txpowid")), tz));
+        DoorHost doors = DoorHost.get(act);
+        if (hooks == null) hooks = new DoorsTab.Swaps(act, doors);
+        for (SwapDb.Swap s : doors.swaps()) {
+            String st = s.status == null ? "" : s.status;
+            if (SwapDb.ST_COMPLETE.equals(st) || SwapDb.ST_REFUNDED.equals(st) || SwapDb.ST_ERROR.equals(st)) items.add(Ledger.asHistory(hooks.item(s), s, tz));
         }
+        LedgerView.sync(act, rows, Ledger.arrange(items, false, System.currentTimeMillis(), tz), "hist", hooks);
     }
 }
