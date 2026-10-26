@@ -84,7 +84,20 @@ public final class TradeView extends LinearLayout {
         int pad = dp(12);
         setPadding(pad, pad, pad, pad);
         buildTicker(); buildFunds(); buildLadder(); buildOrderPanel(); buildOrders();
+        arrange();
     }
+
+    // Wide screen (owner 2026-10-26): the phone's market column (ticker + book) stays as it is on the left; funds,
+    // the buy/sell ticket and my orders sit beside it on the right.
+    private final List<View> cards = new ArrayList<>(), leftCards = new ArrayList<>();
+    private Boolean wideNow;
+    private void arrange() {
+        boolean w = com.eurobuddha.dexicon.ui.Wide.on(getContext());
+        if (wideNow != null && wideNow == w) return;
+        wideNow = w;
+        com.eurobuddha.dexicon.ui.Wide.arrange(this, cards, leftCards);
+    }
+    @Override protected void onConfigurationChanged(android.content.res.Configuration c) { super.onConfigurationChanged(c); arrange(); }
 
     private int dp(int v) { return Design.dp(getContext(), v); }
 
@@ -94,20 +107,21 @@ public final class TradeView extends LinearLayout {
         return t;
     }
 
-    private LinearLayout card() {
+    private LinearLayout card(boolean left) {
         LinearLayout c = new LinearLayout(getContext());
         c.setOrientation(VERTICAL);
         c.setBackground(Design.card(getContext(), 12));
         int p = dp(12); c.setPadding(p, p, p, p);
         LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
         lp.bottomMargin = dp(10);
-        addView(c, lp);
+        c.setLayoutParams(lp);
+        cards.add(c); if (left) leftCards.add(c);
         return c;
     }
 
     // ---- ticker ----
     private void buildTicker() {
-        LinearLayout c = card();
+        LinearLayout c = card(true);
         LinearLayout top = new LinearLayout(getContext());
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.addView(tv("MINIMA / MxUSD", 13f, Design.TEXT(), Design.sansBold()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
@@ -143,7 +157,7 @@ public final class TradeView extends LinearLayout {
     /** YOUR FUNDS has two modes, tap the card to switch (remembered): SMALL = available of each coin on one line,
      *  BIG = available / in your orders / settling / total per coin. Owner, 2026-10-22. */
     private void buildFunds() {
-        LinearLayout c = card();
+        LinearLayout c = card(false);
         fundsBig = getContext().getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).getBoolean(KEY_FUNDS_BIG, false);
         LinearLayout top = new LinearLayout(getContext());
         top.setGravity(Gravity.CENTER_VERTICAL);
@@ -193,7 +207,7 @@ public final class TradeView extends LinearLayout {
 
     // ---- ladder ----
     private void buildLadder() {
-        LinearLayout c = card();
+        LinearLayout c = card(true);
         LinearLayout head = new LinearLayout(getContext());
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.addView(tv("ORDER BOOK", 10f, Design.DIM(), Design.sansBold()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
@@ -292,7 +306,7 @@ public final class TradeView extends LinearLayout {
 
     // ---- order panel ----
     private void buildOrderPanel() {
-        LinearLayout c = card();
+        LinearLayout c = card(false);
         LinearLayout tabs = new LinearLayout(getContext());
         buyTab = tv("BUY", 13f, Design.ON_ACCENT(), Design.sansBold());
         sellTab = tv("SELL", 13f, Design.DIM(), Design.sansBold());
@@ -447,7 +461,7 @@ public final class TradeView extends LinearLayout {
 
     // ---- my open orders ----
     private void buildOrders() {
-        LinearLayout c = card();
+        LinearLayout c = card(false);
         c.addView(tv("MY OPEN ORDERS", 10f, Design.DIM(), Design.sansBold()));
         ordersBox = new LinearLayout(getContext()); ordersBox.setOrientation(VERTICAL);
         c.addView(ordersBox);
