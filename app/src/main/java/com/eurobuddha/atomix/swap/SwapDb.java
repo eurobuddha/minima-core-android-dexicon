@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.83 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.84 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.content.ContentValues;
@@ -39,6 +39,12 @@ public final class SwapDb {
     // EV_COLLECT: the claim gates on haveCollect, so a mismatch logged as COLLECT let ANY third party poison a
     // victim's real claim with one hostile dust coin carrying the victim's active hash (mutual-refund grief).
     public static final String EV_MISMATCH = "CPTXN_MISMATCH";
+    // Swap-status visibility (0.1.84; same names in atomix-mds lib/swapdb.js):
+    public static final String EV_TAKE_SENT    = "TAKE_SENT";      // taker: buy handshake sent (note = maker comms id)
+    public static final String EV_MAKER_NOTICE = "MAKER_NOTICE";   // taker: sealed notice from that maker (note = state|reason)
+    public static final String EV_DECLINED     = "BUY_DECLINED";   // maker: why I did not lock (note = reason)
+    public static final String EV_TIMEOUT      = "MAKER_TIMEOUT";  // taker: the maker's respond-by deadline passed
+    public static final String EV_REFUND_SENT  = "REFUND_SENT";    // taker: my ETH refund broadcast (note = tx hash)
 
     // ---- UX swap status ----
     public static final String ST_STARTED   = "STARTED";    // leg 1 locked, waiting for counterparty

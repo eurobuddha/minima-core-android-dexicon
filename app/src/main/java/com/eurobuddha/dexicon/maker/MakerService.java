@@ -146,14 +146,18 @@ public class MakerService extends Service {
             h.removeCallbacks(this);
             h.postDelayed(this, TICK_MS);
             if (!started || ticking) return;
+            // DOORS settlement (AtomiX taker engine): claims, ETH withdraws, refunds and forwards, ~every 90 s, app closed or
+            // not — and paired or not: unpaired it still refunds/withdraws the ETH legs, which need only Ethereum.
+            if (doorTicks++ % 9 == 0) try {
+                com.eurobuddha.dexicon.doors.DoorHost dh = com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this);
+                if (paired) dh.poll(); else dh.pollEthOnly();
+            } catch (RuntimeException e) { log("doors poll: " + e); }
             if (!paired) {
                 long now = System.currentTimeMillis();
                 if (now - lastRegisterMs >= REREGISTER_GAP_MS) { lastRegisterMs = now; node.reRegister(); }
                 return;
             }
             ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
-            // DOORS settlement (AtomiX taker engine): claims, ETH withdraws, refunds and forwards, ~every 90 s, app closed or not.
-            if (doorTicks++ % 9 == 0) try { com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this).poll(); } catch (RuntimeException e) { log("doors poll: " + e); }
             if (me == null) { deriveIdentity(); return; }
             List<String> relays = RelayStore.load(MakerService.this);
             Tokens.setMxUsd(RelayStore.mxusdOverride(MakerService.this));

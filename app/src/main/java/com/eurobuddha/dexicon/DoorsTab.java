@@ -20,6 +20,7 @@ import com.eurobuddha.atomix.swap.SwapDb;
 import com.eurobuddha.dexicon.doors.DoorForwards;
 import com.eurobuddha.dexicon.doors.DoorHost;
 import com.eurobuddha.dexicon.doors.DoorPlan;
+import com.eurobuddha.dexicon.doors.DoorStatus;
 
 import org.json.JSONObject;
 
@@ -393,6 +394,7 @@ public final class DoorsTab extends LinearLayout {
         c.addView(top);
         c.addView(tv(act, "ATOMIX TAKER · " + FMT.format(new Date(s.created)), 9.5f, Design.DIM(), Design.mono()));
         c.addView(tv(act, DoorForwards.statusText(s, f), 10.5f, Design.TEXT(), Design.mono()));
+        if ("INITIATOR".equals(s.role)) statusBlock(act, host, s, c, live);
         ident(act, c, "swap", s.hash);
         ident(act, c, "eth contract", s.contractId);
         ident(act, c, "maker", s.counterparty);
@@ -412,6 +414,65 @@ public final class DoorsTab extends LinearLayout {
         }
         return c;
     }
+    /** "Refund now" answers, per swap hash, so they survive the list repaint that follows. */
+    private static final java.util.Map<String, String> ANSWERS = java.util.Collections.synchronizedMap(new java.util.HashMap<>());
+
+    /** The swap's live status ({@link DoorStatus}): steps with full tx ids, the maker's deadline and word, the refund
+     *  window and a "Refund now" button. While the swap waits on its maker it re-derives every second, repainting the
+     *  lines only when their text changes (so a hash being selected is not torn down) and the button countdown always. */
+    private static void statusBlock(MainActivity act, DoorHost host, SwapDb.Swap s, LinearLayout c, int live) {
+        LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
+        box.setPadding(0, Design.dp(act, 6), 0, Design.dp(act, 4));
+        c.addView(box);
+        TextView refund = tv(act, "", 10.5f, live == USD_GREEN ? USD_INK : Design.ON_ACCENT(), Design.sansBold());
+        refund.setGravity(Gravity.CENTER); int bp = Design.dp(act, 10); refund.setPadding(bp, bp, bp, bp);
+        refund.setBackground(Design.roundBg(act, live, 10));
+        LayoutParams rl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); rl.topMargin = Design.dp(act, 6); rl.bottomMargin = Design.dp(act, 6);
+        refund.setLayoutParams(rl);
+        c.addView(refund);
+        final Runnable paint = () -> {
+            DoorStatus.Card k = DoorStatus.build(s, host.events(s.hash), System.currentTimeMillis() / 1000, host.lastMinimaBlock(),
+                    host.ethAddress(), ANSWERS.get(s.hash), java.util.TimeZone.getDefault());
+            String key = k.linesKey();
+            if (!key.equals(box.getTag())) {
+                box.removeAllViews();
+                for (DoorStatus.Line l : k.lines) box.addView(statusLine(act, l));
+                box.setTag(key);
+            }
+            refund.setVisibility(k.refundLabel == null ? GONE : VISIBLE);
+            if (k.refundLabel != null) { refund.setText(k.refundLabel); refund.setEnabled(k.refundEnabled); refund.setAlpha(k.refundEnabled ? 1f : 0.45f); }
+        };
+        refund.setOnClickListener(v -> {
+            refund.setEnabled(false);
+            ANSWERS.put(s.hash, "Asking for the refund…");
+            paint.run();
+            host.refundNow(s.hash, answer -> { ANSWERS.put(s.hash, answer); paint.run(); act.repaint(); });
+        });
+        paint.run();
+        if (!SwapDb.ST_STARTED.equals(s.status)) return;
+        final Runnable tick = new Runnable() { @Override public void run() { paint.run(); c.postDelayed(this, 1000); } };
+        c.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View v) { c.removeCallbacks(tick); c.postDelayed(tick, 1000); }
+            @Override public void onViewDetachedFromWindow(View v) { c.removeCallbacks(tick); }
+        });
+    }
+    private static TextView statusLine(MainActivity act, DoorStatus.Line l) {
+        String mark; int color = Design.TEXT();
+        switch (l.kind) {
+            case DONE: mark = "✓ "; color = Design.IN(); break;
+            case WAIT: mark = "… "; color = Design.DIM(); break;
+            case OK: mark = "✓ "; color = Design.IN(); break;
+            case WARN: mark = "! "; color = Design.ACCENT(); break;
+            case NOTICE: mark = "» "; break;
+            default: mark = "";
+        }
+        TextView t = tv(act, mark + l.text, 10f, color, l.kind == DoorStatus.Kind.NOTICE || l.kind == DoorStatus.Kind.WARN ? Design.monoBold() : Design.mono());
+        t.setTextIsSelectable(true);   // full hashes and addresses: long-press to select / copy
+        int p = Design.dp(act, 3); t.setPadding(0, p, 0, p);
+        if (l.kind == DoorStatus.Kind.NOTICE) { int q = Design.dp(act, 8); t.setPadding(q, q, q, q); t.setBackground(Design.roundBg(act, Design.ACCENT_SOFT(), 8)); }
+        return t;
+    }
+
     private static TextView tv(MainActivity act, String s, float size, int color, android.graphics.Typeface tf) {
         TextView t = new TextView(act); t.setText(s); t.setTextSize(size); t.setTextColor(color); t.setTypeface(tf); return t;
     }

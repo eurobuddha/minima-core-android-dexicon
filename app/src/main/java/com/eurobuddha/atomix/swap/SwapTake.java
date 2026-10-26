@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.83 app/src/main/java/com/eurobuddha/atomix/swap/SwapTake.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.84 app/src/main/java/com/eurobuddha/atomix/swap/SwapTake.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -41,4 +41,25 @@ public final class SwapTake {
             cb.onFailed("take send: " + e.getMessage());
         }
     }
+
+    /** Maker → taker on the same channel: why a buy was not locked ({@code state} = retrying | declined). The
+     *  taker accepts it only from the maker it notified, for its own swap; it never moves funds. */
+    public static void notice(NodeApi node, CryptoProvider crypto, String takerPublicId, String myPublicId, String hash,
+                              String state, String reason, TradingContext market, CommsTransport.SendCb cb) {
+        if (market == null) { cb.onFailed(SwapOrderBook.MARKET_ERROR); return; }
+        try {
+            JSONObject j = new JSONObject().put("to", takerPublicId).put("from", myPublicId).put("hash", hash)
+                    .put("notice", state).put("reason", reason);
+            String blob = crypto.seal(takerPublicId, j.toString().getBytes(StandardCharsets.UTF_8));
+            CommsTransport.postBlob(node, market.takeAddr, CommsTransport.MESSAGE_AMOUNT, CommsTransport.NATIVE, blob, null, cb);
+        } catch (Exception e) {
+            cb.onFailed("notice send: " + e.getMessage());
+        }
+    }
+
+    /** Noop callback for fire-and-forget notices. */
+    public static final CommsTransport.SendCb QUIET = new CommsTransport.SendCb() {
+        @Override public void onSent(String txpowid) { }
+        @Override public void onFailed(String message) { com.eurobuddha.atomix.SwapLog.w("notice not sent: " + message); }
+    };
 }
