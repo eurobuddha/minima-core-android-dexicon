@@ -244,15 +244,20 @@ public final class MakerEngine {
     public static final class SyncReport { public int checked, fixed, failed; public List<String> lines = new ArrayList<>(); }
 
     /** Pure: of {@code relayHas} (one relay's live orders), which of MY orders must be re-sent — any it shows live
-     *  that is not live here (cancelled / filled), or an older version of one that is. Unknown ids are left alone. */
+     *  that is not live here (cancelled / filled), an older version of one that is, or one live here (and unexpired)
+     *  that the relay does not hold at all: a relay keeps its book in memory, so a restart drops every order
+     *  (28 Oct: all three relays restarted and the whole ladder vanished from the book). Unknown ids are left alone. */
     public static List<MyOrder> stale(List<Envelope> relayHas, String mySignPk, Map<String, MyOrder> mine) {
         List<MyOrder> out = new ArrayList<>();
+        java.util.Set<String> held = new java.util.HashSet<>();
         for (Envelope e : relayHas) {
             if (!e.signPk.equalsIgnoreCase(mySignPk)) continue;
+            held.add(e.orderId);
             MyOrder o = mine.get(e.orderId);
             if (o == null) continue;
             if (!o.live() || o.seq > e.seq) out.add(o);
         }
+        for (MyOrder o : mine.values()) if (o.live() && o.expiry > now() + 60 && !held.contains(o.orderId)) out.add(o);
         return out;
     }
 

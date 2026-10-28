@@ -41,4 +41,16 @@ public class RelaySyncTest {
         List<String> ids = new ArrayList<>(); for (MyOrder o : fix) ids.add(o.orderId);
         assertEquals(Arrays.asList("0x0000000000000001", "0x0000000000000002", "0x0000000000000003"), ids);
     }
+
+    /** 28 Oct: the relays restarted (their book is in memory) and every ladder order was gone; the phone still had
+     *  them live and never re-sent them. A live, unexpired order the relay lacks must be re-sent; an expired one not. */
+    @Test public void resendsLiveOrdersTheRelayLost() {
+        Map<String, MyOrder> local = new HashMap<>();
+        MyOrder lost = mine("0x0000000000000007", "live", 5); lost.expiry = MakerEngine.now() + 3600; local.put(lost.orderId, lost);
+        MyOrder old = mine("0x0000000000000008", "live", 5); old.expiry = MakerEngine.now() - 10; local.put(old.orderId, old);
+        MyOrder gone = mine("0x0000000000000009", "cancelled", 5); gone.expiry = MakerEngine.now() + 3600; local.put(gone.orderId, gone);
+        List<MyOrder> fix = MakerEngine.stale(new ArrayList<>(), me.signPkHex(), local);
+        assertEquals(1, fix.size());
+        assertEquals("0x0000000000000007", fix.get(0).orderId);
+    }
 }
