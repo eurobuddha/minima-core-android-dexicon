@@ -38,6 +38,8 @@ public final class LadderRunner {
     public LadderRunner(MakerEngine engine, DexDb db, Log log) { this.engine = engine; this.db = db; this.log = log; }
 
     private boolean running, again;
+    /** This pass follows a SAVE: re-price every rung to the new settings, not only those past the reprice %. */
+    private boolean saved;
     private final List<Runnable> waiting = new ArrayList<>();
     public boolean running() { return running; }
     /** Run {@code r} once the current pass has finished (a take must never be co-signed while the ladder re-backs). */
@@ -64,6 +66,7 @@ public final class LadderRunner {
         if (!dirty && now - lastPassMs < PASS_GAP_MS) { done.run(); return; }
         lastPassMs = now;
         if (dirty) db.setMeta(DIRTY, "");
+        saved = dirty;
         JSONObject ids = ids();
         if (!c.enabled) { cancelAll(ids, "OFF", done); return; }
         if (c.peg && MexcFeed.unusable()) { cancelAll(ids, "WITHDRAWN — no usable MEXC price (" + MexcFeed.describe() + "). Re-quotes when the feed is back.", done); return; }
@@ -101,7 +104,7 @@ public final class LadderRunner {
             }
             boolean gone = false;   // a backing coin left the wallet (a split or a fill spent it) → re-back now
             for (String id : o.coins) if (!inWallet.contains(id.toLowerCase(java.util.Locale.ROOT))) gone = true;
-            if (gone || Ladder.needsEdit(r, FillPlan.d(o.price), FillPlan.d(o.remaining), c.peg, c.reprice))
+            if (gone || Ladder.needsEdit(r, FillPlan.d(o.price), FillPlan.d(o.remaining), c.peg && !saved, c.reprice))
                 ops.add(new MakerEngine.Op(r.key, o.orderId, r.side, price, amount));
         }
         engine.batch(ops, minima, mxusd, (errs, made) -> {
