@@ -38,8 +38,10 @@ public final class AutoCross {
     /** A cross to make: {@code sell} MINIMA into the pool (else buy), stopping at {@code limit}, at most {@code want}. */
     public static final class Decision {
         public final boolean sell; public final BigDecimal limit, want, gapPct; public final CompositeRouter.Plan plan;
-        Decision(boolean sell, BigDecimal limit, BigDecimal want, BigDecimal gapPct, CompositeRouter.Plan plan) {
-            this.sell = sell; this.limit = limit; this.want = want; this.gapPct = gapPct; this.plan = plan;
+        /** The backing coins of the crossed rungs, best price first — the cross spends these (they are what fills). */
+        public final List<String> coins;
+        Decision(boolean sell, BigDecimal limit, BigDecimal want, BigDecimal gapPct, CompositeRouter.Plan plan, List<String> coins) {
+            this.sell = sell; this.limit = limit; this.want = want; this.gapPct = gapPct; this.plan = plan; this.coins = coins;
         }
         public String line() {
             return "pool " + gapPct.setScale(2, RoundingMode.HALF_UP).toPlainString() + "% " + (sell ? "above your best ask" : "below your best bid")
@@ -60,11 +62,12 @@ public final class AutoCross {
         if (hi == null) return null;
         BigDecimal sellAt = hi.multiply(KEEP, MC), buyAt = lo.divide(KEEP, MC);   // what the pool pays / charges after its 0.5 % fee
         BigDecimal bestAsk = null, bestBid = null, askWant = BigDecimal.ZERO, bidWant = BigDecimal.ZERO;
+        List<MyOrder> asks = new ArrayList<>(), bids = new ArrayList<>();
         for (MyOrder o : rungs) {
             if (!o.live()) continue;
             BigDecimal px = FillPlan.d(o.price), rem = FillPlan.d(o.remaining);
-            if ("sell".equals(o.side) && px.compareTo(sellAt) < 0) { askWant = askWant.add(rem); if (bestAsk == null || px.compareTo(bestAsk) < 0) bestAsk = px; }
-            if ("buy".equals(o.side) && px.compareTo(buyAt) > 0) { bidWant = bidWant.add(rem); if (bestBid == null || px.compareTo(bestBid) > 0) bestBid = px; }
+            if ("sell".equals(o.side) && px.compareTo(sellAt) < 0) { askWant = askWant.add(rem); asks.add(o); if (bestAsk == null || px.compareTo(bestAsk) < 0) bestAsk = px; }
+            if ("buy".equals(o.side) && px.compareTo(buyAt) > 0) { bidWant = bidWant.add(rem); bids.add(o); if (bestBid == null || px.compareTo(bestBid) > 0) bestBid = px; }
         }
         BigDecimal sellGap = bestAsk == null ? null : sellAt.divide(bestAsk, MC).subtract(BigDecimal.ONE);
         BigDecimal buyGap = bestBid == null ? null : bestBid.divide(buyAt, MC).subtract(BigDecimal.ONE);
@@ -75,7 +78,11 @@ public final class AutoCross {
         if (plan.isEmpty() || plan.poolMinima.compareTo(MIN_MINIMA) < 0) return null;
         BigDecimal eff = plan.effectivePrice, mexc = BigDecimal.valueOf(mexcMid);
         if (sell ? eff.compareTo(limit) < 0 || eff.compareTo(mexc) <= 0 : eff.compareTo(limit) > 0 || eff.compareTo(mexc) >= 0) return null;
-        return new Decision(sell, limit, want, (sell ? sellGap : buyGap).multiply(BigDecimal.valueOf(100)), plan);
+        List<MyOrder> crossed = sell ? asks : bids;
+        crossed.sort((a, b) -> sell ? FillPlan.d(a.price).compareTo(FillPlan.d(b.price)) : FillPlan.d(b.price).compareTo(FillPlan.d(a.price)));
+        List<String> coins = new ArrayList<>();
+        for (MyOrder o : crossed) for (String id : o.coins) if (!coins.contains(id)) coins.add(id);
+        return new Decision(sell, limit, want, (sell ? sellGap : buyGap).multiply(BigDecimal.valueOf(100)), plan, coins);
     }
 
     // ---- the runner (MakerService, after each ladder pass) ----
@@ -133,7 +140,7 @@ public final class AutoCross {
                     .put("reason", "Auto-cross: " + d.line() + " · +" + edge.toPlainString() + " MxUSD vs MEXC"));
         } catch (Exception ignored) {}
         changed.run();
-        txn.fillComposite(plan, !d.sell, new DexTxn.Result() {
+        txn.fillComposite(plan, !d.sell, d.coins, new DexTxn.Result() {
             @Override public void onProgress(String message) { ActivityLog.update(db, actId, a -> a.put("reason", "Auto-cross: " + message)); }
             @Override public void onPostReply(JSONObject reply) { posted[0] = ActivityLog.fromPostReply(reply, txn.hexAddr()); }
             @Override public void onPosted(String txpowid) {

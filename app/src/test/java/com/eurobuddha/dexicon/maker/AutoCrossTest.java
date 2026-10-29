@@ -23,6 +23,7 @@ public class AutoCrossTest {
     }
     static MyOrder rung(String side, String price, String status) {
         MyOrder o = new MyOrder(); o.orderId = "0x" + side + price; o.side = side; o.price = price; o.amount = "1200"; o.remaining = "1200"; o.status = status;
+        o.coins.add("coin" + price);
         return o;
     }
     static final List<MyOrder> LADDER = Arrays.asList(
@@ -39,6 +40,8 @@ public class AutoCrossTest {
         assertTrue(d.plan.totalMinima.compareTo(new BigDecimal("2400")) <= 0 && d.plan.totalMinima.compareTo(new BigDecimal("2399")) >= 0);
         assertTrue(d.plan.effectivePrice.compareTo(d.limit) >= 0);
         assertTrue(d.plan.effectivePrice.doubleValue() > MEXC);
+        // 29 Oct: the cross failed when the wallet scan could not reach split coins; it must spend the crossed rungs' own coins
+        assertEquals(Arrays.asList("coin0.0035", "coin0.00355"), d.coins);
     }
 
     @Test public void poolBelowMyBidsBuysUpToMyBestBid() {

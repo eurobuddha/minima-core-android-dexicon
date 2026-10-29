@@ -58,7 +58,11 @@ public class DexTxn {
     public String hexAddr() { return myHexAddr; }
 
     /** Execute a blended order-book + PandaPools fill in one atomic transaction. */
-    public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, Result cb) {
+    public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, Result cb) { fillComposite(plan, takerBuys, null, cb); }
+
+    /** Dexicon glue (auto-cross): {@code fundIds} are tried first — the backing coins of my own crossed rungs, which the
+     *  wallet scan cannot reach once the ladder has split them into one big address group. Falls back to the scan. */
+    public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, List<String> fundIds, Result cb) {
         final FundingCoins.Command commands = node::cmd;
         final String payoutAddress = myHexAddr;
         if (plan == null || plan.isEmpty()) { cb.onFailed("Nothing to fill"); return; }
@@ -79,7 +83,7 @@ public class DexTxn {
             }
         }
         progress(cb, "Selecting wallet coins");
-        findCoins(prep.payTok, prep.needed, exclude, 8, coins -> {
+        CoinsCb chosen = coins -> {
             if (coins == null) {
                 String why = takeFundError();
                 cb.onFailed(why != null ? why : "Insufficient funds for trade");
@@ -90,6 +94,35 @@ public class DexTxn {
                     () -> buildComposite(commands, plan, prep, takerBuys, coins, payoutAddress, cb), message -> {
                         CoinLock.release(coins); cb.onFailed(message);
                     });
+        };
+        presetCoins(prep.payTok, prep.needed, fundIds, 0, new ArrayList<>(), BigDecimal.ZERO, coins -> {
+            if (coins != null) chosen.found(coins);
+            else findCoins(prep.payTok, prep.needed, exclude, 8, chosen);
+        });
+    }
+
+    /** My own unspent, stateless coins of {@code token} named by {@code ids}, reserved, if they cover {@code need}; else null. */
+    private void presetCoins(String token, BigDecimal need, List<String> ids, int i, List<JSONObject> got, BigDecimal sum, CoinsCb cb) {
+        if (ids == null || ids.isEmpty()) { cb.found(null); return; }
+        if (sum.compareTo(need) >= 0 || i >= ids.size() || got.size() >= 8) {
+            if (sum.compareTo(need) < 0) { cb.found(null); return; }
+            CoinLock.reserve(got); cb.found(got); return;
+        }
+        String id = ids.get(i);
+        if (!FundingCoins.hex(id) || CoinLock.isReserved(id)) { presetCoins(token, need, ids, i + 1, got, sum, cb); return; }
+        node.cmd("coins relevant:true sendable:true coinid:" + id, new NodeApi.Cb() {
+            public void onResult(JSONObject j) {
+                org.json.JSONArray arr = FundingCoins.rows(j);
+                JSONObject c = arr == null || arr.length() != 1 ? null : arr.optJSONObject(0);
+                Object st = c == null ? null : c.opt("state");
+                boolean ok = c != null && token.equalsIgnoreCase(c.optString("tokenid")) && id.equalsIgnoreCase(c.optString("coinid"))
+                        && !c.optBoolean("spent", false)
+                        && !(st instanceof org.json.JSONArray && ((org.json.JSONArray) st).length() > 0) && !(st instanceof JSONObject && ((JSONObject) st).length() > 0);
+                BigDecimal v = ok ? coinValue(c) : null;
+                if (v != null && v.signum() > 0) { got.add(c); presetCoins(token, need, ids, i + 1, got, sum.add(v), cb); }
+                else presetCoins(token, need, ids, i + 1, got, sum, cb);
+            }
+            public void onError(String m) { presetCoins(token, need, ids, i + 1, got, sum, cb); }
         });
     }
 
