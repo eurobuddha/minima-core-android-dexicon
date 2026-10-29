@@ -103,7 +103,9 @@ public final class LadderRunner {
                 ops.add(new MakerEngine.Op(r.key, null, r.side, price, amount));
                 continue;
             }
-            boolean gone = false;   // a backing coin left the wallet (a split or a fill spent it) → re-back now
+            // a backing coin left the wallet (a split, a fill or an auto-cross spent it) → re-back now. An order the engine
+            // already republished with NO coins (nothing fresh to back it) is gone too, or it would never re-back or split.
+            boolean gone = o.coins.isEmpty();
             for (String id : o.coins) if (!inWallet.contains(id.toLowerCase(java.util.Locale.ROOT))) gone = true;
             if (gone || Ladder.needsEdit(r, FillPlan.d(o.price), FillPlan.d(o.remaining), c.peg && !saved, c.reprice))
                 ops.add(new MakerEngine.Op(r.key, o.orderId, r.side, price, amount));
