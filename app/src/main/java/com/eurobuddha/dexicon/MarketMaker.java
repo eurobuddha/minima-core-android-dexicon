@@ -116,6 +116,13 @@ final class MarketMaker {
                 + "a fill and the ladder refills. The card shows where the pool stands even while this is off.", Design.DIM2(), 10f, false));
         final EditText cph = field(act, "max crosses per hour", c.crossPerHour, false);
         cph.setInputType(InputType.TYPE_CLASS_NUMBER); box.addView(cph);
+        ax.setOnCheckedChangeListener((b, on) -> {   // owner 29 Oct: say exactly what switching it on lets loose, before it does
+            if (!on) return;
+            new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Turn on auto-cross?")
+                    .setMessage(crossWarning(act.db().meta(com.eurobuddha.dexicon.maker.AutoCross.POOL_STATUS, ""), s(cph)))
+                    .setPositiveButton("Turn on", null).setNegativeButton("Keep off", (x, w) -> ax.setChecked(false))
+                    .setOnCancelListener(x -> ax.setChecked(false)).show();
+        });
         final TextView pv = text(act, "", Design.TEXT(), 11f, false); pv.setPadding(0, Design.dp(act, 10), 0, 0); box.addView(pv);
 
         final boolean[] filling = {false};
@@ -237,5 +244,27 @@ final class MarketMaker {
             public void onTextChanged(CharSequence s, int a, int b, int c) {}
             public void afterTextChanged(Editable e) { r.run(); }
         };
+    }
+
+    /** The switch-on warning: what auto-cross does, what would cross right now, and what the owner is agreeing to. */
+    static String crossWarning(String poolLine, String perHour) {
+        String now = poolLine.replaceAll(" \\([^)]*\\)$", "");
+        String right = now.isEmpty() || now.startsWith("waiting") ? "Not known yet — the pool position shows once the ladder is running."
+                : now.startsWith("pool in line") ? "Nothing. The pool is in line with your ladder, so nothing would cross."
+                : "YES — " + now + ".\nThis trade is made as soon as you SAVE (if the MEXC price is fresh).";
+        String cap = perHour == null || perHour.trim().isEmpty() ? "3" : perHour.trim();
+        return "Auto-cross trades your own funds against PandaPools, automatically, with no further confirmation.\n\n"
+                + "WHAT IT DOES\nWhen the pool's price rises past your best ask, your node SELLS MINIMA into the pool until it is back at that ask. "
+                + "When it falls past your best bid, your node BUYS. Each trade is the size of your rungs the pool moved past — the coins behind those "
+                + "rungs are spent, exactly as if a taker had filled them.\n\n"
+                + "WHAT WOULD CROSS RIGHT NOW (your live ladder)\n" + right + "\n\n"
+                + "WHAT YOU ARE AGREEING TO\n"
+                + "• Up to " + cap + " trades an hour. If someone keeps pushing the pool back, it crosses again each time and your inventory moves "
+                + "one way: selling turns MINIMA into MxUSD, buying the reverse. A side of your ladder can empty until you top it up.\n"
+                + "• Trades are on-chain and final. Each one beats your rung price after the pool's 0.5 % fee and the MEXC price at that moment, "
+                + "but MEXC can move afterwards.\n"
+                + "• It never trades more than your backed rungs hold, never while the MEXC price is stale, and the whole trade is rejected if the pool "
+                + "moves first.\n\n"
+                + "Every cross appears in ACTIVITY and HISTORY. Switch it off here and SAVE to stop.";
     }
 }
