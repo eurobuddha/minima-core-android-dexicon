@@ -117,10 +117,16 @@ final class MarketMaker {
         final EditText cph = field(act, "max crosses per hour", c.crossPerHour, false);
         cph.setInputType(InputType.TYPE_CLASS_NUMBER); box.addView(cph);
         ax.setOnCheckedChangeListener((b, on) -> {   // owner 29 Oct: say exactly what switching it on lets loose, before it does
-            if (!on) return;
-            new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Turn on auto-cross?")
-                    .setMessage(crossWarning(act.db().meta(com.eurobuddha.dexicon.maker.AutoCross.POOL_STATUS, ""), s(cph)))
-                    .setPositiveButton("Turn on", null).setNegativeButton("Keep off", (x, w) -> ax.setChecked(false))
+            if (!on || "1".equals(act.db().meta(CROSS_ACK, ""))) return;
+            LinearLayout v = new LinearLayout(act); v.setOrientation(LinearLayout.VERTICAL);
+            int pad = Design.dp(act, 20); v.setPadding(pad, Design.dp(act, 8), pad, 0);
+            v.addView(text(act, crossWarning(act.db().meta(com.eurobuddha.dexicon.maker.AutoCross.POOL_STATUS, ""), s(cph)), Design.TEXT(), 12f, false));
+            final android.widget.CheckBox again = new android.widget.CheckBox(act); again.setText("Don't show again"); again.setTextColor(Design.DIM());
+            v.addView(again);
+            ScrollView ws = new ScrollView(act); ws.addView(v);
+            new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Turn on auto-cross?").setView(ws)
+                    .setPositiveButton("Turn on", (x, w) -> { if (again.isChecked()) act.db().setMeta(CROSS_ACK, "1"); })
+                    .setNegativeButton("Keep off", (x, w) -> ax.setChecked(false))
                     .setOnCancelListener(x -> ax.setChecked(false)).show();
         });
         final TextView pv = text(act, "", Design.TEXT(), 11f, false); pv.setPadding(0, Design.dp(act, 10), 0, 0); box.addView(pv);
@@ -245,6 +251,9 @@ final class MarketMaker {
             public void afterTextChanged(Editable e) { r.run(); }
         };
     }
+
+    /** Meta key: the owner ticked "Don't show again" on the auto-cross warning. */
+    static final String CROSS_ACK = "mm_cross_ack";
 
     /** The switch-on warning: what auto-cross does, what would cross right now, and what the owner is agreeing to. */
     static String crossWarning(String poolLine, String perHour) {
