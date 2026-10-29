@@ -54,6 +54,8 @@ final class MarketMaker {
         String st = act.db().meta(LadderRunner.STATUS, "");
         if (c.enabled && c.peg) box.addView(text(act, MexcFeed.describe(), Design.DIM2(), 9.5f, false));
         box.addView(text(act, st.isEmpty() ? (c.enabled ? "starting — the maker service picks it up within seconds" : "A ladder of FAST asks and bids, pegged to MEXC or set by hand. Your node keeps it live and co-signs every fill.") : st, Design.TEXT(), 10f, false));
+        String pool = act.db().meta(com.eurobuddha.dexicon.maker.AutoCross.POOL_STATUS, "");
+        if (c.enabled && !pool.isEmpty()) box.addView(text(act, "PandaPools: " + pool, Design.DIM(), 10f, false));
         LinearLayout btns = new LinearLayout(act);
         TextView set = button(act, c.enabled ? "EDIT LADDER ▸" : "SET UP ▸", Design.ACCENT(), Design.ON_ACCENT());
         set.setOnClickListener(v -> edit(act));
@@ -92,6 +94,7 @@ final class MarketMaker {
         LinearLayout pr = row(act); final EditText skew = field(act, "skew ±%", c.skew, true), rep = field(act, "reprice ≥ %", c.reprice, false);
         pr.addView(skew, weight(act, true)); pr.addView(rep, weight(act, false)); box.addView(pr);
 
+
         box.addView(label(act, "AUTO-FILL (mid · step % · levels, then ask/bid size in MINIMA — seeds the rungs; edit any rung after)"));
         LinearLayout g = row(act); final EditText mid = field(act, "mid", c.mid, false), step = field(act, "step %", c.step, false), lev = field(act, "levels", c.levels, false);
         lev.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -105,11 +108,19 @@ final class MarketMaker {
         box.addView(text(act, "BIDS — you BUY MINIMA (lower price)", Design.IN(), 12f, true));
         final EditText[][] bids = new EditText[Ladder.MAX_LEVELS][];
         for (int i = 0; i < Ladder.MAX_LEVELS; i++) bids[i] = rung(act, box, "B" + (i + 1), c.bids[i], Design.IN());
+        box.addView(label(act, "AUTO-CROSS — TRADE PANDAPOOLS BACK TO YOUR LADDER"));
+        final Switch ax = sw(act, "Auto-cross PandaPools", c.autoCross); box.addView(ax);
+        box.addView(text(act, "When the pool's price moves past your best ask, your node sells MINIMA into the pool until it is back at that "
+                + "rung; past your best bid, it buys. At most the size of the rungs the pool moved past, only while the MEXC price is fresh, "
+                + "and only when it beats your rung after the pool's 0.5 % fee. One on-chain trade, signed by your node alone; it counts as "
+                + "a fill and the ladder refills. The card shows where the pool stands even while this is off.", Design.DIM2(), 10f, false));
+        final EditText cph = field(act, "max crosses per hour", c.crossPerHour, false);
+        cph.setInputType(InputType.TYPE_CLASS_NUMBER); box.addView(cph);
         final TextView pv = text(act, "", Design.TEXT(), 11f, false); pv.setPadding(0, Design.dp(act, 10), 0, 0); box.addView(pv);
 
         final boolean[] filling = {false};
         final Runnable read = () -> {
-            c.enabled = en.isChecked(); c.peg = peg.isChecked();
+            c.enabled = en.isChecked(); c.peg = peg.isChecked(); c.autoCross = ax.isChecked(); c.crossPerHour = s(cph);
             c.skew = s(skew); c.reprice = s(rep); c.mid = s(mid); c.step = s(step); c.levels = s(lev); c.askSize = s(askS); c.bidSize = s(bidS);
             for (int i = 0; i < Ladder.MAX_LEVELS; i++) { c.asks[i] = new String[]{s(asks[i][0]), s(asks[i][1])}; c.bids[i] = new String[]{s(bids[i][0]), s(bids[i][1])}; }
         };

@@ -56,6 +56,9 @@ public final class MexcFeed {
     public static boolean fresh() { return mid() > 0 && ageMs() <= FRESH_MS; }
     /** True when a pegged ladder must not be live: no price at all, or the feed has been down past 12 h. */
     public static boolean unusable() { return !(mid() > 0) || ageMs() > HARD_STALE_MS; }
+    /** No price and no failure yet since the app started: the first fetch is still on its way. A pegged ladder keeps its
+     *  live orders meanwhile instead of withdrawing them (28 Oct: every app update cancelled the whole ladder). */
+    public static boolean firstFetchPending() { synchronized (LOCK) { return price <= 0 && lastError == null; } }
     /** Spread multiplier for the current feed age (1 while fresh). */
     public static double widen() { return wideningFactor(ageMs()); }
 

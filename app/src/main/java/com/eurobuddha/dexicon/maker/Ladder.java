@@ -32,7 +32,8 @@ public final class Ladder {
 
     /** Saved settings (DexDb meta "mm_config"). Number fields are kept as the strings typed. */
     public static final class Config {
-        public boolean enabled, peg;
+        public boolean enabled, peg, autoCross;   // autoCross: trade PandaPools back to my rungs (AutoCross)
+        public String crossPerHour = "3";
         public String mid = "", step = "", levels = "1", askSize = "", bidSize = "", skew = "", reprice = "1";
         public final String[][] asks = new String[MAX_LEVELS][], bids = new String[MAX_LEVELS][];
         public Config() { for (int i = 0; i < MAX_LEVELS; i++) { asks[i] = new String[]{"", ""}; bids[i] = new String[]{"", ""}; } }
@@ -42,7 +43,7 @@ public final class Ladder {
                 JSONArray a = new JSONArray(), b = new JSONArray();
                 for (int i = 0; i < MAX_LEVELS; i++) { a.put(new JSONArray().put(asks[i][0]).put(asks[i][1])); b.put(new JSONArray().put(bids[i][0]).put(bids[i][1])); }
                 return new JSONObject().put("enabled", enabled).put("peg", peg).put("mid", mid).put("step", step).put("levels", levels)
-                        .put("askSize", askSize).put("bidSize", bidSize).put("skew", skew).put("reprice", reprice).put("asks", a).put("bids", b);
+                        .put("askSize", askSize).put("bidSize", bidSize).put("skew", skew).put("reprice", reprice).put("autoCross", autoCross).put("crossPerHour", crossPerHour).put("asks", a).put("bids", b);
             } catch (Exception e) { throw new RuntimeException(e); }
         }
         public static Config fromJson(String s) {
@@ -52,6 +53,7 @@ public final class Ladder {
                 c.enabled = j.optBoolean("enabled"); c.peg = j.optBoolean("peg");
                 c.mid = j.optString("mid", ""); c.step = j.optString("step", ""); c.levels = j.optString("levels", "1");
                 c.askSize = j.optString("askSize", ""); c.bidSize = j.optString("bidSize", ""); c.skew = j.optString("skew", ""); c.reprice = j.optString("reprice", "1");
+                c.autoCross = j.optBoolean("autoCross"); c.crossPerHour = j.optString("crossPerHour", "3");
                 JSONArray a = j.optJSONArray("asks"), b = j.optJSONArray("bids");
                 for (int i = 0; i < MAX_LEVELS; i++) {
                     JSONArray ra = a == null ? null : a.optJSONArray(i), rb = b == null ? null : b.optJSONArray(i);

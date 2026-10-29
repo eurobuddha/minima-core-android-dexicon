@@ -79,6 +79,7 @@ public class MakerService extends Service {
     private DexIdentity me;
     private MakerEngine engine;
     private LadderRunner ladder;   // the fast market maker (ORDERS › MARKET MAKER)
+    private AutoCross cross;       // trades PandaPools back to the ladder's rungs
     private boolean started, paired, deriving, ticking;
     private long lastRegisterMs, ticks, doorTicks;
     private final Map<String, Long> coinLocks = new HashMap<>();   // coinid → unix ms the lock expires (3 min)
@@ -122,7 +123,7 @@ public class MakerService extends Service {
                 net.execute(() -> {
                     try {
                         DexIdentity id = DexIdentity.fromSeed(ls, seed);
-                        h.post(() -> { me = id; engine = new MakerEngine(MakerService.this, node, db, relay, me); ladder = new LadderRunner(engine, db, line -> { log(line); changed(); }); deriving = false; db.setMeta("publicId", me.publicId()); log("booted — publicId " + me.publicId()); refreshAddresses(null); });
+                        h.post(() -> { me = id; engine = new MakerEngine(MakerService.this, node, db, relay, me); ladder = new LadderRunner(engine, db, line -> { log(line); changed(); }); cross = new AutoCross(node, db, MakerService.this::changed); deriving = false; db.setMeta("publicId", me.publicId()); log("booted — publicId " + me.publicId()); refreshAddresses(null); });
                     } catch (Exception e) { h.post(() -> { deriving = false; log("identity derive failed: " + e); }); }
                 });
             }
@@ -204,7 +205,7 @@ public class MakerService extends Service {
         }
         processTakes(takes, 0, () -> {
             if (ticks % 3 == 0) settleFills();
-            ladder.pass(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
+            ladder.pass(() -> cross.run(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
                 for (String l : rep.lines) log(l);
                 if (rep.fixed > 0) changed();
                 if (ticks % 6 == 0) refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
@@ -213,7 +214,7 @@ public class MakerService extends Service {
                     tickDone();
                 }));
                 else tickDone();
-            }));
+            })));
         });
     }
 

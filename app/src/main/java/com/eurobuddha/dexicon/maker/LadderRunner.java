@@ -63,6 +63,7 @@ public final class LadderRunner {
         boolean dirty = !db.meta(DIRTY, "").isEmpty();
         Ladder.Config c = Ladder.Config.fromJson(db.meta(CONFIG, ""));
         if (c.enabled && c.peg) MexcFeed.refreshAsync();
+        if (c.enabled && c.peg && MexcFeed.firstFetchPending()) { done.run(); return; }   // keep the ladder until the first price lands
         if (!dirty && now - lastPassMs < PASS_GAP_MS) { done.run(); return; }
         lastPassMs = now;
         if (dirty) db.setMeta(DIRTY, "");
