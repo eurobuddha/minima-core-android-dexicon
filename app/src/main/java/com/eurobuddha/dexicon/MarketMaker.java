@@ -119,7 +119,7 @@ final class MarketMaker {
         ax.setOnCheckedChangeListener((b, on) -> {   // owner 29 Oct: say exactly what switching it on lets loose, before it does
             if (!on || "1".equals(act.db().meta(CROSS_ACK, ""))) return;
             LinearLayout v = new LinearLayout(act); v.setOrientation(LinearLayout.VERTICAL);
-            int pad = Design.dp(act, 20); v.setPadding(pad, Design.dp(act, 8), pad, 0);
+            int wp = Design.dp(act, 20); v.setPadding(wp, Design.dp(act, 8), wp, 0);
             v.addView(text(act, crossWarning(act.db().meta(com.eurobuddha.dexicon.maker.AutoCross.POOL_STATUS, ""), s(cph)), Design.TEXT(), 12f, false));
             final android.widget.CheckBox again = new android.widget.CheckBox(act); again.setText("Don't show again"); again.setTextColor(Design.DIM());
             v.addView(again);
