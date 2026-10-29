@@ -44,6 +44,16 @@ public class AutoCrossTest {
         assertEquals(Arrays.asList("coin0.0035", "coin0.00355"), d.coins);
     }
 
+    /** 29 Oct: crosses 2 and 3 sold 9000 MINIMA more than the ladder held, counting asks whose coins the first had spent. */
+    @Test public void unbackedRungsAreNotCrossed() {
+        List<MyOrder> ladder = new java.util.ArrayList<>(LADDER);
+        ladder.set(0, rung("sell", "0.0035", "live")); ladder.get(0).coins.clear();
+        AutoCross.Decision d = AutoCross.decide(Arrays.asList(pool("1000000", "3600")), ladder, MEXC);
+        assertNotNull(d);
+        assertEquals(0, d.want.compareTo(new BigDecimal("1200")));   // only the backed 0.00355 rung
+        assertEquals(Arrays.asList("coin0.00355"), d.coins);
+    }
+
     @Test public void poolBelowMyBidsBuysUpToMyBestBid() {
         AutoCross.Decision d = AutoCross.decide(Arrays.asList(pool("1000000", "3300")), LADDER, MEXC);   // spot 0.0033
         assertNotNull(d);

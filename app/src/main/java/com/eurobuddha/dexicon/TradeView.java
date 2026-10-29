@@ -258,7 +258,7 @@ public final class TradeView extends LinearLayout {
     /** One ladder level: FAST / BOOK / POOL MINIMA at this grouped price. */
     private static final class Level {
         BigDecimal fast = BigDecimal.ZERO, book = BigDecimal.ZERO, pool = BigDecimal.ZERO, exact;
-        boolean mine, unbacked;
+        boolean mine;
         BigDecimal total() { return fast.add(book).add(pool); }
     }
 
@@ -293,8 +293,7 @@ public final class TradeView extends LinearLayout {
         String amt = amountText(lv.fast, lv.book, lv.pool);
         TextView am = tv(amt, amt.contains("\n") || amt.contains(" ") ? 9.5f : 11f, Design.TEXT(), Design.mono()); am.setGravity(Gravity.END);
         row.addView(am, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        boolean unbacked = lv.unbacked && lv.book.signum() == 0 && lv.pool.signum() == 0;
-        TextView to = tv(unbacked ? "UNBACKED" : Util.fmt(PriceMath.up(price.multiply(lv.total()), 4)), 11f, unbacked ? Design.ACCENT() : Design.DIM(), Design.mono()); to.setGravity(Gravity.END);
+        TextView to = tv(Util.fmt(PriceMath.up(price.multiply(lv.total()), 4)), 11f, Design.DIM(), Design.mono()); to.setGravity(Gravity.END);
         row.addView(to, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         f.addView(row);
         BigDecimal prefill = lv.exact != null ? lv.exact : price;
@@ -489,12 +488,12 @@ public final class TradeView extends LinearLayout {
         TreeMap<BigDecimal, Level> asks = new TreeMap<>(), bids = new TreeMap<>((a, b) -> b.compareTo(a));
         int fastN = 0, bookN = 0;
         for (Envelope o : book) {
+            if (o.coins.isEmpty()) continue;   // unbacked: nobody can take it, so it is not on the book (owner 29 Oct)
             boolean sell = "sell".equals(o.side);
             BigDecimal p = new BigDecimal(o.price), amt = new BigDecimal(o.amount);
             Level lv = level(sell ? asks : bids, p, tick, sell);
             lv.fast = lv.fast.add(amt);
             if (act.isMine(o)) lv.mine = true;
-            if (o.coins.isEmpty()) lv.unbacked = true;
             fastN++;
         }
         long block = act.chainBlock();

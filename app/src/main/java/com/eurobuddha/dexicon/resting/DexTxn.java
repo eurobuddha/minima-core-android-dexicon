@@ -60,8 +60,8 @@ public class DexTxn {
     /** Execute a blended order-book + PandaPools fill in one atomic transaction. */
     public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, Result cb) { fillComposite(plan, takerBuys, null, cb); }
 
-    /** Dexicon glue (auto-cross): {@code fundIds} are tried first — the backing coins of my own crossed rungs, which the
-     *  wallet scan cannot reach once the ladder has split them into one big address group. Falls back to the scan. */
+    /** Dexicon glue (auto-cross): when {@code fundIds} is given, ONLY those coins fund it — the backing coins of my own
+     *  crossed rungs (which the wallet scan cannot reach once the ladder split them into one big address group). */
     public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, List<String> fundIds, Result cb) {
         final FundingCoins.Command commands = node::cmd;
         final String payoutAddress = myHexAddr;
@@ -95,9 +95,10 @@ public class DexTxn {
                         CoinLock.release(coins); cb.onFailed(message);
                     });
         };
-        presetCoins(prep.payTok, prep.needed, fundIds, 0, new ArrayList<>(), BigDecimal.ZERO, coins -> {
-            if (coins != null) chosen.found(coins);
-            else findCoins(prep.payTok, prep.needed, exclude, 8, chosen);
+        if (fundIds == null) { findCoins(prep.payTok, prep.needed, exclude, 8, chosen); return; }
+        presetCoins(prep.payTok, prep.needed, fundIds, 0, new ArrayList<>(), BigDecimal.ZERO, coins -> {   // these coins only, never the wider wallet
+            if (coins == null) lastFundError = "the crossed rungs' own coins no longer cover it. Nothing was posted.";
+            chosen.found(coins);
         });
     }
 

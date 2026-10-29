@@ -64,7 +64,7 @@ public final class AutoCross {
         BigDecimal bestAsk = null, bestBid = null, askWant = BigDecimal.ZERO, bidWant = BigDecimal.ZERO;
         List<MyOrder> asks = new ArrayList<>(), bids = new ArrayList<>();
         for (MyOrder o : rungs) {
-            if (!o.live()) continue;
+            if (!o.live() || o.coins.isEmpty()) continue;   // an unbacked rung is not on offer: never cross what the ladder does not hold
             BigDecimal px = FillPlan.d(o.price), rem = FillPlan.d(o.remaining);
             if ("sell".equals(o.side) && px.compareTo(sellAt) < 0) { askWant = askWant.add(rem); asks.add(o); if (bestAsk == null || px.compareTo(bestAsk) < 0) bestAsk = px; }
             if ("buy".equals(o.side) && px.compareTo(buyAt) > 0) { bidWant = bidWant.add(rem); bids.add(o); if (bestBid == null || px.compareTo(bestBid) > 0) bestBid = px; }
