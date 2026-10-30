@@ -173,11 +173,12 @@ public final class DoorHost {
     /** AtomiX's per-market comms identities (HKDF "usdtswap" / "minimaswap") — they seal the buy handshake to a maker. */
     private void deriveIdentities() {
         identityDeriving = true;
-        node.cmd("vault action:seed", new NodeApi.Cb() {
-            @Override public void onResult(JSONObject j) {
-                JSONObject r = j.optJSONObject("response");
-                final String ikm = r == null ? "" : r.optString("seed", r.optString("phrase", ""));
-                if (ikm.isEmpty()) { identityDeriving = false; bootNote = "Node seed unreadable (vault locked?)"; return; }
+        // one-way input (SeedSource: the phrase never enters the app). A swap already in flight keeps the old (vault seed)
+        // identity it was opened with until it settles — CLAUDE.md: never change identity under a live swap.
+        boolean legacy = !prefs.getBoolean("door_ids_v2", false) && !db.activeHashes().isEmpty();
+        com.eurobuddha.dexicon.identity.SeedSource.Cb got = new com.eurobuddha.dexicon.identity.SeedSource.Cb() {
+            @Override public void got(String ikm) {
+                if (!legacy) prefs.edit().putBoolean("door_ids_v2", true).apply();
                 io.execute(() -> {
                     try {
                         byte[] seed = ikm.startsWith("0x") ? Hex.from(ikm) : ikm.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -191,8 +192,10 @@ public final class DoorHost {
                     } catch (Exception e) { h.post(() -> { identityDeriving = false; bootNote = "Identity derive failed"; }); }
                 });
             }
-            @Override public void onError(String m) { identityDeriving = false; bootNote = "Seed read: " + m; }
-        });
+            @Override public void failed(String m) { identityDeriving = false; bootNote = "Identity: " + m; }
+        };
+        if (legacy) com.eurobuddha.dexicon.identity.SeedSource.legacy(node, got);
+        else com.eurobuddha.dexicon.identity.SeedSource.derive(node, com.eurobuddha.dexicon.identity.SeedSource.DOORS, got);
     }
 
     public boolean ready() { return wallet.ready() && minima.ready() && keysLoaded && ids.size() == MARKETS.length; }

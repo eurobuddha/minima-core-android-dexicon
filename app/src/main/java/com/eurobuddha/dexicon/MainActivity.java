@@ -31,6 +31,7 @@ import com.eurobuddha.dexicon.fill.FillPlan;
 import com.eurobuddha.dexicon.fill.FillTxn;
 import com.eurobuddha.dexicon.fill.Tokens;
 import com.eurobuddha.dexicon.identity.DexIdentity;
+import com.eurobuddha.dexicon.identity.SeedSource;
 import com.eurobuddha.dexicon.identity.Sodium;
 import com.eurobuddha.dexicon.maker.MakerEngine;
 import com.eurobuddha.dexicon.maker.MakerService;
@@ -216,11 +217,8 @@ public class MainActivity extends AppCompatActivity {
     private void deriveIdentity() {
         if (deriving) return;
         deriving = true;
-        node.cmd("vault action:seed", new NodeApi.Cb() {
-            public void onResult(JSONObject j) {
-                JSONObject r = j.optJSONObject("response");
-                String seed = r == null ? "" : r.optString("seed", r.optString("phrase", ""));
-                if (seed.isEmpty()) { deriving = false; setStage("Identity: the node returned no seed (vault locked?). Unlock and reopen."); return; }
+        SeedSource.derive(node, SeedSource.DEX, new SeedSource.Cb() {   // one-way: the node's phrase never enters the app
+            public void got(String seed) {
                 net.execute(() -> {
                     try {
                         DexIdentity id = DexIdentity.fromSeed(Sodium.get(), seed);
@@ -228,7 +226,7 @@ public class MainActivity extends AppCompatActivity {
                     } catch (Exception e) { ui.post(() -> { deriving = false; setStage("Identity derivation failed: " + e.getMessage()); }); }
                 });
             }
-            public void onError(String m) { deriving = false; setStage(NodeApi.ERR_NOT_ENABLED.equals(m) ? "Enable Dexicon in Minima Core → Apps" : "Seed read failed: " + m); }
+            public void failed(String m) { deriving = false; setStage(NodeApi.ERR_NOT_ENABLED.equals(m) ? "Enable Dexicon in Minima Core → Apps" : "Identity: " + m + ". Unlock and reopen."); }
         });
     }
 

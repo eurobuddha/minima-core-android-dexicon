@@ -27,6 +27,7 @@ import com.eurobuddha.dexicon.fill.FillPlan;
 import com.eurobuddha.dexicon.fill.FillTxn;
 import com.eurobuddha.dexicon.fill.Tokens;
 import com.eurobuddha.dexicon.identity.DexIdentity;
+import com.eurobuddha.dexicon.identity.SeedSource;
 import com.eurobuddha.dexicon.identity.Sodium;
 import com.eurobuddha.dexicon.relay.HttpTransport;
 import com.eurobuddha.dexicon.relay.RelayClient;
@@ -50,7 +51,7 @@ import java.util.concurrent.Executors;
 /**
  * The Dexicon background engine — port of mds/dexicon/service.js onto the AtomiX SwapService / PandaDEX
  * DexKeepAliveService foreground-service stack. It is the ONLY inbox consumer and the MAKER side of every fill:
- *   boot      identity from the node seed (vault action:seed; retried while the node is unpaired/locked)
+ *   boot      identity from seedrandom (SeedSource: the phrase never enters the app; retried while unpaired/locked)
  *   tick/10s  ONE bounded inbox long-poll (worker thread), then on the main thread: for each sealed `take` verify
  *             the taker's transaction against MY order, co-sign, post, reply `taken`/`refused`, republish the
  *             remainder; `taken`/`refused` replies to MY pending takes are recorded as fills
@@ -111,24 +112,54 @@ public class MakerService extends Service {
     private void log(String s) { android.util.Log.i("Dexicon", s); }
     private void changed() { sendBroadcast(new Intent(ACTION_CHANGED).setPackage(getPackageName())); }
 
-    /** Identity from the node seed (vault action:seed). Derived on a worker; deterministic, so the Activity's copy matches. */
+    /** Identity from a one-way node derivation (SeedSource: the phrase never enters the app). Deterministic, so the
+     *  Activity's copy matches. */
     private void deriveIdentity() {
         if (me != null || deriving || node == null) return;
         deriving = true;
-        node.cmd("vault action:seed", new NodeApi.Cb() {
-            public void onResult(JSONObject j) {
-                JSONObject r = j.optJSONObject("response");
-                String seed = r == null ? "" : r.optString("seed", r.optString("phrase", ""));
-                if (seed.isEmpty()) { deriving = false; log("boot waiting: no seed (vault locked / WRITE not granted?)"); return; }
+        SeedSource.derive(node, SeedSource.DEX, new SeedSource.Cb() {
+            public void got(String seed) {
                 net.execute(() -> {
-                    try {
-                        DexIdentity id = DexIdentity.fromSeed(ls, seed);
-                        h.post(() -> { me = id; engine = new MakerEngine(MakerService.this, node, db, relay, me); ladder = new LadderRunner(engine, db, line -> { log(line); changed(); }); cross = new AutoCross(node, db, MakerService.this::changed); deriving = false; db.setMeta("publicId", me.publicId()); log("booted — publicId " + me.publicId()); refreshAddresses(null); });
-                    } catch (Exception e) { h.post(() -> { deriving = false; log("identity derive failed: " + e); }); }
+                    try { DexIdentity id = DexIdentity.fromSeed(ls, seed); h.post(() -> migrateThenBoot(id)); }
+                    catch (Exception e) { h.post(() -> { deriving = false; log("identity derive failed: " + e); }); }
                 });
             }
-            public void onError(String m) { deriving = false; log("seed read: " + m); }
+            public void failed(String why) { deriving = false; log("boot waiting: " + why); }
         });
+    }
+
+    /** One time: orders the old (vault-seed) identity signed are cancelled with that identity, so no taker keeps messaging
+     *  a key nobody answers; then the new identity boots and the ladder reposts. The vault is never read again. */
+    private void migrateThenBoot(DexIdentity id) {
+        String old = db.meta("publicId", "");
+        List<MyOrder> live = new ArrayList<>(); for (MyOrder o : db.myOrders()) if (o.live()) live.add(o);
+        if (old.isEmpty() || old.equalsIgnoreCase(id.publicId()) || live.isEmpty()) { boot(id); return; }
+        log("identity moves off the seed phrase — retiring " + live.size() + " order(s) signed by " + old);
+        SeedSource.legacy(node, new SeedSource.Cb() {
+            public void got(String seed) {
+                net.execute(() -> {
+                    DexIdentity was; try { was = DexIdentity.fromSeed(ls, seed); } catch (Exception e) { was = null; }
+                    final DexIdentity w = was;
+                    h.post(() -> {
+                        if (w == null || !old.equalsIgnoreCase(w.publicId())) { boot(id); return; }
+                        MakerEngine retire = new MakerEngine(MakerService.this, node, db, relay, w);
+                        cancelEach(retire, live, 0, () -> boot(id));
+                    });
+                });
+            }
+            public void failed(String why) { log("old orders not cancelled (" + why + ") — they expire on their own"); boot(id); }
+        });
+    }
+
+    private void cancelEach(MakerEngine e, List<MyOrder> os, int i, Runnable done) {
+        if (i >= os.size()) { done.run(); return; }
+        e.cancel(os.get(i).orderId, (err, o) -> h.post(() -> cancelEach(e, os, i + 1, done)));
+    }
+
+    private void boot(DexIdentity id) {
+        me = id; engine = new MakerEngine(MakerService.this, node, db, relay, me); ladder = new LadderRunner(engine, db, line -> { log(line); changed(); });
+        cross = new AutoCross(node, db, MakerService.this::changed); deriving = false; db.setMeta("publicId", me.publicId());
+        log("booted — publicId " + me.publicId()); refreshAddresses(null);
     }
 
     /** Every address that holds one of my coins + the default address: "is this input mine?" for the verifier. */

@@ -77,14 +77,22 @@ public final class NodeTransportService extends Service {
         super.onDestroy();
     }
 
+    static final int INLINE_BYTES = 64 * 1024;
+
     private void respond(Messenger target, String id, JSONObject reply) {
         File file = NodeTransport.file(this, id, ".json");
         Message result = Message.obtain(null, 1);
         Bundle data = new Bundle(); data.putString("id", id);
         try {
-            byte[] bytes = (reply == null ? "{}" : reply.toString()).getBytes(StandardCharsets.UTF_8);
+            // security review 30 Oct: a seed phrase never leaves this service, and a small reply (every secret one is
+            // small) never touches the disk — it rides the in-process Binder; only bulky coin lists are staged
+            JSONObject r = reply == null ? null : reply.optJSONObject("response");
+            if (r != null) r.remove("phrase");
+            String json = reply == null ? "{}" : reply.toString();
+            byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
             if (bytes.length > NodeTransport.MAX_BYTES) throw new java.io.IOException("Oversized reply");
-            Files.write(file.toPath(), bytes);
+            if (bytes.length <= INLINE_BYTES) data.putString("inline", json);
+            else Files.write(file.toPath(), bytes);
         } catch (Exception error) { data.putString("error", "Node transport could not save the reply."); }
         result.setData(data);
         try { target.send(result); }

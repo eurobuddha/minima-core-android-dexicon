@@ -44,6 +44,7 @@ public final class DexIdentity {
         byte[] signPk = new byte[Sign.PUBLICKEYBYTES], signSk = new byte[Sign.SECRETKEYBYTES];
         if (!ls.cryptoBoxSeedKeypair(boxPk, boxSk, boxSeed)) throw new RuntimeException("box seed keypair failed");
         if (!ls.cryptoSignSeedKeypair(signPk, signSk, signSeed)) throw new RuntimeException("sign seed keypair failed");
+        java.util.Arrays.fill(boxSeed, (byte) 0); java.util.Arrays.fill(signSeed, (byte) 0);   // the keypairs hold what is needed
         return new DexIdentity(ls, boxPk, boxSk, signPk, signSk);
     }
 

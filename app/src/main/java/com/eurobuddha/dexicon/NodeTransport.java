@@ -33,11 +33,11 @@ final class NodeTransport {
         if (closed || msg.what != 1 || msg.sendingUid != android.os.Process.myUid()) return true;
         String id = msg.getData().getString("id", "");
         if (!validId(id) || !callbacks.containsKey(id) || !reading.add(id)) return true;
-        String error = msg.getData().getString("error");
+        String error = msg.getData().getString("error"), inline = msg.getData().getString("inline");
         File file = file(context, id, ".json");
         FutureTask<Void> task = new FutureTask<>(() -> {
             JSONObject reply;
-            try { reply = error == null ? com.eurobuddha.minimaapi.MinimaAPIResponse.parse(read(file)) : failure(error); }
+            try { reply = error != null ? failure(error) : com.eurobuddha.minimaapi.MinimaAPIResponse.parse(inline != null ? inline : read(file)); }
             catch (Exception bad) { reply = failure("Node transport could not read the reply."); }
             finally { file.delete(); }
             final JSONObject answer = reply;
