@@ -236,6 +236,7 @@ public class MainActivity extends AppCompatActivity {
                 JSONObject r = j.optJSONObject("response");
                 long was = chainBlock;
                 try { chainBlock = Long.parseLong(r.optString("block", "0")); } catch (Exception ignored) {}
+                Tokens.noteBlock(chainBlock); Tokens.setMxUsd(RelayStore.mxusdOverride(MainActivity.this));   // the override only on a proven test chain
                 restingRepo.setChainBlock(chainBlock); restingTxn.setChainBlock(chainBlock);
                 if (chainBlock != was) { refreshResting(); warmMakers(); warmWallet(); }   // book + pools follow the chain, once per new block
                 repaintHeader();

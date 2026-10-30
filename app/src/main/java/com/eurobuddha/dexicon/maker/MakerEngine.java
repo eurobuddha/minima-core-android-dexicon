@@ -137,7 +137,7 @@ public final class MakerEngine {
 
     private void tip(java.util.function.LongConsumer cb) {
         node.cmd("block", new NodeApi.Cb() {
-            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); long t = 0; try { t = Long.parseLong(r == null ? "0" : r.optString("block", "0")); } catch (Exception ignored) {} cb.accept(Math.max(0, t)); }
+            public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); long t = 0; try { t = Long.parseLong(r == null ? "0" : r.optString("block", "0")); } catch (Exception ignored) {} Tokens.noteBlock(t); cb.accept(Math.max(0, t)); }
             public void onError(String m) { cb.accept(0); }
         });
     }

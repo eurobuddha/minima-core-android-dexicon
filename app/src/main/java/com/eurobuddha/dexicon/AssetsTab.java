@@ -81,7 +81,8 @@ public final class AssetsTab extends LinearLayout {
         TextView save = Ui.button(act, "Save");
         save.setOnClickListener(v -> {
             String tok = in.getText().toString().trim();
-            if (!Tokens.setMxUsd(tok)) { act.toast("Not a 0x + 64 hex tokenid"); return; }
+            if (!tok.isEmpty() && !tok.matches("^0x[0-9a-fA-F]{64}$")) { act.toast("Not a 0x + 64 hex tokenid"); return; }
+            if (!Tokens.setMxUsd(tok)) { act.toast("Refused: this node is not on a test chain. The override is for test chains only."); return; }
             RelayStore.setMxusdOverride(getContext(), tok);
             act.applySettings(); act.toast(tok.isEmpty() ? "Mainnet MxUSD" : "Dollar leg → " + tok); act.repaint();
         });
