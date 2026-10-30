@@ -224,17 +224,24 @@ public class MakerService extends Service {
 
     private void kickLadder() { if (ladder != null && paired && !chainBusy) ladder.pass(this::changed); }
 
+    static final int MAX_TAKES_PER_CYCLE = 16, MAX_TAKES_PER_SENDER = 2;
+
     private void onInbox(List<Envelope> msgs) {
         if (ladder != null && ladder.running()) { ladder.afterPass(() -> onInbox(msgs)); return; }   // a kicked pass is mid-flight
         chainBusy = true;
         List<JSONObject> takes = new ArrayList<>();
+        java.util.Map<String, Integer> perSender = new java.util.HashMap<>();
         for (Envelope m : msgs) {
             DexIdentity.Opened o = me.open(m.blob);
             if (o == null) continue;
             JSONObject inner; try { inner = new JSONObject(o.text()); } catch (Exception e) { continue; }
             String k = inner.optString("k", "");
             try { inner.put("_from", o.fromPublicId); } catch (Exception ignored) {}
-            if ("take".equals(k)) takes.add(inner);
+            if ("take".equals(k)) {   // flood limits (review 30 Oct): a few takes per sender, a bounded batch, per cycle
+                String from = o.fromPublicId == null ? "" : o.fromPublicId.toLowerCase(java.util.Locale.ROOT);
+                Integer seen = perSender.get(from);
+                if (takes.size() < MAX_TAKES_PER_CYCLE && (seen == null || seen < MAX_TAKES_PER_SENDER)) { takes.add(inner); perSender.put(from, seen == null ? 1 : seen + 1); }
+            }
             else if ("taken".equals(k) || "refused".equals(k)) onReply(inner);
         }
         processTakes(takes, 0, () -> {
@@ -364,7 +371,8 @@ public class MakerService extends Service {
 
     private void handleTake(JSONObject take, Runnable next) {
         final String taker = take.optString("_from", ""), orderId = take.optString("orderId", ""), hex = take.optString("txn", "");
-        if (taker.isEmpty() || hex.isEmpty() || orderId.isEmpty()) { next.run(); return; }
+        // a peer's txn goes into txnview/txnimport: bounded hex only (security review 30 Oct)
+        if (taker.isEmpty() || orderId.isEmpty() || !hex.matches("(0x)?[0-9A-Fa-f]{2,200000}")) { next.run(); return; }
         final MyOrder o = db.myOrder(orderId);
         if (o == null || !o.live()) { reply(taker, refused(orderId, "order not live")); next.run(); return; }
         if (!lockCoins(o.coins)) { reply(taker, refused(orderId, "taken")); next.run(); return; }

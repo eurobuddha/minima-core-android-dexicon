@@ -34,7 +34,7 @@ public class LiveBookTest {
             public String post(String url, String body) { return "{\"ok\":true,\"cursor\":1}"; }
         };
         RelayClient c = new RelayClient(t, "MINIMA/MxUSD", () -> e.expiry - 3600);
-        c.setRelays(Arrays.asList("http://relay"));
+        c.setRelays(Arrays.asList("https://relay"));
         assertEquals(1, c.pollBook(1));
         List<Envelope> live = c.orders(null);
         assertEquals("the live order is in the book", 1, live.size());
@@ -57,9 +57,9 @@ public class LiveBookTest {
             public String post(String url, String b) { return "{}"; }
         };
         RelayClient c = new RelayClient(tr, "MINIMA/MxUSD", () -> 1792607000L);
-        c.setRelays(Arrays.asList("http://relay"));
+        c.setRelays(Arrays.asList("https://relay"));
         assertEquals(1, c.pollBook(1));
-        assertEquals(0, c.status().get("http://relay").rejected);
+        assertEquals(0, c.status().get("https://relay").rejected);
     }
     static String rawOrder() {
         try { return new org.json.JSONObject(resource("live-book-2026-10-21.json")).getJSONArray("orders").getJSONObject(0).toString(); }

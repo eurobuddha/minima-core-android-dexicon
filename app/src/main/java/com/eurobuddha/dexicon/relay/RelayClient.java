@@ -50,7 +50,10 @@ public final class RelayClient {
     private final Map<String, Status> status = new LinkedHashMap<>();
     private final Map<String, Envelope> book = new LinkedHashMap<>();
     private static final java.util.concurrent.ExecutorService POOL = java.util.concurrent.Executors.newCachedThreadPool(r -> { Thread th = new Thread(r, "dexicon-relay-post"); th.setDaemon(true); return th; });
-    private final Set<String> seenMsgs = new HashSet<>();
+    /** Security review 30 Oct: a relay is untrusted — bounded work per reply (each envelope costs a full Ed25519 verify),
+     *  a reply abandoned after MAX_BAD bad envelopes, a bounded book and a bounded inbox dedupe set. */
+    static final int MAX_PER_REPLY = 2000, MAX_BAD = 50, MAX_BOOK = 5000, MAX_SEEN = 10_000;
+    private final Set<String> seenMsgs = new java.util.LinkedHashSet<>();
     private int rr;
 
     public RelayClient(Transport t, String market, LongSupplier nowSeconds) {
@@ -61,7 +64,10 @@ public final class RelayClient {
     public static String clean(String u) {
         if (u == null) return null;
         u = u.trim().replaceAll("/+$", "");
-        return u.matches("^https?://[^\\s/]+.*") ? u : null;
+        // https only (security review 30 Oct): plain http lets anyone on the path read and drop the book and the takes.
+        // A local relay (dev box, emulator host) may stay http.
+        if (u.matches("^https://[^\\s/]+.*")) return u;
+        return u.matches("^http://(localhost|127\\.0\\.0\\.1|10\\.0\\.2\\.2)(:[0-9]+)?(/.*)?$") ? u : null;
     }
 
     public synchronized void setRelays(List<String> urls) {
@@ -89,6 +95,11 @@ public final class RelayClient {
         if (v.kind != Envelope.Kind.ORDER) throw new IllegalArgumentException("not an order");
         Envelope have = book.get(v.key());
         if (have != null && have.seq >= v.seq) return false;
+        if (have == null && book.size() >= MAX_BOOK) {
+            long n = now.getAsLong();
+            book.values().removeIf(e -> e.expiry <= n);
+            if (book.size() >= MAX_BOOK) throw new IllegalArgumentException("book full");
+        }
         book.put(v.key(), v);
         return true;
     }
@@ -138,7 +149,7 @@ public final class RelayClient {
             if (inStr) { if (c == '\\') i++; else if (c == '"') inStr = false; continue; }
             if (c == '"') inStr = true;
             else if (c == '{') { if (depth++ == 0) start = i; }
-            else if (c == '}') { if (--depth == 0 && start >= 0) { out.add(body.substring(start, i + 1)); start = -1; } }
+            else if (c == '}') { if (--depth == 0 && start >= 0) { out.add(body.substring(start, i + 1)); start = -1; if (out.size() >= MAX_PER_REPLY) break; } }
             else if (c == ']' && depth == 0) break;
         }
         return out;
@@ -179,7 +190,7 @@ public final class RelayClient {
         if (!body.has("cursor") || orders == null) { mark(url, false, "bad body"); return -1; }
         int changed = 0, rejected = 0; String why = "";
         List<String> raws = rawObjects(text, "orders");
-        for (int i = 0; i < orders.length(); i++) {
+        for (int i = 0; i < orders.length() && i < MAX_PER_REPLY && rejected < MAX_BAD; i++) {
             Object o = orders.opt(i);
             String raw = o instanceof String ? (String) o : (i < raws.size() ? raws.get(i) : String.valueOf(o));
             try { if (applyOrderStrict(raw)) changed++; }
@@ -232,14 +243,18 @@ public final class RelayClient {
         if (!body.has("cursor") || msgs == null) { mark(url, false, "bad body"); return fresh; }
         long n = now.getAsLong();
         List<String> raws = rawObjects(text, "messages");
-        for (int i = 0; i < msgs.length(); i++) {
+        int bad = 0;
+        for (int i = 0; i < msgs.length() && i < MAX_PER_REPLY && bad < MAX_BAD; i++) {
             Object m = msgs.opt(i);
             String raw = m instanceof String ? (String) m : (i < raws.size() ? raws.get(i) : String.valueOf(m));
             Envelope v;
-            try { v = Envelope.parse(raw, n); } catch (RuntimeException e) { continue; }
+            try { v = Envelope.parse(raw, n); } catch (RuntimeException e) { bad++; continue; }
             if (v.kind != Envelope.Kind.MSG || !v.to.equalsIgnoreCase(publicId)) continue;
             String sig = sigOf(raw);
-            synchronized (this) { if (!seenMsgs.add(sig.toLowerCase(Locale.ROOT))) continue; }
+            synchronized (this) {
+                if (!seenMsgs.add(sig.toLowerCase(Locale.ROOT))) continue;
+                if (seenMsgs.size() > MAX_SEEN) { java.util.Iterator<String> it = seenMsgs.iterator(); it.next(); it.remove(); }   // oldest first
+            }
             fresh.add(v);
         }
         synchronized (this) { inboxCursors.put(url, body.optLong("cursor", 0)); }

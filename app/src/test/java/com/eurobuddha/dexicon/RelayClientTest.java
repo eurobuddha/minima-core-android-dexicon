@@ -56,8 +56,8 @@ public class RelayClientTest {
         String A3cancel = ord(maker, "0x0000000000000001", 3, "sell", "0.019", "0", TestIds.NOW + 3600);
 
         Map<String, JSONObject> served = new HashMap<>();
-        served.put("http://r1", TestIds.obj("cursor", 5, "reset", true, "orders", TestIds.arr(A1, B1)));
-        served.put("http://r2", TestIds.obj("cursor", 9, "reset", true, "orders", TestIds.arr(A2, C1)));
+        served.put("https://r1", TestIds.obj("cursor", 5, "reset", true, "orders", TestIds.arr(A1, B1)));
+        served.put("https://r2", TestIds.obj("cursor", 9, "reset", true, "orders", TestIds.arr(A2, C1)));
         List<String> requests = new ArrayList<>(), posts = new ArrayList<>();
         RelayClient.Transport t = new RelayClient.Transport() {
             public String get(String url) throws IOException {
@@ -71,15 +71,15 @@ public class RelayClientTest {
         };
         final long[] now = {TestIds.NOW};
         RelayClient c = new RelayClient(t, "MINIMA/MxUSD", () -> now[0]);
-        c.setRelays(Arrays.asList("http://r1/", "http://r1", " http://r2 ", "ftp://bad", "http://r3"));
-        assertEquals(Arrays.asList("http://r1", "http://r2", "http://r3"), c.relays());
+        c.setRelays(Arrays.asList("https://r1/", "https://r1", " https://r2 ", "ftp://bad", "https://r3"));
+        assertEquals(Arrays.asList("https://r1", "https://r2", "https://r3"), c.relays());
 
         assertEquals("r1 changed 2", 2, c.pollBook(8));
         assertTrue("hold + since params", requests.get(0).contains("&hold=8") && requests.get(0).contains("since=0"));
         assertEquals("r2: A2 replaces A1, C1 added", 2, c.pollBook(8));
         assertEquals("r3 down", -1, c.pollBook(8));
-        assertFalse(c.status().get("http://r3").ok);
-        assertTrue(c.status().get("http://r1").ok);
+        assertFalse(c.status().get("https://r3").ok);
+        assertTrue(c.status().get("https://r1").ok);
 
         List<Envelope> live = c.orders(null);
         assertEquals("union = 3 live orders", 3, live.size());
@@ -112,7 +112,7 @@ public class RelayClientTest {
             public String post(String url, String body) { return "{}"; }
         };
         RelayClient ic = new RelayClient(t, "MINIMA/MxUSD", () -> TestIds.NOW);
-        ic.setRelays(Arrays.asList("http://r1"));
+        ic.setRelays(Arrays.asList("https://r1"));
         assertEquals("one fresh message for me", 1, ic.pollInbox(maker.publicId(), 8).size());
         assertEquals("replay yields none", 0, ic.pollInbox(maker.publicId(), 8).size());
     }
@@ -120,13 +120,21 @@ public class RelayClientTest {
     @Test public void discoverToleratesMissingEndpoint() {
         RelayClient.Transport t = new RelayClient.Transport() {
             public String get(String url) throws IOException {
-                if (url.startsWith("http://r1")) throw new IOException("HTTP 404");
-                return TestIds.obj("relays", TestIds.arr("http://r1", "http://r9/", "junk")).toString();
+                if (url.startsWith("https://r1")) throw new IOException("HTTP 404");
+                return TestIds.obj("relays", TestIds.arr("https://r1", "https://r9/", "junk")).toString();
             }
             public String post(String url, String body) { return "{}"; }
         };
         RelayClient c = new RelayClient(t, "MINIMA/MxUSD", () -> TestIds.NOW);
-        c.setRelays(Arrays.asList("http://r1", "http://r2"));
-        assertEquals(Arrays.asList("http://r9"), c.discover());
+        c.setRelays(Arrays.asList("https://r1", "https://r2"));
+        assertEquals(Arrays.asList("https://r9"), c.discover());
+    }
+
+    /** Security review 30 Oct: https only; a local dev relay may stay http. */
+    @Test public void relaysMustBeHttps() {
+        assertEquals("https://eurobuddha.com/dex-relay", RelayClient.clean("https://eurobuddha.com/dex-relay/"));
+        assertNull(RelayClient.clean("http://95.179.179.181:9602"));
+        assertEquals("http://127.0.0.1:9602", RelayClient.clean("http://127.0.0.1:9602"));
+        assertNull(RelayClient.clean("http://127.0.0.1.evil.com"));
     }
 }
