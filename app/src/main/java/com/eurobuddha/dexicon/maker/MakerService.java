@@ -226,6 +226,16 @@ public class MakerService extends Service {
         String orderId = inner.optString("orderId", "");
         JSONObject pt = db.pending(orderId);
         if (pt == null) return;
+        // security review 30 Oct: only this order's maker may answer for it, with a real txpowid; the coin ids I track
+        // are my own (recorded from my half at send time), never the ones the reply names
+        String maker = pt.optString("maker", pt.optJSONObject("order") == null ? "" : pt.optJSONObject("order").optString("pubId", ""));
+        try { if (maker.isEmpty() || !DexIdentity.canonicalId(maker).equalsIgnoreCase(DexIdentity.canonicalId(inner.optString("_from", "")))) return; }
+        catch (RuntimeException e) { return; }
+        if ("taken".equals(inner.optString("k")) && !inner.optString("txpowid").matches("0x[0-9A-Fa-f]{64}")) return;
+        try {
+            inner.put("coins", pt.optJSONArray("outs") == null ? new JSONArray() : pt.optJSONArray("outs"));
+            if (!inner.optString("filled").matches("[0-9]+(\\.[0-9]+)?")) inner.remove("filled");
+        } catch (Exception ignored) {}
         final String actId = pt.optString("act", "");
         final long answeredMs = System.currentTimeMillis();
         if ("taken".equals(inner.optString("k"))) {
@@ -284,8 +294,9 @@ public class MakerService extends Service {
         log("take received for " + orderId + " from " + taker + " (" + hex.length() / 2 + " bytes)");
         final long receivedMs = System.currentTimeMillis();
         final List<String> spentByMe = new ArrayList<>(), allIns = new ArrayList<>();
-        FillTxn.cosign(node, hex, (ins, outs, hasState) -> {
-            FillPlan.Verdict v = FillPlan.verifyAsMaker(ins, outs, hasState, o.asFillOrder(), o.coins, o.remaining, new ArrayList<>(myAddresses));
+        FillTxn.cosign(node, hex, FillTxn.signKeys(o.scripts), (ins, outs, hasState, wallet) -> {
+            List<String> mine = new ArrayList<>(myAddresses); mine.addAll(wallet);   // fresh, complete: no coin of mine passes as the taker's
+            FillPlan.Verdict v = FillPlan.verifyAsMaker(ins, outs, hasState, o.asFillOrder(), o.coins, o.remaining, mine);
             if (v.ok) for (com.eurobuddha.dexicon.fill.Coin c : ins) { if (o.coins.contains(c.coinid)) spentByMe.add(c.coinid); allIns.add(c.coinid); }
             return v;
         }, (err, txpowid, verdict, outCoins) -> {

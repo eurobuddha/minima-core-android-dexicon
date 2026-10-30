@@ -80,6 +80,24 @@ public class FillPlanTest {
         assertFalse(FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(p), true, oS, oS.coins, "100", mine).ok);
     }
 
+    /** Security review 30 Oct: a taker paid MxUSD to my pay-to address, then listed that coin (now mine) as its own input
+     *  to pay for a second take. My pay-to address counts as mine even when the cached address list lacks it. */
+    @Test public void myPayToCoinCannotPassAsTheTakers() {
+        FillPlan.Plan p = FillPlan.plan(oS, "33.333333339", mSell, tUsd, TADDR);
+        Coin paid = coin("21", Tokens.MXUSD(), "0.41", MADDR);   // the earlier payment, now my coin
+        List<Coin> ins = new ArrayList<>(viewInputs(p, mSell)); ins.add(paid);
+        List<FillPlan.Output> outs = new ArrayList<>(p.outputs); outs.remove(3); outs.remove(2);   // the taker's own coins dropped
+        outs.add(out(MADDR, "0.41", Tokens.MXUSD()));
+        FillPlan.Verdict v = FillPlan.verifyAsMaker(ins, viewOutputs(outs), false, oS, oS.coins, "100", Arrays.asList(MCOINADDR));
+        assertFalse(v.ok);
+        assertTrue(v.reason, v.reason.contains("not advertised"));
+    }
+
+    @Test public void makerSignsWithTheOrdersOwnKeysOnly() {
+        assertEquals(Arrays.asList(TestIds.hex("dd", 32)), com.eurobuddha.dexicon.fill.FillTxn.signKeys(Arrays.asList(SCRIPTS.get(0), SCRIPTS.get(0), "RETURN TRUE", null)));
+        assertTrue(com.eurobuddha.dexicon.fill.FillTxn.signKeys(Arrays.asList("RETURN SIGNEDBY(0x00) AND TRUE")).isEmpty());
+    }
+
     @Test public void buyOrder() {
         List<Coin> mUsd = Arrays.asList(coin("21", Tokens.MXUSD(), "2", MCOINADDR), coin("22", Tokens.MXUSD(), "1.5", MCOINADDR));
         List<Coin> tMin = Arrays.asList(coin("31", Tokens.MINIMA, "7", TADDR), coin("32", Tokens.MINIMA, "4", TADDR));

@@ -784,8 +784,20 @@ public class MainActivity extends AppCompatActivity {
                 JSONObject inner = new JSONObject().put("k", "take").put("orderId", order.orderId).put("txn", hex).put("taker", me.publicId());
                 String blob = me.seal(order.pubId, inner.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 String msg = Envelopes.msg(me, order.pubId, blob, MakerEngine.now() + 300);
-                JSONObject pt = new JSONObject().put("order", new JSONObject(order.raw)).put("plan", planJson(plan)).put("sent", System.currentTimeMillis()).put("act", actId);
+                JSONObject pt = new JSONObject().put("order", new JSONObject(order.raw)).put("plan", planJson(plan)).put("sent", System.currentTimeMillis()).put("act", actId)
+                        .put("maker", order.pubId).put("outs", new JSONArray());
                 db.savePending(order.orderId, pt);
+                // my own record of the outputs (the maker's signature adds witness only, so these ids are final): never the maker's word
+                node.cmdR("txnview data:" + hex, new NodeApi.Cb() {
+                    public void onResult(JSONObject v) {
+                        JSONObject r = v.optJSONObject("response"), t = r == null ? null : r.optJSONObject("transaction");
+                        JSONArray outs = t == null ? null : t.optJSONArray("outputs"), ids = new JSONArray();
+                        if (outs != null) for (int i = 0; i < outs.length(); i++) { JSONObject c = outs.optJSONObject(i); String id = c == null ? "" : c.optString("coinid", ""); if (id.matches("0x[0-9A-Fa-f]{64}")) ids.put(id); }
+                        JSONObject cur = db.pending(order.orderId);
+                        if (cur != null) try { db.savePending(order.orderId, cur.put("outs", ids)); } catch (Exception ignored) {}
+                    }
+                    public void onError(String m) {}
+                });
                 net.execute(() -> {
                     List<RelayClient.PublishResult> results = relay.publish(msg);
                     int ok = 0; for (RelayClient.PublishResult x : results) if (x.ok) ok++;

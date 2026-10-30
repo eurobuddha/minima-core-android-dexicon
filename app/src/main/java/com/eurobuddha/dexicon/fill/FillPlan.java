@@ -153,6 +153,7 @@ public final class FillPlan {
         boolean sell = "sell".equals(order.side);
         String myTok = sell ? Tokens.MINIMA : Tokens.MXUSD(), wantTok = sell ? Tokens.MXUSD() : Tokens.MINIMA;
         Set<String> adv = lower(advertisedCoinIds), mine = lower(myAddresses), myInAddrs = new HashSet<>();
+        if (order.address != null) mine.add(order.address.toLowerCase(Locale.ROOT));   // my pay-to address is mine for inputs too
         BigDecimal myIn = BigDecimal.ZERO;
         for (Coin inp : inputs) {
             boolean isAdv = adv.contains(inp.coinid.toLowerCase(Locale.ROOT));
