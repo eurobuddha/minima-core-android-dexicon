@@ -16,7 +16,7 @@ import java.util.concurrent.Executors;
 /**
  * MEXC MINIMA/USDT price feed for the fast market maker — a port of AtomiX's PriceOracle MINIMA path
  * (apks/atomix swap/PriceOracle.java), with the SAME fund-safety rules and constants:
- *   - effective bid/ask = the book level where cumulative notional reaches 25 USDT (dust can't move it);
+ *   - effective bid/ask = the book level where cumulative notional reaches 100 USDT (dust can't move it);
  *   - a spread ≥ 20 % or an empty/crossed book is "no price", never a guess;
  *   - a > 50 % move needs a second agreeing read before it prices anything;
  *   - fresh ≤ 5 min → tight; stale → the spread widens linearly to ×10 over 90 min; no price at all, or
@@ -28,19 +28,24 @@ import java.util.concurrent.Executors;
 public final class MexcFeed {
     private MexcFeed() {}
 
-    static final String DEPTH_URL = "https://api.mexc.com/api/v3/depth?symbol=MINIMAUSDT&limit=20";
+    static final String DEPTH_URL = "https://api.mexc.com/api/v3/depth?symbol=MINIMAUSDT&limit=50";
     static final String BOOK_URL = "https://api.mexc.com/api/v3/ticker/bookTicker?symbol=MINIMAUSDT";
     public static final long FRESH_MS = 5 * 60_000;
     static final long FETCH_GAP_MS = 30_000;
     static final long STALE_WIDEN_FULL_MS = 90 * 60_000;
     static final double MAX_WIDEN = 10.0;
     public static final long HARD_STALE_MS = 12 * 60 * 60_000L;
-    static final double JUMP_FRACTION = 0.5;
-    static final double DEPTH_MIN_USDT = 25;
+    /** Security review 30 Oct: the ladder followed a thin feed (25 USDT deep, ±50 % in one read), so a cheap push on MEXC
+     *  repriced it for a taker to pick off. Now 100 USDT deep (≈1 % from the touch on 30 Oct's book), and any move over
+     *  3 % is taken only after it HOLDS — a second read within 1 % of it, at least 60 s later. */
+    static final double JUMP_FRACTION = 0.03, CONFIRM_BAND = 0.01;
+    static final long CONFIRM_MS = 60_000;
+    static final double DEPTH_MIN_USDT = 100;
 
     private static final Object LOCK = new Object();
     private static final ExecutorService EXEC = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-mexc"); t.setDaemon(true); return t; });
     private static double price, bid, ask, suspect;
+    private static long suspectAtMs;
     private static long goodAtMs, lastTryMs;
     private static boolean fetching;
     private static String lastError;
@@ -114,9 +119,10 @@ public final class MexcFeed {
             else if ((a - b) / a >= 0.2) err = "spread too wide — book too thin to quote";
             double m = (a + b) / 2;
             if (err == null && (!(m > 0) || Double.isInfinite(m))) err = "bad price";
-            if (err == null && price > 0 && Math.abs(m - price) / price > JUMP_FRACTION
-                    && !(suspect > 0 && Math.abs(m - suspect) / suspect < 0.10)) {
-                suspect = m; err = "suspect jump " + fmt(price) + "→" + fmt(m);
+            if (err == null && price > 0 && Math.abs(m - price) / price > JUMP_FRACTION) {
+                boolean agrees = suspect > 0 && Math.abs(m - suspect) / suspect < CONFIRM_BAND;
+                if (!agrees) { suspect = m; suspectAtMs = nowMs; err = "suspect jump " + fmt(price) + "→" + fmt(m) + " — held until it holds for 60 s"; }
+                else if (nowMs - suspectAtMs < CONFIRM_MS) err = "confirming jump " + fmt(price) + "→" + fmt(m);
             }
             if (err != null) { lastError = err; return err; }
             suspect = 0; price = m; bid = b; ask = a; goodAtMs = nowMs; lastError = null;
@@ -124,7 +130,7 @@ public final class MexcFeed {
         }
     }
 
-    /** Price where cumulative notional (price × qty) reaches 25 USDT, or 0 if the side can't absorb it. */
+    /** Price where cumulative notional (price × qty) reaches DEPTH_MIN_USDT, or 0 if the side can't absorb it. */
     static double effectiveLevel(JSONArray side) {
         try {
             if (side == null) return 0;
@@ -141,7 +147,7 @@ public final class MexcFeed {
     }
 
     /** Test hook: forget everything. */
-    static void reset() { synchronized (LOCK) { price = bid = ask = suspect = 0; goodAtMs = lastTryMs = 0; lastError = null; } }
+    static void reset() { synchronized (LOCK) { price = bid = ask = suspect = 0; goodAtMs = lastTryMs = suspectAtMs = 0; lastError = null; } }
 
     private static JSONObject httpGet(String u) throws IOException {
         HttpURLConnection c = null;

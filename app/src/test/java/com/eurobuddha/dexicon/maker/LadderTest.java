@@ -79,8 +79,8 @@ public class LadderTest {
     }
 
     @Test public void feedTakesDepthPriceAndRejectsThinWideOrJumpyReads() throws Exception {
-        JSONArray side = new JSONArray("[[\"0.0036\",\"1000\"],[\"0.0035\",\"10000\"]]");   // 3.6 USDT, then 38.6 cumulative
-        assertEquals(0.0035, MexcFeed.effectiveLevel(side), 0);
+        JSONArray side = new JSONArray("[[\"0.0036\",\"1000\"],[\"0.0035\",\"10000\"],[\"0.0034\",\"30000\"]]");   // 3.6, 38.6, then 140.6 USDT
+        assertEquals(0.0034, MexcFeed.effectiveLevel(side), 0);
         assertEquals(0, MexcFeed.effectiveLevel(new JSONArray("[[\"0.0036\",\"10\"]]")), 0);   // too thin
         assertNotNull(MexcFeed.accept(0.0036, 0.0035, 1));    // crossed
         assertNotNull(MexcFeed.accept(0.003, 0.004, 1));      // 25 % spread
@@ -90,8 +90,15 @@ public class LadderTest {
         assertTrue(MexcFeed.fresh());
         assertNotNull(MexcFeed.accept(0.0099, 0.0100, now)); // +170 % in one read: held as suspect
         assertEquals(0.003675, MexcFeed.mid(), 1e-12);
-        assertNull(MexcFeed.accept(0.0099, 0.0101, now));    // a second agreeing read is accepted
+        assertNotNull(MexcFeed.accept(0.0099, 0.0101, now + 30_000));   // agrees, but has not held 60 s yet
+        assertEquals(0.003675, MexcFeed.mid(), 1e-12);
+        assertNull(MexcFeed.accept(0.0099, 0.0101, now + 60_000));      // held a minute: accepted
         assertEquals(0.01, MexcFeed.mid(), 1e-12);
+        // review 30 Oct: a 5 % push is no longer taken on one read either
+        assertNotNull(MexcFeed.accept(0.01045, 0.01055, now + 61_000));
+        assertEquals(0.01, MexcFeed.mid(), 1e-12);
+        assertNull(MexcFeed.accept(0.01009, 0.01011, now + 62_000));    // within 3 %: taken at once
+        assertEquals(0.0101, MexcFeed.mid(), 1e-12);
     }
 
     @Test public void wideningRampsFromOneToTen() {
