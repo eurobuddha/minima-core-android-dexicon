@@ -783,7 +783,7 @@ public class MainActivity extends AppCompatActivity {
                 String blob = me.seal(order.pubId, inner.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 String msg = Envelopes.msg(me, order.pubId, blob, MakerEngine.now() + 300);
                 JSONObject pt = new JSONObject().put("order", new JSONObject(order.raw)).put("plan", planJson(plan)).put("sent", System.currentTimeMillis()).put("act", actId)
-                        .put("maker", order.pubId).put("outs", new JSONArray());
+                        .put("maker", order.pubId).put("outs", new JSONArray()).put("mine", mineIns(plan, order));
                 db.savePending(order.orderId, pt);
                 // my own record of the outputs (the maker's signature adds witness only, so these ids are final): never the maker's word
                 node.cmdR("txnview data:" + hex, new NodeApi.Cb() {
@@ -814,7 +814,7 @@ public class MainActivity extends AppCompatActivity {
                         followTake();
                         ui.postDelayed(() -> {
                             if (run == r && actId.equals(r.act) && db.pending(order.orderId) != null) {
-                                logStep("No answer from the maker in 60s. The take stays open for 5 minutes and settles here if the maker co-signs.");
+                                logStep("No answer from the maker in 60s. If it has not co-signed within 5 minutes, your node spends one of this take's coins back to you, which voids it.");
                                 endRun();
                             }
                         }, 60_000);
@@ -861,6 +861,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void endRun() { run = null; busy = false; repaint(); }
+
+    /** My own coins in a take (its inputs the maker did not advertise) — the service spends one to void a stale take. */
+    private static JSONArray mineIns(FillPlan.Plan p, Envelope order) {
+        JSONArray out = new JSONArray();
+        for (String id : p.inputs) { boolean theirs = false; for (String m : order.coins) if (m.equalsIgnoreCase(id)) theirs = true; if (!theirs) out.put(id); }
+        return out;
+    }
 
     private static JSONObject planJson(FillPlan.Plan p) throws Exception {
         return new JSONObject().put("filled", p.filled).put("takerGives", p.takerGives).put("makerGives", p.makerGives).put("payToken", p.payToken).put("recvToken", p.recvToken).put("inputs", new JSONArray(p.inputs));

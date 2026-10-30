@@ -238,7 +238,7 @@ public class MakerService extends Service {
             else if ("taken".equals(k) || "refused".equals(k)) onReply(inner);
         }
         processTakes(takes, 0, () -> {
-            if (ticks % 3 == 0) settleFills();
+            if (ticks % 3 == 0) { settleFills(); voidStaleTakes(); }
             ladder.pass(() -> cross.run(() -> afterCross(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
                 for (String l : rep.lines) log(l);
                 if (rep.fixed > 0) changed();
@@ -290,9 +290,55 @@ public class MakerService extends Service {
             ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.REFUSED).put("reason", reason).put("cosignMs", answeredMs - pt.optLong("sent", answeredMs)));
             if (reason.matches("(?i).*(taken|not live|advertised|spent|visible|cover).*")) db.setMeta("retry_due", orderId);   // the Activity re-plans at the next level
             Notifier.alert(this, "Take refused", "The maker refused: " + reason);
+            voidTake(pt);   // a refusal is not proof: the maker still holds my signed half until one of its coins moves
+            changed();
+            return;
         }
         db.removePending(orderId);
         changed();
+    }
+
+    /** Security review 30 Oct (HIGH): a signed take has no expiry — a maker could sit on it and post it hours later, only if
+     *  the price moved its way. A take unanswered for VOID_AFTER_MS (or refused) is voided: one of MY coins in it is spent
+     *  back to me (MakerEngine.relock), so the half I signed can never be posted. */
+    static final long VOID_AFTER_MS = 5 * 60_000L;
+    private final java.util.Set<String> voiding = new java.util.HashSet<>();
+
+    private void voidStaleTakes() {
+        long now = System.currentTimeMillis();
+        for (JSONObject p : db.pendings()) if (now - p.optLong("sent", now) > VOID_AFTER_MS) voidTake(p);
+    }
+
+    private void voidTake(JSONObject pt) {
+        JSONObject order = pt.optJSONObject("order");
+        final String orderId = order == null ? "" : order.optString("orderId", ""), actId = pt.optString("act", "");
+        JSONArray mine = pt.optJSONArray("mine");
+        if (orderId.isEmpty() || engine == null || !voiding.add(orderId)) return;
+        final String coin = mine == null || mine.length() == 0 ? "" : mine.optString(0, "");
+        if (!coin.matches("0x[0-9A-Fa-f]{64}")) { voiding.remove(orderId); db.removePending(orderId); changed(); return; }   // pre-0.1.51 take: nothing recorded to spend
+        node.cmd("coins relevant:true checkmempool:true coinid:" + coin, new NodeApi.Cb() {
+            public void onResult(JSONObject j) {
+                List<JSONObject> rows = NodeApi.rows(j);
+                if (rows.isEmpty()) { done("Your coin in this take is already spent — the maker may have posted it; check HISTORY."); return; }
+                com.eurobuddha.dexicon.fill.Coin c = com.eurobuddha.dexicon.fill.Coin.of(rows.get(0));
+                node.cmd("getaddress", new NodeApi.Cb() {
+                    public void onResult(JSONObject a) {
+                        JSONObject r = a.optJSONObject("response"); String to = r == null ? "" : r.optString("address", "");
+                        if (to.isEmpty()) { voiding.remove(orderId); return; }
+                        engine.relock(java.util.Collections.singletonList(c), to, (err, tx) -> h.post(() -> {
+                            if (err != null) { voiding.remove(orderId); log("void take " + orderId + " failed: " + err + " — retrying"); return; }
+                            done("Take voided: your coin " + coin + " was spent back to you, so the maker can no longer post your signed half.");
+                        }));
+                    }
+                    public void onError(String m) { voiding.remove(orderId); }
+                });
+            }
+            public void onError(String m) { voiding.remove(orderId); }
+            private void done(String note) {
+                ActivityLog.update(db, actId, a -> { if (!ActivityLog.COSIGNED.equals(a.optString("stage"))) a.put("reason", note); });
+                log("take " + orderId + ": " + note); db.removePending(orderId); voiding.remove(orderId); changed();
+            }
+        });
     }
 
     private void processTakes(List<JSONObject> takes, int i, Runnable done) {
