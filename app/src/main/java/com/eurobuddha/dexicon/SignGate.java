@@ -21,15 +21,15 @@ package com.eurobuddha.dexicon;
  * The node has since been fixed to synchronize its own signing, but this gate stays: the app also runs
  * against nodes we don't control, and serialising is correct anyway.
  *
- * Static, so the two engines in this process genuinely share one queue. Everything runs on the main
- * thread ({@link NodeApi} funnels every node callback back to it), so no locking is needed.
+ * ONE queue for the whole process (security review 30 Oct): this gate hands every op to the vendored AtomiX
+ * {@link com.eurobuddha.comms.SignGate}, which the DOORS' HTLC claims and comms sends already use. Two separate static
+ * queues let a door signature interleave with a fill co-sign or pool transaction on the same 64 default keys.
  */
 public final class SignGate {
 
-    private static final SerialQueue QUEUE = new SerialQueue();
     private SignGate() {}
     public interface Op { void run(Release release); }
-    public static void submit(Op op) { QUEUE.submit(finish -> op.run(new Release(finish))); }
+    public static void submit(Op op) { com.eurobuddha.comms.SignGate.submit(r -> op.run(new Release(r::free))); }
     public static final class Release {
         private final Runnable finish;
         private Release(Runnable finish) { this.finish = finish; }
