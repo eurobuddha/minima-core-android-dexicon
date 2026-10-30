@@ -188,6 +188,9 @@ public class MakerService extends Service {
     /** Takes are being co-signed or the coin refresh runs: the ladder must wait for them (its pass follows in the same
      *  chain); otherwise it runs right now. */
     private boolean chainBusy;
+    /** A posted cross spent rung coins: re-back those rungs now so they are not advertised with spent coins until the next tick. */
+    private void afterCross(Runnable next) { if (cross.posted()) { ladder.soon(); ladder.pass(next); } else next.run(); }
+
     private void kickLadder() { if (ladder != null && paired && !chainBusy) ladder.pass(this::changed); }
 
     private void onInbox(List<Envelope> msgs) {
@@ -205,7 +208,7 @@ public class MakerService extends Service {
         }
         processTakes(takes, 0, () -> {
             if (ticks % 3 == 0) settleFills();
-            ladder.pass(() -> cross.run(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
+            ladder.pass(() -> cross.run(() -> afterCross(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
                 for (String l : rep.lines) log(l);
                 if (rep.fixed > 0) changed();
                 if (ticks % 6 == 0) refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
@@ -214,7 +217,7 @@ public class MakerService extends Service {
                     tickDone();
                 }));
                 else tickDone();
-            })));
+            }))));
         });
     }
 

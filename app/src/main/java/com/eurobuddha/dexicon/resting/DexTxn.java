@@ -106,13 +106,12 @@ public class DexTxn {
     private void presetCoins(String token, BigDecimal need, List<String> ids, int i, List<JSONObject> got, BigDecimal sum, CoinsCb cb) {
         if (ids == null || ids.isEmpty()) { cb.found(null); return; }
         if (sum.compareTo(need) >= 0 || i >= ids.size() || got.size() >= 8) {
-            android.util.Log.i("Dexicon", "auto-cross own coins: " + got.size() + " of " + ids.size() + " = " + sum.toPlainString() + " for " + need.toPlainString());
             if (sum.compareTo(need) < 0) { cb.found(null); return; }
             CoinLock.reserve(got); cb.found(got); return;
         }
         String id = ids.get(i);
         if (!FundingCoins.hex(id) || CoinLock.isReserved(id)) { presetCoins(token, need, ids, i + 1, got, sum, cb); return; }
-        node.cmd("coins relevant:true sendable:true coinid:" + id, new NodeApi.Cb() {
+        node.cmd("coins relevant:true sendable:true checkmempool:true coinid:" + id, new NodeApi.Cb() {   // checkmempool: never a coin a pending txn already spends
             public void onResult(JSONObject j) {
                 org.json.JSONArray arr = FundingCoins.rows(j);
                 JSONObject c = arr == null || arr.length() != 1 ? null : arr.optJSONObject(0);
@@ -121,11 +120,10 @@ public class DexTxn {
                         && !c.optBoolean("spent", false)
                         && !(st instanceof org.json.JSONArray && ((org.json.JSONArray) st).length() > 0) && !(st instanceof JSONObject && ((JSONObject) st).length() > 0);
                 BigDecimal v = ok ? coinValue(c) : null;
-                if (v == null) android.util.Log.i("Dexicon", "auto-cross coin " + id + " not usable: " + String.valueOf(j).substring(0, Math.min(600, String.valueOf(j).length())));
                 if (v != null && v.signum() > 0) { got.add(c); presetCoins(token, need, ids, i + 1, got, sum.add(v), cb); }
                 else presetCoins(token, need, ids, i + 1, got, sum, cb);
             }
-            public void onError(String m) { android.util.Log.i("Dexicon", "auto-cross coin " + id + ": " + m); presetCoins(token, need, ids, i + 1, got, sum, cb); }
+            public void onError(String m) { presetCoins(token, need, ids, i + 1, got, sum, cb); }
         });
     }
 

@@ -33,6 +33,7 @@ final class MarketMaker {
     static void save(MainActivity act, Ladder.Config c) {
         act.db().setMeta(LadderRunner.CONFIG, c.toJson().toString());
         act.db().setMeta(LadderRunner.DIRTY, "1");
+        if (!c.autoCross) act.db().setMeta(CROSS_ACK, "");   // saved off: whoever turns it on next sees the warning again
         // and wake the service so it reconciles NOW (owner 2026-10-26: cancel-to-repost was ~18 s of waiting)
         try { act.startService(new android.content.Intent(act, com.eurobuddha.dexicon.maker.MakerService.class).setAction(com.eurobuddha.dexicon.maker.MakerService.ACTION_LADDER)); }
         catch (RuntimeException ignored) {}   // service not allowed to start right now: the next tick still picks DIRTY up
@@ -255,13 +256,18 @@ final class MarketMaker {
     /** Meta key: the owner ticked "Don't show again" on the auto-cross warning. */
     static final String CROSS_ACK = "mm_cross_ack";
 
-    /** The switch-on warning: what auto-cross does, what would cross right now, and what the owner is agreeing to. */
+    /** The switch-on warning: what auto-cross does, what would cross right now, and what the owner is agreeing to.
+     *  Same text as warning() in the MiniDapp's lib/autocross.js — edit both. */
     static String crossWarning(String poolLine, String perHour) {
-        String now = poolLine.replaceAll(" \\([^)]*\\)$", "");
+        String now = poolLine.endsWith(" (auto-cross off)") ? poolLine.substring(0, poolLine.length() - 17) : poolLine, hold = null;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(.*) \\(([^)]*)\\)$").matcher(now);
+        if (m.matches()) { now = m.group(1); hold = m.group(2); }   // e.g. "waiting: 3 crosses this hour" — it would NOT trade on SAVE
         String right = now.isEmpty() || now.startsWith("waiting") ? "Not known yet — the pool position shows once the ladder is running."
                 : now.startsWith("pool in line") ? "Nothing. The pool is in line with your ladder, so nothing would cross."
-                : "YES — " + now + ".\nThis trade is made as soon as you SAVE (if the MEXC price is fresh).";
-        String cap = perHour == null || perHour.trim().isEmpty() ? "3" : perHour.trim();
+                : "YES — " + now + ".\n" + (hold == null ? "This trade is made as soon as you SAVE (if the MEXC price is fresh)."
+                        : "Not straight away (" + hold + ") — it is made once that clears, if the pool is still out of line.");
+        int n; try { n = Math.max(0, Integer.parseInt(perHour.trim())); } catch (Exception e) { n = 3; }   // as AutoCross.perHour reads it
+        String cap = String.valueOf(n);
         return "Auto-cross trades your own funds against PandaPools, automatically, with no further confirmation.\n\n"
                 + "WHAT IT DOES\nWhen the pool's price rises past your best ask, your node SELLS MINIMA into the pool until it is back at that ask. "
                 + "When it falls past your best bid, your node BUYS. Each trade is the size of your rungs the pool moved past — the coins behind those "

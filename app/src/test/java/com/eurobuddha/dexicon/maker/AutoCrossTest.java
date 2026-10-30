@@ -59,7 +59,9 @@ public class AutoCrossTest {
         assertNotNull(d);
         assertFalse(d.sell);
         assertEquals(0, d.limit.compareTo(new BigDecimal("0.0034")));
-        assertEquals(0, d.want.compareTo(new BigDecimal("2400")));
+        // review 30 Oct: the crossed bids' coins hold 0.0034×1200 + 0.00335×1200 = 8.10 MxUSD; at up to 0.0034 each that buys 2382.35…
+        assertEquals(0, d.want.compareTo(new BigDecimal("2382.35294117")));
+        assertTrue(d.plan.totalMxusd.compareTo(new BigDecimal("8.10")) <= 0);
         assertTrue(d.plan.effectivePrice.compareTo(d.limit) <= 0);
         assertTrue(d.plan.effectivePrice.doubleValue() < MEXC);
     }

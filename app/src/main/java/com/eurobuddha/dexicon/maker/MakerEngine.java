@@ -89,7 +89,7 @@ public final class MakerEngine {
     public static void walletCoins(NodeApi node, String tokenid, CoinsCb cb) {
         simpleScripts(node, (e0, scripts) -> {
             if (e0 != null) { cb.done(e0, null); return; }
-            node.cmdR("coins relevant:true tokenid:" + tokenid, new NodeApi.Cb() {
+            node.cmdR("coins relevant:true checkmempool:true tokenid:" + tokenid, new NodeApi.Cb() {   // a coin a pending txn spends is already gone
                 public void onResult(JSONObject j) {
                     List<Coin> out = new ArrayList<>();
                     for (JSONObject r : NodeApi.rows(j)) {

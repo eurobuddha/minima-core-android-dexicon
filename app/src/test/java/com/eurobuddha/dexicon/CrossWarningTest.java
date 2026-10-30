@@ -12,6 +12,13 @@ public class CrossWarningTest {
         assertFalse(w.contains("(auto-cross off)"));
         assertTrue(w.contains("Up to 3 trades an hour"));
     }
+    /** Review 30 Oct: after 3 crosses this hour it must not promise a trade on SAVE. */
+    @Test public void saysNotYetWhenHeldBack() {
+        String w = MarketMaker.crossWarning("pool 0.85% above your best ask — sell 1500 MINIMA @ avg 0.003169164227 (waiting: 3 crosses this hour)", "0");
+        assertTrue(w.contains("Not straight away (waiting: 3 crosses this hour)"));
+        assertFalse(w.contains("as soon as you SAVE"));
+        assertTrue(w.contains("Up to 0 trades an hour"));
+    }
     @Test public void saysNothingWhenInLine() {
         assertTrue(MarketMaker.crossWarning("pool in line with your ladder", "5").contains("Nothing. The pool is in line"));
     }

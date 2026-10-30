@@ -46,6 +46,9 @@ public final class LadderRunner {
     public void afterPass(Runnable r) { if (running) waiting.add(r); else r.run(); }
 
     /** One pass. Never two at once: a pass asked for while one runs (a SAVE / STOP kick) runs straight after it. */
+    /** Let the next pass run inside the 15 s gap (an auto-cross just spent rung coins), without a SAVE's full reprice. */
+    public void soon() { lastPassMs = 0; }
+
     public void pass(Runnable done) {
         if (running) { again = true; done.run(); return; }
         running = true;

@@ -61,19 +61,20 @@ public final class AutoCross {
         }
         if (hi == null) return null;
         BigDecimal sellAt = hi.multiply(KEEP, MC), buyAt = lo.divide(KEEP, MC);   // what the pool pays / charges after its 0.5 % fee
-        BigDecimal bestAsk = null, bestBid = null, askWant = BigDecimal.ZERO, bidWant = BigDecimal.ZERO;
+        BigDecimal bestAsk = null, bestBid = null, askWant = BigDecimal.ZERO, bidCash = BigDecimal.ZERO;
         List<MyOrder> asks = new ArrayList<>(), bids = new ArrayList<>();
         for (MyOrder o : rungs) {
             if (!o.live() || o.coins.isEmpty()) continue;   // an unbacked rung is not on offer: never cross what the ladder does not hold
             BigDecimal px = FillPlan.d(o.price), rem = FillPlan.d(o.remaining);
             if ("sell".equals(o.side) && px.compareTo(sellAt) < 0) { askWant = askWant.add(rem); asks.add(o); if (bestAsk == null || px.compareTo(bestAsk) < 0) bestAsk = px; }
-            if ("buy".equals(o.side) && px.compareTo(buyAt) > 0) { bidWant = bidWant.add(rem); bids.add(o); if (bestBid == null || px.compareTo(bestBid) > 0) bestBid = px; }
+            if ("buy".equals(o.side) && px.compareTo(buyAt) > 0) { bidCash = bidCash.add(px.multiply(rem, MC)); bids.add(o); if (bestBid == null || px.compareTo(bestBid) > 0) bestBid = px; }
         }
         BigDecimal sellGap = bestAsk == null ? null : sellAt.divide(bestAsk, MC).subtract(BigDecimal.ONE);
         BigDecimal buyGap = bestBid == null ? null : bestBid.divide(buyAt, MC).subtract(BigDecimal.ONE);
         if (sellGap == null && buyGap == null) return null;
         boolean sell = buyGap == null || (sellGap != null && sellGap.compareTo(buyGap) >= 0);   // the side further out of line
-        BigDecimal limit = sell ? bestAsk : bestBid, want = sell ? askWant : bidWant;
+        // a buy pays at most bestBid per MINIMA, and the crossed bids' coins hold Σ price × remaining: size it so they always cover it
+        BigDecimal limit = sell ? bestAsk : bestBid, want = sell ? askWant : bidCash.divide(bestBid, 8, RoundingMode.DOWN);
         CompositeRouter.Plan plan = CompositeRouter.plan(new ArrayList<>(), pools, !sell, want, limit, 0);
         if (plan.isEmpty() || plan.poolMinima.compareTo(MIN_MINIMA) < 0) return null;
         BigDecimal eff = plan.effectivePrice, mexc = BigDecimal.valueOf(mexcMid);
@@ -92,7 +93,7 @@ public final class AutoCross {
     private final PoolLiquidityRepository pools;
     private final DexTxn txn;
     private final Runnable changed;
-    private boolean inFlight;
+    private boolean inFlight, crossed;
     private long failedMs;
 
     public AutoCross(NodeApi node, DexDb db, Runnable changed) {
@@ -103,6 +104,7 @@ public final class AutoCross {
 
     /** One look at the pool; crosses when switched on and every guard passes. {@code done} runs when it is settled. */
     public void run(Runnable done) {
+        crossed = false;
         Ladder.Config c = Ladder.Config.fromJson(db.meta(LadderRunner.CONFIG, ""));
         boolean mainnet = Tokens.MXUSD_MAINNET.equalsIgnoreCase(Tokens.MXUSD());   // PandaPools exists for the mainnet MxUSD only
         if (!c.enabled || !mainnet) { db.setMeta(POOL_STATUS, ""); done.run(); return; }
@@ -157,13 +159,16 @@ public final class AutoCross {
                 } catch (Exception ignored) {}
                 recent.add(System.currentTimeMillis());
                 db.setMeta(RECENT, new JSONArray(recent).toString());
-                inFlight = false;
-                changed.run();   // the next ladder pass (≤ 15 s) re-backs the rungs whose coins this spent
+                inFlight = false; crossed = true;
+                changed.run();   // MakerService runs a ladder pass straight after, re-backing the rungs whose coins this spent
                 done.run();
             }
             @Override public void onFailed(String message) { fail(message, actId, done); }
         });
     }
+
+    /** The last run() posted a cross: its rungs' coins are spent, so the ladder must re-back them before anything else. */
+    public boolean posted() { return crossed; }
 
     private void fail(String message, String actId, Runnable done) {
         inFlight = false; failedMs = System.currentTimeMillis();
