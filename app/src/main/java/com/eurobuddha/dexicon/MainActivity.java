@@ -226,7 +226,7 @@ public class MainActivity extends AppCompatActivity {
                     } catch (Exception e) { ui.post(() -> { deriving = false; setStage("Identity derivation failed: " + e.getMessage()); }); }
                 });
             }
-            public void failed(String m) { deriving = false; setStage(NodeApi.ERR_NOT_ENABLED.equals(m) ? "Enable Dexicon in Minima Core → Apps" : "Identity: " + m + ". Unlock and reopen."); }
+            public void failed(String m) { deriving = false; setStage(NodeApi.ERR_NOT_ENABLED.equals(m) ? "Enable Dexicon in Minima Core → Apps" : NodeApi.ERR_NOT_ADMIN.equals(m) ? "Dexicon needs ADMIN in Minima Core → Apps. Nothing runs without it." : "Identity: " + m + ". Unlock and reopen."); }
         });
     }
 
@@ -1039,7 +1039,8 @@ public class MainActivity extends AppCompatActivity {
         if (pairPill == null) return;
         String nodeName = NodeApi.nodeApp(this)[1];
         String ps = !pairingKnown ? "CONNECTING TO " + nodeName.toUpperCase(java.util.Locale.ROOT) + "…"
-                : !paired ? (node != null && node.answered() ? "ENABLE DEXICON IN " + nodeName.toUpperCase(java.util.Locale.ROOT) + " → APPS  ▸"
+                : !paired ? (node != null && node.needsAdmin() ? "GIVE DEXICON ADMIN IN " + nodeName.toUpperCase(java.util.Locale.ROOT) + " → APPS  ▸"
+                           : node != null && node.answered() ? "ENABLE DEXICON IN " + nodeName.toUpperCase(java.util.Locale.ROOT) + " → APPS  ▸"
                                                             : "WAITING FOR " + nodeName.toUpperCase(java.util.Locale.ROOT) + " — OPEN / UNLOCK IT  ▸")
                 : me == null ? "PAIRED · deriving identity" : "PAIRED";
         pairPill.setText(ps);

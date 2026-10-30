@@ -31,6 +31,9 @@ public class NodeApi {
     public interface PairingListener { void onEnabled(boolean enabled); }
 
     public static final String ERR_NOT_ENABLED = "NOT_ENABLED";
+    /** Owner 30 Oct: Dexicon never runs on partial trust. Without ADMIN the node parks every write as "pending" for a
+     *  manual approval later (a take, a cancel, a cross approved hours late) — so without it NOTHING is sent at all. */
+    public static final String ERR_NOT_ADMIN = "NOT_ADMIN";
     /** The node dropped an over-256KB reply (it returns a stub instead of the data). */
     public static final String ERR_TOO_LONG = "TOO_LONG";
 
@@ -53,7 +56,9 @@ public class NodeApi {
     private final Context mContext;
     private final java.util.HashSet<Runnable> mPending = new java.util.HashSet<>();
     private boolean mReleased = false, destroyRequested = false;
-    private Boolean enabled;
+    private Boolean enabled, admin;
+    /** The node said Dexicon is enabled but NOT admin (or parked a command as pending): nothing runs until it is. */
+    public boolean needsAdmin() { return Boolean.FALSE.equals(admin); }
     /** True once a node has REPLIED to a register (even "not enabled"); false while nothing has answered. A reply
      *  timeout and a real "disabled" used to look identical to the screen (live on the Fold 2026-10-22). */
     private boolean answered;
@@ -67,7 +72,7 @@ public class NodeApi {
         mPairing = pairing;
         mApi = new NodeTransport(ctx, zResponse -> {
             final boolean en = zResponse.optBoolean("enabled", false), ok = zResponse.optBoolean("status", false);
-            mMain.post(() -> { if (!dead()) { answered = ok; noteEnabled(en); } });
+            mMain.post(() -> { if (!dead()) { answered = ok; noteAccess(zResponse); noteEnabled(en && !needsAdmin()); } });
         });
     }
 
@@ -84,6 +89,8 @@ public class NodeApi {
     public long lastOkMs() { return lastOk; }
     Context context() { return mContext.getApplicationContext(); }
 
+    private void noteAccess(JSONObject reply) { if (reply != null && reply.has("admin")) admin = reply.optBoolean("admin", false); }
+
     private void noteEnabled(boolean value) {
         boolean changed = enabled == null || enabled != value;
         enabled = value;
@@ -95,9 +102,9 @@ public class NodeApi {
         if (mReleased || destroyRequested || queuedCommands != 0) return;
         enabled = null;
         mApi.onDestroy();
-        mApi = new NodeTransport(mContext, reply -> { answered = reply.optBoolean("status", false); noteEnabled(reply.optBoolean("enabled", false)); });
+        mApi = new NodeTransport(mContext, reply -> { answered = reply.optBoolean("status", false); noteAccess(reply); noteEnabled(reply.optBoolean("enabled", false) && !needsAdmin()); });
         cmd("__register__", new Cb() {
-            public void onResult(JSONObject reply) { answered = true; noteEnabled(reply.optBoolean("enabled", false)); }
+            public void onResult(JSONObject reply) { answered = true; noteAccess(reply); noteEnabled(reply.optBoolean("enabled", false) && !needsAdmin()); }
             public void onError(String message) { answered = !(message != null && (message.contains("No Minima node replied") || message.contains("Node discovery"))) && answered; noteEnabled(false); }
         });
     }
@@ -123,6 +130,7 @@ public class NodeApi {
         String invalid = CommandSafety.failure(command);
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         if (mReleased) { if (cb != null) mMain.post(() -> cb.onError("Node connection closed.")); return; }
+        if (needsAdmin() && !"__register__".equals(command)) { if (cb != null) mMain.post(() -> cb.onError(ERR_NOT_ADMIN)); return; }   // never queue a pending
         queuedCommands++;
         IPC_QUEUE.submit(finish -> guarded(guard, command, new Cb() {
             private boolean delivered;
@@ -220,6 +228,7 @@ public class NodeApi {
                             return;
                         }
                         if (!zResponse.optBoolean("enabled", true)) { noteEnabled(false); cb.onError(ERR_NOT_ENABLED); return; }
+                        if (zResponse.optBoolean("pending", false)) { admin = false; noteEnabled(false); cb.onError(ERR_NOT_ADMIN); return; }   // belt: parked, not run
                         if (isTooLong(zResponse)) { cb.onError(ERR_TOO_LONG); return; }
                         lastOk = System.currentTimeMillis();
                         consecutiveTimeouts = 0;
