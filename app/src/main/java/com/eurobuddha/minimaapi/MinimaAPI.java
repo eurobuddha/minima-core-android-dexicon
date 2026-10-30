@@ -274,7 +274,17 @@ public class MinimaAPI {
             listener.response(MinimaAPIResponse.failure("Node connection is unavailable or has too many unanswered requests."));
             return;
         }
-        try { mContext.sendBroadcast(intent); }
+        if (!MinimaAPIMessages.trusted(mContext, intent.getPackage())) {   // never hand the pairing ids to an impostor
+            deliver(id, MinimaAPIResponse.failure("That Minima node app is not signed by a known Minima build. Nothing was sent."));
+            return;
+        }
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 34) {   // let the node see who REALLY sent this (MinimaReceiver getSentFromPackage)
+                android.app.BroadcastOptions bo = android.app.BroadcastOptions.makeBasic();
+                bo.setShareIdentityEnabled(true);
+                mContext.sendBroadcast(intent, null, bo.toBundle());
+            } else mContext.sendBroadcast(intent);
+        }
         catch (RuntimeException failure) {
             deliver(id, MinimaAPIResponse.failure("Could not dispatch the node request. Outcome is unknown."));
         }
