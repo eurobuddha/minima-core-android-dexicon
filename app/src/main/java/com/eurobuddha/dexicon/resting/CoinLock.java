@@ -5,6 +5,7 @@ package com.eurobuddha.dexicon.resting;
  * (PandaDEX MXUSD_ID/MXUSD_DP/*Mxusd are MXUSD_ID/MXUSD_DP/*Mxusd here). Re-copy rather than hand-edit when PandaDEX changes. */
 
 
+import com.eurobuddha.dexicon.NodeApi;
 import java.util.List;
 import java.util.Map;
 import java.util.HashSet;
@@ -22,11 +23,60 @@ public final class CoinLock {
     private static final Map<String, Long> RESERVED = new ConcurrentHashMap<>();
     private static final Set<String> QUEUED = new HashSet<>();
 
+    static void checkAvailable(FundingCoins.Command command,List<String> ids,int at,java.util.function.Consumer<Boolean> cb) {
+        if(at>=ids.size()){cb.accept(true);return;}
+        String id=ids.get(at);
+        command.run("coins checkmempool:true coinid:"+id,new NodeApi.Cb(){
+            public void onResult(org.json.JSONObject r){
+                org.json.JSONArray rows=FundingCoins.rows(r);
+                org.json.JSONObject coin=rows!=null&&rows.length()==1?rows.optJSONObject(0):null;
+                if(r==null||!Boolean.TRUE.equals(r.opt("status"))||Boolean.TRUE.equals(r.opt("pending"))||coin==null
+                        ||!id.equalsIgnoreCase(coin.optString("coinid"))||!Boolean.FALSE.equals(coin.opt("spent"))){cb.accept(false);return;}
+                checkAvailable(command,ids,at+1,cb);
+            }
+            public void onError(String message){cb.accept(false);}
+        });
+    }
+
     private CoinLock() {}
+    // Posted inputs are one-use UTXOs. Never release them on a timer or a view/process restart.
+    // Once confirmed, selection naturally uses the NEW output IDs. An uncertain post remains held.
+    private static final Set<String> POSTED = new HashSet<>();
+    private static android.content.SharedPreferences postingStore;
+    static synchronized boolean loadPosted(android.content.Context context) {
+        try {
+            if(context==null)return false;
+            postingStore=context.getApplicationContext().getSharedPreferences("pool_posted_inputs_v1",android.content.Context.MODE_PRIVATE);
+            for(String id:postingStore.getAll().keySet())POSTED.add(key(id));
+            return true;
+        }catch(RuntimeException unreadable){return false;}
+    }
+    static synchronized boolean rememberPosting(List<String> ids,String transaction) {
+        if(postingStore==null)return false;
+        // Integrated tools share this preferences object. Re-read under that shared lock at the post boundary.
+        synchronized(postingStore){
+            try {
+                Map<String,?> current=postingStore.getAll();
+                for(String id:ids)if(current.containsKey(key(id)))return false;
+                return rememberPosting(ids,()->{
+                    android.content.SharedPreferences.Editor edit=postingStore.edit();
+                    for(String id:ids)edit.putString(key(id),transaction);
+                    return edit.commit();
+                });
+            }catch(RuntimeException unreadable){return false;}
+        }
+    }
+    static synchronized boolean rememberPosting(List<String> ids,java.util.function.BooleanSupplier persist) {
+        for(String id:ids)if(id==null||POSTED.contains(key(id)))return false;
+        // Retain the process latch even if durable storage fails; nothing may post on that failure.
+        for(String id:ids)POSTED.add(key(id));
+        try{return persist.getAsBoolean();}catch(RuntimeException failure){return false;}
+    }
+
 
     public static synchronized boolean isReserved(String coinid) {
         if (coinid == null) return false;
-        if (QUEUED.contains(key(coinid))) return true;
+        if (POSTED.contains(key(coinid)) || QUEUED.contains(key(coinid))) return true;
         Long at = RESERVED.get(key(coinid));
         return at != null && (System.currentTimeMillis() - at) < TTL_MS;
     }
@@ -45,7 +95,7 @@ public final class CoinLock {
     static synchronized boolean claimInputs(List<String> ids) {
         Set<String> unique = new HashSet<>();
         for (String id : ids)
-            if (id == null || !unique.add(key(id)) || QUEUED.contains(key(id))) return false;
+            if (id == null || !unique.add(key(id)) || QUEUED.contains(key(id)) || POSTED.contains(key(id))) return false;
         QUEUED.addAll(unique);
         return true;
     }

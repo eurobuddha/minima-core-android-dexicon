@@ -150,7 +150,7 @@ public final class Ledger {
         it.chip = ActivityLog.chip(a, chainBlock);
         it.chipTone = failed ? Tone.BAD : confirmed ? Tone.OK : Tone.LIVE;
         String mx = a.optString("mxusd", "");
-        it.sub = dayTime(ts, tz) + " · " + routeWord(a.optString("route")) + (mx.isEmpty() ? "" : " · " + (buy ? "paid " : "received ") + mx + " MxUSD")
+        it.sub = dayTime(ts, tz) + " · " + routeWord(a.optString("route")) + (mx.isEmpty() ? "" : " · " + (confirmed ? (buy ? "paid " : "received ") : (buy ? "quoted cost " : "quoted proceeds ")) + mx + " MxUSD")
                 + (it.live ? " · " + Util.ago(nowMs - ts).replace(" ago", "") + " elapsed" : "");
 
         // ---- what happened

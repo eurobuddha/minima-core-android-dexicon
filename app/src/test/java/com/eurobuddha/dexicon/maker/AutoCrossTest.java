@@ -83,4 +83,17 @@ public class AutoCrossTest {
         assertNull(AutoCross.decide(new ArrayList<>(), LADDER, MEXC));
         assertNull(AutoCross.decide(Arrays.asList(pool("1000000", "3600")), new ArrayList<>(), MEXC));
     }
+    @Test public void postedOrUnknownCrossDoesNotReleaseOnTimeOrFailureLabel() throws Exception {
+        org.json.JSONObject r=new org.json.JSONObject().put("stage","POSTED").put("mayHavePosted",true).put("tip",2399000);
+        assertFalse(AutoCross.safeToRelease(r));
+        assertFalse(AutoCross.safeToRelease(r.put("stage","DROPPED")));
+        assertFalse(AutoCross.safeToRelease(r.put("stage","FAILED")));
+        assertFalse(AutoCross.safeToRelease(null));
+        assertTrue(AutoCross.safeToRelease(r.put("stage","POSTED").put("block",2398803)));
+    }
+    @Test public void knownFailureBeforePostingMayReleaseButUnknownOldReceiptMayNot() throws Exception {
+        org.json.JSONObject r=new org.json.JSONObject().put("stage","FAILED");
+        assertFalse(AutoCross.safeToRelease(r));
+        assertTrue(AutoCross.safeToRelease(r.put("mayHavePosted",false)));
+    }
 }

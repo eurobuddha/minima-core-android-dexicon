@@ -114,4 +114,20 @@ public class CoinLockTest {
         CoinLock.finishInputs(Arrays.asList("0xaa"));
         CoinLock.release(Arrays.asList(coin("0xaa", "1")));
     }
+    @Test public void submittedReserveCannotBeClaimedAfterPostCallbackOrSelectionRelease() {
+        List<String> ids=Arrays.asList("0xpostedReserve1","0xpostedReserve2");
+        assertTrue(CoinLock.claimInputs(ids));
+        assertTrue(CoinLock.rememberPosting(ids,()->true));
+        CoinLock.finishInputs(ids);
+        CoinLock.prune();
+        assertFalse("second swap must not reuse first swap's reserves",CoinLock.claimInputs(ids));
+        assertTrue("confirmed outputs have new IDs",CoinLock.claimInputs(Arrays.asList("0xnewReserve1","0xnewReserve2")));
+        CoinLock.finishInputs(Arrays.asList("0xnewReserve1","0xnewReserve2"));
+    }
+    @Test public void failedDurableClaimNeverAllowsAnotherPostInThisProcess() {
+        List<String> ids=Arrays.asList("0xpersistFailureReserve");
+        assertFalse(CoinLock.rememberPosting(ids,()->false));
+        assertFalse(CoinLock.claimInputs(ids));
+    }
+
 }

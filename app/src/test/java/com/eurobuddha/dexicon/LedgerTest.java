@@ -45,7 +45,7 @@ public class LedgerTest {
         assertEquals("Buy MINIMA", it.title);
         assertEquals("2728.1472894674 MINIMA @ 0.003792827565", it.amount);
         assertEquals("BUILDING", it.chip);
-        assertEquals("26 Oct 07:33 · pool · paid 10.34739224 MxUSD · 12s elapsed", it.sub);
+        assertEquals("26 Oct 07:33 · pool · quoted cost 10.34739224 MxUSD · 12s elapsed", it.sub);
         assertEquals("[WAIT 07:33:20 Selecting wallet coins…]", steps(it));
 
         a.put("stage", ActivityLog.POSTED).put("reason", "").put("txpowid", TX).put("txnid", TXN).put("postBlock", 100L).put("tip", 100L)
@@ -112,6 +112,7 @@ public class LedgerTest {
         assertEquals("!", it.icon);
         assertEquals(Ledger.Tone.BAD, it.chipTone);
         assertEquals("FAILED", it.chip);
+        assertTrue(it.sub,it.sub.contains("quoted proceeds"));
         assertTrue(steps(it), steps(it).endsWith("WARN  Failed — no relay accepted the take: timeout]"));
 
         JSONObject r = fastTaker(ActivityLog.REFUSED).put("reason", "order filled").put("sentMs", TS + 1_000).put("relays", 1).put("cosignMs", 2_000L);

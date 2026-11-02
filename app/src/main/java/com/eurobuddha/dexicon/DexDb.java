@@ -118,7 +118,7 @@ public final class DexDb extends SQLiteOpenHelper {
         v.put("id", a.optString("id")); v.put("json", a.toString()); v.put("ts", a.optLong("ts", System.currentTimeMillis()));
         getWritableDatabase().insertWithOnConflict("activity", null, v, SQLiteDatabase.CONFLICT_REPLACE);
     }
-    synchronized JSONObject activity(String id) {
+    public synchronized JSONObject activity(String id) {
         try (Cursor c = getReadableDatabase().rawQuery("SELECT json FROM activity WHERE id=?", new String[]{id})) {
             if (c.moveToFirst()) return new JSONObject(c.getString(0));
         } catch (Exception ignored) {}

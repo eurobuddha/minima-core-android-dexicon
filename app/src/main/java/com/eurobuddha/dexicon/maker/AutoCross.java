@@ -108,6 +108,7 @@ public final class AutoCross {
         Ladder.Config c = Ladder.Config.fromJson(db.meta(LadderRunner.CONFIG, ""));
         boolean mainnet = Tokens.MXUSD_MAINNET.equalsIgnoreCase(Tokens.MXUSD());   // PandaPools exists for the mainnet MxUSD only
         if (!c.enabled || !mainnet) { db.setMeta(POOL_STATUS, ""); done.run(); return; }
+        if (!previousSettled()) { db.setMeta(POOL_STATUS,"waiting for the previous pool trade to confirm; uncertain outcomes are not retried");done.run();return; }
         pools.refresh();
         if (!pools.current()) { done.run(); return; }
         Decision d = decide(pools.pools(), rungs(), MexcFeed.mid());
@@ -130,7 +131,32 @@ public final class AutoCross {
         });
     }
 
+    static boolean safeToRelease(JSONObject receipt) {
+        return receipt!=null&&(ActivityLog.confirmed(receipt,0)
+                ||(ActivityLog.FAILED.equals(receipt.optString("stage"))&&!receipt.optBoolean("mayHavePosted",true)));
+    }
+    private boolean previousSettled() {
+        String pending=db.meta("mm_cross_pending","");
+        if(pending.isEmpty()) {
+            // Adopt pre-upgrade pending pool receipts; absence of a fresh marker is not settlement evidence.
+            for(JSONObject row:ActivityLog.list(db))if("POOL".equals(row.optString("route"))
+                    &&!ActivityLog.confirmed(row,0)&&(ActivityLog.POSTED.equals(row.optString("stage"))||ActivityLog.BUILDING.equals(row.optString("stage")))){
+                pending=row.optString("id");db.setMeta("mm_cross_pending",pending);break;
+            }
+        }
+        if(pending.isEmpty())return true;
+        if(!safeToRelease(db.activity(pending)))return false;
+        db.setMeta("mm_cross_pending","");return db.meta("mm_cross_pending","missing").isEmpty();
+    }
+    private boolean stillEnabled(Decision decision) {
+        Ladder.Config current=Ladder.Config.fromJson(db.meta(LadderRunner.CONFIG,""));
+        if(!current.enabled||!current.autoCross)return false;
+        List<String> live=new ArrayList<>();for(MyOrder order:rungs())if(order.live())live.addAll(order.coins);
+        return live.containsAll(decision.coins);
+    }
+
     private void execute(Decision d, List<Long> recent, Runnable done) {
+        if(!stillEnabled(d)){fail("auto-cross was disabled or its orders changed",null,done);return;}
         final CompositeRouter.Plan plan = d.plan;
         final String actId = ActivityLog.newId("slow_");
         final JSONObject[] posted = {new JSONObject()};
@@ -138,11 +164,19 @@ public final class AutoCross {
         try {
             ActivityLog.add(db, new JSONObject().put("id", actId).put("route", "POOL").put("role", "taker").put("side", d.sell ? "sell" : "buy")
                     .put("amount", PriceMath.fmt(plan.totalMinima)).put("price", plan.effectivePrice.toPlainString()).put("mxusd", PriceMath.fmt(plan.totalMxusd))
-                    .put("ts", System.currentTimeMillis()).put("stage", ActivityLog.BUILDING)
+                    .put("ts", System.currentTimeMillis()).put("stage", ActivityLog.BUILDING).put("mayHavePosted",false)
                     .put("reason", "Auto-cross: " + d.line() + " · +" + edge.toPlainString() + " MxUSD vs MEXC"));
         } catch (Exception ignored) {}
+        db.setMeta("mm_cross_pending",actId);
+        if(!actId.equals(db.meta("mm_cross_pending",""))||db.activity(actId)==null){fail("could not save pending trade state",actId,done);return;}
         changed.run();
         txn.fillComposite(plan, !d.sell, d.coins, new DexTxn.Result() {
+            @Override public boolean beforePost() {
+                if(!stillEnabled(d))return false;
+                ActivityLog.update(db,actId,a->a.put("mayHavePosted",true));
+                JSONObject saved=db.activity(actId);
+                return saved!=null&&saved.optBoolean("mayHavePosted",false);
+            }
             @Override public void onProgress(String message) { ActivityLog.update(db, actId, a -> a.put("reason", "Auto-cross: " + message)); }
             @Override public void onPostReply(JSONObject reply) { posted[0] = ActivityLog.fromPostReply(reply, txn.hexAddr()); }
             @Override public void onPosted(String txpowid) {

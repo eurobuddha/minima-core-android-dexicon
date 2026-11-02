@@ -306,8 +306,8 @@ public class DexTxn {
             cb.onFailed("Too many transaction inputs. Consolidate funding or use fewer orders/pools."); return;
         }
         if (!cb.onPrepared(txid)) { cb.onFailed("Could not save transaction intent. Nothing was signed."); return; }
-        if (!CoinLock.claimInputs(inputs)) {
-            cb.onFailed("An input is already in another queued transaction or appears twice. Wait and refresh."); return;
+        if (!CoinLock.loadPosted(node.context()) || !CoinLock.claimInputs(inputs)) {
+            cb.onFailed("An input is already queued, submitted, or has an uncertain outcome. Wait for confirmation and refresh the pool reserves. Nothing was signed."); return;
         }
         progress(cb, "Recovery receipt saved · waiting for signing slot");
         SignGate.submit(gate -> {
@@ -322,7 +322,7 @@ public class DexTxn {
                     finally { gate.free(); }
                 }
                 public void onProgress(String message) { progress(cb, message); }
-                public boolean beforePost() { return cb.beforePost(); }
+                public boolean beforePost() { return cb.beforePost() && CoinLock.rememberPosting(inputs,txid); }
                 public void onPostReply(JSONObject reply) { try { cb.onPostReply(reply); } catch (RuntimeException ignored) {} }   // Dexicon glue
                 public void onPosted(String id) { finish(id, null); }
                 public void onFailed(String message) { finish(null, message); }
@@ -331,9 +331,12 @@ public class DexTxn {
                 if (command.startsWith("txnsign ")) progress(gated, "Signing transaction");
                 commands.run(command, callback);
             };
+            CoinLock.checkAvailable(commands,inputs,0,available->{
+                if(!available){gated.onFailed("An input is spent, pending, or unreadable. Refresh before retrying. Nothing was signed.");return;}
             CmdChain.run(narrated, new ArrayList<>(steps), "txndelete id:" + txid, new CmdChain.Done() {
                 public void ok(JSONObject last) { checkAndPost(commands, txid, gated); }
                 public void fail(String message) { gated.onFailed(message); }
+            });
             });
         });
     }

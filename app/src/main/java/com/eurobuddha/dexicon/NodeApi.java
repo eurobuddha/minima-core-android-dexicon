@@ -87,7 +87,7 @@ public class NodeApi {
 
     public boolean isEnabled() { return Boolean.TRUE.equals(enabled); }
     public long lastOkMs() { return lastOk; }
-    Context context() { return mContext.getApplicationContext(); }
+    public Context context() { return mContext.getApplicationContext(); }
 
     private void noteAccess(JSONObject reply) { if (reply != null && reply.has("admin")) admin = reply.optBoolean("admin", false); }
 
