@@ -129,5 +129,15 @@ public class CoinLockTest {
         assertFalse(CoinLock.rememberPosting(ids,()->false));
         assertFalse(CoinLock.claimInputs(ids));
     }
-
+    @Test public void refusedPostFreesOnlyItsOwnClaims() {
+        List<String> mine=Arrays.asList("0xrefusedReserve1"),other=Arrays.asList("0xotherReserve1");
+        assertTrue(CoinLock.rememberPosting(mine,"tx_refused",()->true));
+        assertTrue(CoinLock.rememberPosting(other,"tx_other",()->true));
+        CoinLock.forgetPosting(Arrays.asList("0xrefusedReserve1","0xotherReserve1"),"tx_refused");
+        assertTrue("a refused post's input is free again",CoinLock.claimInputs(mine));
+        CoinLock.finishInputs(mine);
+        assertFalse("another transaction's claim is untouched",CoinLock.claimInputs(other));
+        CoinLock.forgetPosting(other,"");
+        assertFalse("an empty handle frees nothing",CoinLock.claimInputs(other));
+    }
 }

@@ -37,6 +37,11 @@ public class DexTxn {
         default boolean onPrepared(String transactionHandle) { return true; }
         /** Persist the transition before asking the node to post. */
         default boolean beforePost() { return true; }
+        /** The node definitely did not take it: txnpost answered status:false (not pending), or the
+         *  pre-post save failed. Nothing was broadcast. Always followed by onFailed. */
+        default void onRejected() {}
+        /** Asked before every txnsign; false cancels with nothing signed (no key use spent). */
+        default boolean beforeSign() { return true; }
         /** Dexicon glue (ACTIVITY tab): the raw txnpost reply, just before onPosted — its body.txn carries the
          *  output coin ids the activity tracker settles by (the txpowid is the pre-mining id). */
         default void onPostReply(JSONObject reply) {}
@@ -322,13 +327,23 @@ public class DexTxn {
                     finally { gate.free(); }
                 }
                 public void onProgress(String message) { progress(cb, message); }
-                public boolean beforePost() { return cb.beforePost() && CoinLock.rememberPosting(inputs,txid); }
+                public boolean beforePost() {
+                    if (!cb.beforePost()) return false;
+                    if (CoinLock.rememberPosting(inputs,txid)) return true;
+                    CoinLock.forgetPosting(inputs,txid);   // not saved, so not posted: free only this transaction's claims
+                    return false;
+                }
+                public void onRejected() { CoinLock.forgetPosting(inputs,txid); cb.onRejected(); }
                 public void onPostReply(JSONObject reply) { try { cb.onPostReply(reply); } catch (RuntimeException ignored) {} }   // Dexicon glue
                 public void onPosted(String id) { finish(id, null); }
                 public void onFailed(String message) { finish(null, message); }
             };
             FundingCoins.Command narrated = (command, callback) -> {
-                if (command.startsWith("txnsign ")) progress(gated, "Signing transaction");
+                if (command.startsWith("txnsign ")) {
+                    boolean go; try { go = cb.beforeSign(); } catch (RuntimeException e) { go = false; }
+                    if (!go) { callback.onError("Cancelled before signing. Nothing was signed."); return; }
+                    progress(gated, "Signing transaction");
+                }
                 commands.run(command, callback);
             };
             CoinLock.checkAvailable(commands,inputs,0,available->{
@@ -351,6 +366,7 @@ public class DexTxn {
                 }
                 if (!cb.beforePost()) {
                     commands.run("txndelete id:" + txid, null);
+                    cb.onRejected();
                     cb.onFailed("Could not save submission intent. The transaction was not posted."); return;
                 }
                 // txnexport is NOT the serialized TxPoW, and returning its hex over IPC is costly.
@@ -363,7 +379,7 @@ public class DexTxn {
                         }
                         commands.run("txndelete id:" + txid, null);
                         if (reply.optBoolean("status", false)) { cb.onPostReply(reply); cb.onPosted(Util.extractTxpowid(reply, txid)); }   // Dexicon glue: onPostReply
-                        else cb.onFailed(TxValidation.postError(reply));
+                        else { cb.onRejected(); cb.onFailed(TxValidation.postError(reply)); }   // the node refused it: nothing was broadcast
                     }
                     public void onError(String message) {
                         // Dexicon rule: every txn error path runs txndelete (harmless after an ambiguous post).

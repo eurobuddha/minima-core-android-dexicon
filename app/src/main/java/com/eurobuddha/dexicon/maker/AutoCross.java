@@ -30,7 +30,7 @@ import java.util.List;
  * rungs were the ones filled — and the ladder's "backing coin gone" check refills them on its next pass.
  */
 public final class AutoCross {
-    public static final String RECENT = "mm_cross", POOL_STATUS = "mm_pool";
+    public static final String RECENT = "mm_cross", POOL_STATUS = "mm_pool", PENDING = "mm_cross_pending", REVIEW = "mm_review";
     static final BigDecimal KEEP = new BigDecimal("0.995"), MIN_MINIMA = BigDecimal.ONE;
     static final long HOUR_MS = 3_600_000L, FAIL_GAP_MS = 60_000L;
     private static final MathContext MC = new MathContext(40, RoundingMode.HALF_UP);
@@ -108,7 +108,8 @@ public final class AutoCross {
         Ladder.Config c = Ladder.Config.fromJson(db.meta(LadderRunner.CONFIG, ""));
         boolean mainnet = Tokens.MXUSD_MAINNET.equalsIgnoreCase(Tokens.MXUSD());   // PandaPools exists for the mainnet MxUSD only
         if (!c.enabled || !mainnet) { db.setMeta(POOL_STATUS, ""); done.run(); return; }
-        if (!previousSettled()) { db.setMeta(POOL_STATUS,"waiting for the previous pool trade to confirm; uncertain outcomes are not retried");done.run();return; }
+        if (!inFlight && !previousSettled()) { db.setMeta(REVIEW,"1"); db.setMeta(POOL_STATUS,"waiting for the previous cross to confirm. Its outcome is unknown; tap REVIEW to check it.");done.run();return; }
+        db.setMeta(REVIEW,"");
         pools.refresh();
         if (!pools.current()) { done.run(); return; }
         Decision d = decide(pools.pools(), rungs(), MexcFeed.mid());
@@ -131,15 +132,93 @@ public final class AutoCross {
         });
     }
 
+    /** Confirmed, or ended (FAILED / REFUSED / LOST / DROPPED) without ever reaching txnpost. mayHavePosted is set durably
+     *  just before txnpost and cleared only when the node definitely refused it (DexTxn.Result.onRejected). */
     static boolean safeToRelease(JSONObject receipt) {
         return receipt!=null&&(ActivityLog.confirmed(receipt,0)
-                ||(ActivityLog.FAILED.equals(receipt.optString("stage"))&&!receipt.optBoolean("mayHavePosted",true)));
+                ||(ActivityLog.failedTerminal(receipt)&&!receipt.optBoolean("mayHavePosted",true)));
+    }
+    // ---------------------------------------------------------------- REVIEW (the owner's way out; never automatic)
+
+    /** One look at a stuck cross: each of its own coins on the node, and what that means. */
+    public static final class Review {
+        public final JSONObject receipt; public final List<String[]> coins = new ArrayList<>();   // {coinid, state}
+        public boolean safe, unspent; public String text = "";
+        Review(JSONObject receipt) { this.receipt = receipt; }
+    }
+    /** unspent = unspent and in no pending transaction; mempool = a pending transaction spends it; spent = the node
+     *  returns it in neither lookup; unknown = no usable answer. */
+    static void coinState(FundingCommand cmd, String id, java.util.function.Consumer<String> cb) {
+        if (id == null || !id.matches("0x[0-9a-fA-F]{64}")) { cb.accept("unknown"); return; }
+        cmd.run("coins checkmempool:true coinid:" + id, a -> {
+            String x = one(a, id);
+            if (x == null) { cb.accept("unknown"); return; }
+            if (x.equals("live")) { cb.accept("unspent"); return; }
+            cmd.run("coins coinid:" + id, b -> { String y = one(b, id); cb.accept(y == null ? "unknown" : y.equals("live") ? "mempool" : "spent"); });
+        });
+    }
+    private static String one(JSONObject r, String id) {
+        if (r == null || !Boolean.TRUE.equals(r.opt("status")) || Boolean.TRUE.equals(r.opt("pending")) || r.optJSONArray("response") == null) return null;
+        JSONArray rows = r.optJSONArray("response");
+        JSONObject c = rows.length() == 1 ? rows.optJSONObject(0) : null;
+        return c != null && id.equalsIgnoreCase(c.optString("coinid")) && Boolean.FALSE.equals(c.opt("spent")) ? "live" : "none";
+    }
+    /** Reply-or-null adapter over NodeApi, so the decision logic is testable without a node. */
+    public interface FundingCommand { void run(String command, java.util.function.Consumer<JSONObject> reply); }
+    public static FundingCommand of(NodeApi node) {
+        return (c, reply) -> node.cmd(c, new NodeApi.Cb() { public void onResult(JSONObject j) { reply.accept(j); } public void onError(String m) { reply.accept(null); } });
+    }
+    static void verdict(Review r) {
+        boolean any = !r.coins.isEmpty(), unknown = false, mempool = false, allUnspent = any;
+        for (String[] c : r.coins) { unknown |= c[1].equals("unknown"); mempool |= c[1].equals("mempool"); allUnspent &= c[1].equals("unspent"); }
+        if (!any) { r.safe = true; r.text = "No coins were recorded for it, so your node cannot check it. Release only after checking HISTORY and ASSETS."; }
+        else if (unknown) { r.safe = false; r.text = "Your node could not answer for every coin. Try again in a minute."; }
+        else if (mempool) { r.safe = false; r.text = "It is still in the mempool. Wait for a block; it settles by itself."; }
+        else if (allUnspent) { r.safe = true; r.unspent = true; r.text = "None of its coins were spent and none are pending: it never went through. Releasing frees them for trading again."; }
+        else { r.safe = true; r.text = "Its coins were spent, so it went through or was replaced. Releasing lets auto-cross continue; check HISTORY for the result."; }
+    }
+    /** cb(null) when nothing is waiting. Runs on the node's reply thread. */
+    public static void review(FundingCommand cmd, DexDb db, java.util.function.Consumer<Review> cb) {
+        String id = db.meta(PENDING, "");
+        JSONObject receipt = id.isEmpty() ? null : db.activity(id);
+        if (receipt == null || safeToRelease(receipt)) { cb.accept(null); return; }
+        Review r = new Review(receipt);
+        JSONArray own = receipt.optJSONArray("own") != null && receipt.optJSONArray("own").length() > 0 ? receipt.optJSONArray("own") : receipt.optJSONArray("ins");
+        List<String> ids = new ArrayList<>();
+        for (int i = 0; own != null && i < own.length(); i++) ids.add(own.optString(i));
+        states(cmd, ids, 0, r, () -> { verdict(r); cb.accept(r); });
+    }
+    private static void states(FundingCommand cmd, List<String> ids, int at, Review r, Runnable done) {
+        if (at >= ids.size()) { done.run(); return; }
+        coinState(cmd, ids.get(at), st -> { r.coins.add(new String[]{ids.get(at), st}); states(cmd, ids, at + 1, r, done); });
+    }
+    /** The owner pressed RELEASE on a fresh review. Returns null on success, else why not. */
+    public static String release(DexDb db, Review r) {
+        if (r == null || !r.safe) return r == null ? "Nothing is waiting any more." : r.text;
+        String id = r.receipt.optString("id");
+        if (!id.equals(db.meta(PENDING, ""))) return "Something else changed. Review it again.";
+        ActivityLog.update(db, id, a -> {
+            a.put("released", true).put("reason", "Auto-cross: released by you after review — " + r.text);
+            if (r.unspent) a.put("stage", ActivityLog.FAILED).put("mayHavePosted", false);
+        });
+        if (r.unspent && !r.receipt.optString("handle").isEmpty()) {   // only that transaction's claims, and only its unspent coins
+            List<String> all = new ArrayList<>();
+            for (String k : new String[]{"ins", "own"}) { JSONArray a = r.receipt.optJSONArray(k); for (int i = 0; a != null && i < a.length(); i++) all.add(a.optString(i)); }
+            com.eurobuddha.dexicon.resting.CoinLock.forgetPosting(all, r.receipt.optString("handle"));
+        }
+        db.setMeta(PENDING, ""); db.setMeta(REVIEW, "");
+        return db.meta(PENDING, "missing").isEmpty() ? null : "Could not clear the record. Nothing changed.";
+    }
+
+    /** A receipt auto-cross wrote. Manual POOL trades share the route and the "slow_" id, never this flag or reason. */
+    static boolean ownReceipt(JSONObject row) {
+        return row.optBoolean("auto",false)||row.optString("reason").startsWith("Auto-cross");
     }
     private boolean previousSettled() {
         String pending=db.meta("mm_cross_pending","");
         if(pending.isEmpty()) {
             // Adopt pre-upgrade pending pool receipts; absence of a fresh marker is not settlement evidence.
-            for(JSONObject row:ActivityLog.list(db))if("POOL".equals(row.optString("route"))
+            for(JSONObject row:ActivityLog.list(db))if("POOL".equals(row.optString("route"))&&ownReceipt(row)&&!row.optBoolean("released",false)
                     &&!ActivityLog.confirmed(row,0)&&(ActivityLog.POSTED.equals(row.optString("stage"))||ActivityLog.BUILDING.equals(row.optString("stage")))){
                 pending=row.optString("id");db.setMeta("mm_cross_pending",pending);break;
             }
@@ -150,7 +229,7 @@ public final class AutoCross {
     }
     private boolean stillEnabled(Decision decision) {
         Ladder.Config current=Ladder.Config.fromJson(db.meta(LadderRunner.CONFIG,""));
-        if(!current.enabled||!current.autoCross)return false;
+        if(!current.enabled||!current.autoCross||!MexcFeed.fresh())return false;
         List<String> live=new ArrayList<>();for(MyOrder order:rungs())if(order.live())live.addAll(order.coins);
         return live.containsAll(decision.coins);
     }
@@ -164,13 +243,21 @@ public final class AutoCross {
         try {
             ActivityLog.add(db, new JSONObject().put("id", actId).put("route", "POOL").put("role", "taker").put("side", d.sell ? "sell" : "buy")
                     .put("amount", PriceMath.fmt(plan.totalMinima)).put("price", plan.effectivePrice.toPlainString()).put("mxusd", PriceMath.fmt(plan.totalMxusd))
-                    .put("ts", System.currentTimeMillis()).put("stage", ActivityLog.BUILDING).put("mayHavePosted",false)
+                    .put("ts", System.currentTimeMillis()).put("stage", ActivityLog.BUILDING).put("mayHavePosted",false).put("auto",true)
+                    .put("own", new JSONArray(d.coins))
                     .put("reason", "Auto-cross: " + d.line() + " · +" + edge.toPlainString() + " MxUSD vs MEXC"));
         } catch (Exception ignored) {}
         db.setMeta("mm_cross_pending",actId);
         if(!actId.equals(db.meta("mm_cross_pending",""))||db.activity(actId)==null){fail("could not save pending trade state",actId,done);return;}
         changed.run();
         txn.fillComposite(plan, !d.sell, d.coins, new DexTxn.Result() {
+            @Override public boolean onPrepared(String handle) {   // the transaction handle CoinLock claims its inputs under
+                ActivityLog.update(db,actId,a->a.put("handle",handle));
+                JSONObject saved=db.activity(actId);
+                return saved!=null&&handle.equals(saved.optString("handle"));
+            }
+            @Override public boolean beforeSign() { return stillEnabled(d); }
+            @Override public void onRejected() { ActivityLog.update(db,actId,a->a.put("mayHavePosted",false)); }
             @Override public boolean beforePost() {
                 if(!stillEnabled(d))return false;
                 ActivityLog.update(db,actId,a->a.put("mayHavePosted",true));

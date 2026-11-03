@@ -70,8 +70,48 @@ final class MarketMaker {
             LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(0, -2, 1f); sl.leftMargin = Design.dp(act, 8);
             btns.addView(stop, sl);
         }
+        if ("1".equals(act.db().meta(com.eurobuddha.dexicon.maker.AutoCross.REVIEW, ""))) {
+            TextView rev = button(act, "REVIEW", Design.SURFACE2(), Design.ACCENT());
+            rev.setOnClickListener(v -> review(act));
+            LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(0, -2, 1f); rl.leftMargin = Design.dp(act, 8);
+            btns.addView(rev, rl);
+        }
         LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-1, -2); bl.topMargin = Design.dp(act, 8);
         box.addView(btns, bl);
+    }
+
+    /** REVIEW a cross whose outcome is unknown: every coin checked on the node, full ids shown, the owner decides. */
+    static void review(MainActivity act) {
+        TextView body = text(act, "Checking every coin with your node…", Design.TEXT(), 11f, false);
+        body.setTextIsSelectable(true);
+        int pad = Design.dp(act, 18); body.setPadding(pad, Design.dp(act, 8), pad, Design.dp(act, 8));
+        android.widget.ScrollView sv = new android.widget.ScrollView(act); sv.addView(body);
+        AlertDialog d = new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Review a stuck cross").setView(sv)
+                .setNegativeButton("Close", null).setPositiveButton("Release", null).show();
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+        com.eurobuddha.dexicon.maker.AutoCross.FundingCommand cmd = com.eurobuddha.dexicon.maker.AutoCross.of(act.nodeApi());
+        com.eurobuddha.dexicon.maker.AutoCross.review(cmd, act.db(), r -> act.runOnUiThread(() -> {
+            if (r == null) { body.setText("Nothing is waiting any more. It settled by itself."); act.db().setMeta(com.eurobuddha.dexicon.maker.AutoCross.REVIEW, ""); act.repaint(); return; }
+            StringBuilder sb = new StringBuilder(r.text);
+            String tx = r.receipt.optString("txpowid");
+            if (!tx.isEmpty()) sb.append("\n\nTransaction:\n").append(tx);
+            if (!r.coins.isEmpty()) { sb.append("\n\nIts coins:"); for (String[] c : r.coins) sb.append("\n").append(c[0]).append("\n  ").append(word(c[1])); }
+            body.setText(sb.toString());
+            if (!r.safe) return;
+            android.widget.Button go = d.getButton(AlertDialog.BUTTON_POSITIVE);
+            go.setEnabled(true);
+            go.setOnClickListener(v -> {   // check again right before releasing
+                go.setEnabled(false); body.setText("Checking again, then releasing…");
+                com.eurobuddha.dexicon.maker.AutoCross.review(cmd, act.db(), fresh -> act.runOnUiThread(() -> {
+                    String err = com.eurobuddha.dexicon.maker.AutoCross.release(act.db(), fresh);
+                    body.setText(err == null ? "Released. Auto-cross carries on from the next pass." : "Not released: " + err);
+                    act.repaint();
+                }));
+            });
+        }));
+    }
+    private static String word(String state) {
+        switch (state) { case "unspent": return "unspent, not pending"; case "mempool": return "in the mempool"; case "spent": return "spent"; default: return "no answer"; }
     }
 
     static void edit(MainActivity act) {

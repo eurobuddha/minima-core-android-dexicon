@@ -96,4 +96,37 @@ public class AutoCrossTest {
         assertFalse(AutoCross.safeToRelease(r));
         assertTrue(AutoCross.safeToRelease(r.put("mayHavePosted",false)));
     }
+    @Test public void endedBeforePostingIsReleasedWhateverTheTerminalStage() throws Exception {
+        for (String st : new String[]{"FAILED","LOST","REFUSED","DROPPED"}) {
+            assertTrue(st, AutoCross.safeToRelease(new org.json.JSONObject().put("stage",st).put("mayHavePosted",false)));
+            assertFalse(st, AutoCross.safeToRelease(new org.json.JSONObject().put("stage",st).put("mayHavePosted",true)));
+        }
+        assertFalse("still building is never released here", AutoCross.safeToRelease(new org.json.JSONObject().put("stage","BUILDING").put("mayHavePosted",false)));
+    }
+    @Test public void onlyAutoCrossReceiptsAreAdopted() throws Exception {
+        assertTrue(AutoCross.ownReceipt(new org.json.JSONObject().put("auto",true)));
+        assertTrue("pre-upgrade receipt", AutoCross.ownReceipt(new org.json.JSONObject().put("reason","Auto-cross: Signing transaction")));
+        assertFalse("a manual pool trade", AutoCross.ownReceipt(new org.json.JSONObject().put("route","POOL").put("reason","Selecting wallet coins…")));
+    }
+    private static final String A = "0x" + "a1".repeat(32);
+    private static AutoCross.FundingCommand node(String state) {
+        return (q, reply) -> {
+            boolean mem = q.contains("checkmempool:true");
+            try {
+                if (state.equals("unknown")) { reply.accept(null); return; }
+                boolean live = state.equals("unspent") || (state.equals("mempool") && !mem);
+                org.json.JSONArray rows = new org.json.JSONArray();
+                if (live) rows.put(new org.json.JSONObject().put("coinid", A).put("spent", false));
+                reply.accept(new org.json.JSONObject().put("status", true).put("response", rows));
+            } catch (Exception e) { reply.accept(null); }
+        };
+    }
+    @Test public void coinStatesAndVerdicts() throws Exception {
+        for (String st : new String[]{"unspent","mempool","spent","unknown"}) {
+            String[] got = {null}; AutoCross.coinState(node(st), A, v -> got[0] = v); assertEquals(st, got[0]);
+            AutoCross.Review r = new AutoCross.Review(new org.json.JSONObject()); r.coins.add(new String[]{A, st}); AutoCross.verdict(r);
+            assertEquals(st, st.equals("unspent") || st.equals("spent"), r.safe);
+            assertEquals(st, st.equals("unspent"), r.unspent);
+        }
+    }
 }
