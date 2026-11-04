@@ -68,13 +68,13 @@ public final class AssetsTab extends LinearLayout {
         assetCard("MINIMA", Tokens.MINIMA, act.minimaCoins, f.minimaAvailable, act.minimaConfirmed(), f.minimaInOrders, f.minimaSettling);
         assetCard("MxUSD", Tokens.MXUSD(), act.mxusdCoins, f.mxusdAvailable, act.mxusdConfirmed(), f.mxusdInOrders, f.mxusdSettling);
 
+        ethCard();   // AtomiX's Wallet order: the coins, then Ethereum (address, ETH, USDT, its actions), then every token
         TextView all = Ui.label(act, "WALLET · ALL TOKENS");
         all.setPadding(Design.dp(act, 4), Design.dp(act, 12), 0, Design.dp(act, 6));
         body.addView(all);
         if (walletBox.getParent() != null) ((android.view.ViewGroup) walletBox.getParent()).removeView(walletBox);
         body.addView(walletBox);
 
-        ethCard();
         identityCard();
 
         // Advanced (folded): the dollar-token override exists only for TEST chains, where mainnet MxUSD does not exist and

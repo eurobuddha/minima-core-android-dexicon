@@ -46,6 +46,12 @@ public class WalletActionsTest {
         View root = a.getWindow().getDecorView();
         DoorsTabSmokeTest.tab(root, "Assets").performClick();
         for (String b : new String[]{"↻  Refresh", "⤓  Fund / QR", "↑  Send", "🔑  Export key"}) assertNotNull(b, DoorsTabSmokeTest.find(root, b));
+        // 0.2.14 (owner: "where is the ETH wallet?"): AtomiX's order — Ethereum right after the coins, above every token
+        java.util.List<View> order = new java.util.ArrayList<>();
+        java.util.ArrayDeque<View> stack = new java.util.ArrayDeque<>(); stack.push(root);
+        while (!stack.isEmpty()) { View v = stack.pop(); order.add(v);
+            if (v instanceof android.view.ViewGroup) for (int i = ((android.view.ViewGroup) v).getChildCount() - 1; i >= 0; i--) stack.push(((android.view.ViewGroup) v).getChildAt(i)); }
+        assertTrue("Ethereum above the token list", order.indexOf(DoorsTabSmokeTest.find(root, "↻  Refresh")) < order.indexOf(DoorsTabSmokeTest.find(root, "WALLET · ALL TOKENS")));
 
         DoorsTabSmokeTest.find(root, "⤓  Fund / QR").performClick();
         AlertDialog fund = (AlertDialog) ShadowDialog.getLatestDialog();
