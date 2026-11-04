@@ -83,6 +83,24 @@ public class OwnerCoinExclusionTest {
         assertEquals(WALLET, got[0].get(0).optString("address"));
     }
 
+    /** 5 (0.1.79): the CoinLock is two-way — a coin a ② pool selection holds in PandaPools' CoinLock is skipped by the
+     *  maker and by a trade's funding; a coin Dexicon itself held there (a live order's backing) is still its own. */
+    @Test public void aCoinAPoolSelectionHoldsIsNeverPickedByDexicon() {
+        com.eurobuddha.pandapools.Coin held = new com.eurobuddha.pandapools.Coin(); held.coinid = "0x" + "02".repeat(32);
+        com.eurobuddha.pandapools.CoinLock.reserve(java.util.Collections.singletonList(held));   // PandaPools' own selection
+        try {
+            final List<Coin>[] got = new List[1];
+            MakerEngine.walletCoins(node, MINIMA, (e, coins) -> got[0] = coins);
+            assertTrue("the maker skips it", got[0].isEmpty());
+            final List<JSONObject>[] fund = new List[]{java.util.Collections.emptyList()};
+            new DexTxn(node).findCoins(MINIMA, new BigDecimal("10"), coins -> fund[0] = coins);
+            assertNull("a trade does not fund itself with it", fund[0]);
+            com.eurobuddha.pandapools.DexiconPools.holdCoins(java.util.Collections.singletonList(held.coinid));   // now Dexicon's own hold
+            MakerEngine.walletCoins(node, MINIMA, (e, coins) -> got[0] = coins);
+            assertEquals("Dexicon's own backing coin stays visible to the maker", 1, got[0].size());
+        } finally { com.eurobuddha.pandapools.CoinLock.release(java.util.Collections.singletonList(held)); }
+    }
+
     /** C: a live ③ order's backing coins are held in PandaPools' CoinLock every tick, so ② pool refresh never picks one. */
     @Test public void liveOrderBackingCoinsAreHeldFromPoolSelection() {
         MakerService s = org.robolectric.Robolectric.buildService(MakerService.class).get();

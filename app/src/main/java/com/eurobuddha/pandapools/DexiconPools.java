@@ -26,8 +26,9 @@ import java.util.Set;
  * as kept_here is kept elsewhere; any other pool (handed over, absent, PandaPools reinstalled with nothing) is Dexicon's.
  * Unreadable (an older PandaPools, null, an error, a provider that is not PandaPools' own) → EVERY pool counts as kept
  * elsewhere: nobody signs from Dexicon, and the gate card says to update PandaPools. PandaPools not installed → Dexicon
- * keeps every recipe it holds. The read is cached with its time and refreshed on every keep-alive pass, onResume and
- * gate render (and whenever the cache is over a minute old). The hand-over intent (dexicon_pools / pools /
+ * keeps every recipe it holds. The read is cached with its time: re-read at every keep-alive pass start, again right
+ * before each owner-signing step when over ~5 s old ({@link #keptElsewhereToSign}), and — off the main thread — on
+ * onResume and whenever a screen finds the cache over a minute old (render itself never reads the provider). The hand-over intent (dexicon_pools / pools /
  * kept_by_dexicon) is only the permission to uninstall; custody never comes from it.
  */
 public final class DexiconPools {
@@ -60,22 +61,78 @@ public final class DexiconPools {
         return com.eurobuddha.dexicon.TradingGate.installed(c, com.eurobuddha.dexicon.TradingGate.PANDAPOOLS);
     }
 
-    /** Re-read PandaPools' custody signal now and cache it (keep-alive pass, onResume, gate render). */
+    /** Re-read PandaPools' custody signal now and cache it (keep-alive pass start, before an owner-signing step, and in
+     *  the background for the UI). A read never replaces one that STARTED later (reads may overlap across threads). */
     public static Custody readCustody(Context c) {
         Context ctx = c.getApplicationContext();
+        long start = System.currentTimeMillis();
         boolean installed = pandaPoolsInstalled(ctx);
-        Custody k = new Custody(installed, installed ? queryKeptHere(ctx) : null, System.currentTimeMillis());
-        custody = k;
+        Custody k = new Custody(installed, installed ? queryKeptHere(ctx) : null, start);
+        synchronized (DexiconPools.class) { if (custody == null || custody.at <= start) custody = k; else k = custody; }
         try { if (prefs(ctx).contains(AWAITING) || prefs(ctx).contains(HANDED)) prefs(ctx).edit().remove(AWAITING).remove(HANDED).apply(); }
         catch (RuntimeException ignored) { /* the retired sets are never read anyway */ }
         return k;
     }
 
     /** The cached read, re-read when missing, over a minute old, or taken before PandaPools was (un)installed. */
-    public static Custody custody(Context c) {
+    public static Custody custody(Context c) { return custody(c, CUSTODY_MAX_AGE_MS); }
+    private static Custody custody(Context c, long maxAgeMs) {
         Custody k = custody;
-        if (k == null || k.installed != pandaPoolsInstalled(c) || System.currentTimeMillis() - k.at > CUSTODY_MAX_AGE_MS) k = readCustody(c);
+        if (stale(c, k, maxAgeMs)) k = readCustody(c);
         return k;
+    }
+    private static boolean stale(Context c, Custody k, long maxAgeMs) {
+        return k == null || k.installed != pandaPoolsInstalled(c) || System.currentTimeMillis() - k.at > maxAgeMs;
+    }
+
+    /** Before an owner-signing step (refresh, re-announce, sweep, Re-publish): custody at most this old. A take-back in
+     *  PandaPools between the pass start and the signature must stop the signature. */
+    static final long CUSTODY_SIGN_MAX_AGE_MS = 5_000;
+
+    /** As {@link #keptElsewhere}, on a read at most ~5 s old — for the step that is about to sign with a pool owner key. */
+    public static boolean keptElsewhereToSign(Context c, String address) {
+        if (c == null || address == null) return false;
+        if (!pandaPoolsInstalled(c)) return false;
+        Custody k = custody(c, CUSTODY_SIGN_MAX_AGE_MS);
+        return k.keptHere == null || k.keptHere.contains(low(address));
+    }
+
+    // ---- custody for the UI: never a provider read on the main thread ----
+
+    private static java.util.concurrent.Executor custodyIo = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "dexicon-custody"); t.setDaemon(true); return t;
+    });
+    private static final java.util.concurrent.atomic.AtomicBoolean READING = new java.util.concurrent.atomic.AtomicBoolean();
+    /** Tests run the background read inline. */
+    public static void custodyExecutorForTest(java.util.concurrent.Executor e) { custodyIo = e; }
+
+    /** Re-read custody OFF the main thread; {@code onMain} (may be null) follows on the main thread with the result cached. */
+    public static void readCustodyAsync(Context c, Runnable onMain) {
+        final Context ctx = c.getApplicationContext();
+        final android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+        custodyIo.execute(() -> {
+            try { readCustody(ctx); } catch (RuntimeException ignored) { /* unread: the cache stays as it was */ }
+            if (onMain != null) main.post(onMain);
+        });
+    }
+
+    /** UI: the cached custody, never read on the calling thread (null until the first read). When missing or stale, ONE
+     *  background read runs and {@code onFresh} follows on the main thread. */
+    public static Custody custodyForUi(Context c, Runnable onFresh) {
+        Custody k = custody;
+        if (stale(c, k, CUSTODY_MAX_AGE_MS) && READING.compareAndSet(false, true))
+            readCustodyAsync(c, () -> { READING.set(false); if (onFresh != null) onFresh.run(); });
+        return k;
+    }
+    /** UI: PandaPools is installed and this read could not tell which pools it keeps. */
+    public static boolean unreadableForUi(Context c, Custody k) { return k != null && pandaPoolsInstalled(c) && k.unreadable(); }
+    /** UI: the held pools this read says another app keeps (none shown until the first read lands). */
+    public static List<String> keptElsewhereForUi(Context c, Custody k) {
+        List<String> out = new ArrayList<>();
+        if (k == null || !pandaPoolsInstalled(c)) return out;
+        for (String a : heldAddresses(c)) if (k.keptHere == null || k.keptHere.contains(a)) out.add(a);
+        java.util.Collections.sort(out);
+        return out;
     }
 
     /** Lower-case addresses PandaPools says it keeps, or null when its provider cannot be read or is not PandaPools' own. */
@@ -174,18 +231,57 @@ public final class DexiconPools {
     public static void holdCoins(Collection<String> coinIds) {
         if (coinIds == null || coinIds.isEmpty()) return;
         List<Coin> coins = new ArrayList<>();
-        for (String id : coinIds) if (id != null && !id.isEmpty()) { Coin c = new Coin(); c.coinid = id; coins.add(c); }
+        long now = System.currentTimeMillis();
+        for (String id : coinIds) if (id != null && !id.isEmpty()) { Coin c = new Coin(); c.coinid = id; coins.add(c); HELD.put(low(id), now); }
         CoinLock.reserve(coins);
     }
 
-    /** A collection sweep forwards owner-payout coins (owner key). Not while custody is unreadable, nor while any pending
-     *  collection belongs to a pool kept elsewhere (CollectSweeper is vendored and sweeps its whole queue). */
-    static boolean sweepAllowed(Context c) {
-        if (custodyUnreadable(c)) return false;
-        for (PendingCollect.Entry e : PendingCollect.all(c))
-            for (Pool p : OwnPoolStore.all(c))
-                if (p.oadr != null && p.oadr.equalsIgnoreCase(e.oadr) && keptElsewhere(c, p.address)) return false;
-        return true;
+    /** Coins Dexicon itself held in PandaPools' CoinLock (live-order backing, trade inputs) and when. */
+    private static final java.util.Map<String, Long> HELD = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Longer than CoinLock's own reservation window: a hold Dexicon renewed within it is still Dexicon's. */
+    static final long HELD_MS = 10 * 60_000;
+
+    /** The CoinLock is one-way no more: true when PANDAPOOLS' own selection holds this coin (a pool create / refresh /
+     *  swap in flight, or posted), so no Dexicon selection may take it. A reservation Dexicon made itself
+     *  ({@link #holdCoins}: a live order's backing, a trade's inputs) does not count — the maker must still see its own
+     *  backing coins. */
+    public static boolean poolReserved(String coinId) {
+        if (coinId == null || !CoinLock.isReserved(coinId)) return false;
+        Long at = HELD.get(low(coinId));
+        return at == null || System.currentTimeMillis() - at >= HELD_MS;
+    }
+
+    /** A {@code coins} reply minus the rows {@link #poolReserved}; anything else is returned as is. */
+    public static org.json.JSONObject withoutPoolReserved(org.json.JSONObject reply) {
+        Object r = reply == null ? null : reply.opt("response");
+        if (!(r instanceof org.json.JSONArray)) return reply;
+        try {
+            org.json.JSONArray in = (org.json.JSONArray) r, out = new org.json.JSONArray();
+            for (int i = 0; i < in.length(); i++) {
+                org.json.JSONObject row = in.optJSONObject(i);
+                if (row == null || !poolReserved(row.optString("coinid", null))) out.put(in.get(i));
+            }
+            return out.length() == in.length() ? reply : new org.json.JSONObject(reply.toString()).put("response", out);
+        } catch (org.json.JSONException e) { return reply; }
+    }
+
+    static final String KEPT_ELSEWHERE_COLLECT = "PandaPools still keeps this pool, so Dexicon leaves its payout address alone.";
+
+    /**
+     * A collection sweep forwards owner-payout coins (owner key), PER ENTRY: the vendored CollectSweeper takes no filter
+     * and works its whole queue, but every step of an entry names that entry's owner address on the node (balance /
+     * checkaddress / the forward), so the connection it is given refuses any command naming the owner address of a pool
+     * kept elsewhere (custody at most ~5 s old; unreadable = every pool kept elsewhere). That entry stays queued as
+     * RETRYING; every other entry — a Dexicon-kept pool's pending payout — is still forwarded.
+     */
+    static NodeApi sweepNode(Context c, com.eurobuddha.dexicon.NodeApi dex) {
+        final Context ctx = c.getApplicationContext();
+        return new NodeApi(dex, command -> {
+            String cmd = low(command);
+            for (Pool p : OwnPoolStore.all(ctx))
+                if (p.oadr != null && !low(p.oadr).isEmpty() && cmd.contains(low(p.oadr)) && keptElsewhereToSign(ctx, p.address)) return KEPT_ELSEWHERE_COLLECT;
+            return null;
+        });
     }
 
     // ---- restore a PandaPools backup (the gate's "Restore your PandaPools backup here") ----
@@ -216,18 +312,21 @@ public final class DexiconPools {
         CombinedBackupUi.open(act, uri, json -> {
             List<String> addresses = recipeAddresses(json);
             if (addresses.isEmpty()) { done.done(0, 0, addresses, "That file holds no pool recipe."); return; }
-            readCustody(act);
-            NodeApi n = act.node();
-            if (n == null) { done.done(0, addresses.size(), addresses, "Connect to your node first. Nothing restored."); return; }
-            final StringBuilder log = new StringBuilder();
-            status.accept("Restoring pools…");
-            new Recovery(n).restore(act, json, act.chainBlock(), false, false, new Recovery.RestoreCb() {
-                @Override public void onProgress(String line) { log.append(line).append('\n'); status.accept("Restoring… " + line); }
-                @Override public void onDone(int restored, int total) {
-                    act.runOnUiThread(() -> { if (act.pools() != null) act.pools().refresh(); done.done(restored, total, addresses, log.toString().trim()); });
-                }
-            });
+            readCustodyAsync(act, () -> restoreRead(act, json, addresses, status, done));   // custody first, read off the main thread
         }, status);
+    }
+
+    private static void restoreRead(MainActivity act, String json, List<String> addresses, java.util.function.Consumer<String> status, RestoreDone done) {
+        NodeApi n = act.node();
+        if (n == null) { done.done(0, addresses.size(), addresses, "Connect to your node first. Nothing restored."); return; }
+        final StringBuilder log = new StringBuilder();
+        status.accept("Restoring pools…");
+        new Recovery(n).restore(act, json, act.chainBlock(), false, false, new Recovery.RestoreCb() {
+            @Override public void onProgress(String line) { log.append(line).append('\n'); status.accept("Restoring… " + line); }
+            @Override public void onDone(int restored, int total) {
+                act.runOnUiThread(() -> { if (act.pools() != null) act.pools().refresh(); done.done(restored, total, addresses, log.toString().trim()); });
+            }
+        });
     }
 
     // ---- keep-alive (MakerService tick) ----
@@ -246,19 +345,23 @@ public final class DexiconPools {
             new PoolRefresher(n).refreshAgingFromScan(ctx,
                     (ownFunded, allRecipes, tip) -> StrandingWatch.evaluate(ctx, ownFunded, allRecipes, tip),
                     r -> new ReAnnouncer(n).refreshFadedFromScan(p -> {
-                        if (sweepAllowed(ctx)) new CollectSweeper(ctx, n).run((cleared, pending, stranded) -> {});
+                        new CollectSweeper(ctx, sweepNode(ctx, dex)).run((cleared, pending, stranded) -> {});
                     }));
         } catch (Throwable ignored) { }
         return true;
     }
 
-    /** The stranding notification's Re-publish action (PoolKeepAliveService.republishOne): every signing guard still applies. */
-    public static void republish(Context context, com.eurobuddha.dexicon.NodeApi dex, String address) {
-        if (address == null || address.isEmpty()) return;
+    /** The stranding notification's Re-publish action (PoolKeepAliveService.republishOne): every signing guard still applies.
+     *  Returns true once the request is finished with — it ran (its reserves were read and the refresh attempted), or
+     *  there is no recipe for that pool here to ever run it — and false while a guard holds it back (kept elsewhere):
+     *  the caller keeps it queued. */
+    public static boolean republish(Context context, com.eurobuddha.dexicon.NodeApi dex, String address) {
+        if (address == null || address.isEmpty()) return true;
         final Context ctx = context.getApplicationContext();
         Pool target = null;
         for (Pool p : OwnPoolStore.all(ctx)) if (address.equalsIgnoreCase(p.address)) { target = p; break; }
-        if (target == null || keptElsewhere(ctx, target.address)) return;
+        if (target == null) return true;
+        if (keptElsewhereToSign(ctx, target.address)) return false;
         final Pool pool = target;
         final NodeApi n = new NodeApi(dex);
         PoolRefresher.readLiveReserves(n, pool, found -> {
@@ -271,6 +374,7 @@ public final class DexiconPools {
                 @Override public void onFailed(String message) { /* the next pass re-evaluates and re-warns */ }
             });
         });
+        return true;
     }
 
     /**
@@ -354,4 +458,6 @@ public final class DexiconPools {
 
     /** For tests: allow the next keep-alive pass at once. */
     static void resetPassClock() { lastPassMs = 0; }
+    /** For tests: make the cached custody read {@code ms} older. */
+    static synchronized void ageCustody(long ms) { Custody k = custody; if (k != null) custody = new Custody(k.installed, k.keptHere, k.at - ms); }
 }

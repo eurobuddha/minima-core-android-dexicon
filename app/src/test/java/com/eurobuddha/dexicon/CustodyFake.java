@@ -25,6 +25,7 @@ public class CustodyFake extends ContentProvider {
     /** NONE removes PandaPools; OLD = installed without the provider; NEW = with it, same signing key; FOREIGN_SIGNED =
      *  with it, but signed with another key. Then re-reads custody. */
     public static void install(Application app, Install how, long version) {
+        DexiconPools.custodyExecutorForTest(Runnable::run);   // the UI's background custody read runs inline in tests
         Shadows.shadowOf(app.getPackageManager()).removePackage(TradingGate.PANDAPOOLS);
         if (how != Install.NONE) {
             Signature mine = new Signature("0a0b0c"), other = new Signature("0d0e0f");

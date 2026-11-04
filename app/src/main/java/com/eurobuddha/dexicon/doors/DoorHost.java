@@ -199,6 +199,21 @@ public final class DoorHost {
         return false;
     }
 
+    /** An OTC deal of {@code m} at the point where leaving its market would strand it: AGREED (an instigator locks leg 1
+     *  next), or EXECUTING with its swap still STARTED (the counter-leg is not locked yet) — the vendored controller
+     *  drives those steps only while its market is active. */
+    public boolean otcMidExecution(TradingContext m) {
+        if (!otcOpen(m)) return false;
+        for (OtcDb.Deal d : otcDb.allDeals()) {
+            if (d.market() != m || OtcController.isTerminal(d.status)) continue;
+            if (OtcDb.ST_AGREED.equals(d.status)) return true;
+            if (OtcDb.ST_EXECUTING.equals(d.status) && d.hash != null && SwapDb.ST_STARTED.equals(engine.swapStatus(d.hash))) return true;
+        }
+        return false;
+    }
+    public static final String OTC_MID_EXECUTION = "An OTC deal in this market is being executed (agreed, or its first lock is waiting for the "
+            + "other side). Switching now would stop it from progressing — switch once it is locked on both sides.";
+
     // A withdrawal (tombstone) of a market sent but not yet confirmed: the order is still on the book until it lands — or
     // until it ages off on its own (~1 h of blocks after its last publish, which is never later than the marker).
     static final long WITHDRAW_MARKER_MS = 70 * 60_000;
@@ -274,6 +289,7 @@ public final class DoorHost {
         if (switching) return SWITCHING;
         if (target == market) { if (done != null) done.run(); return null; }
         if (busy || scanning) return "An AtomiX swap is starting or the book is being read — try again in a moment.";
+        if (otcMidExecution(market)) return OTC_MID_EXECUTION;
         final TradingContext current = market;
         switching = true;
         com.eurobuddha.atomix.swap.PublishGate.bumpGen();   // void queued publications NOW, before the tombstone (and again at the flip)
@@ -375,7 +391,7 @@ public final class DoorHost {
             walletDeriving = true;
             wallet.deriveFromNode(node, h, new EthWallet.Cb() {
                 @Override public void ok(String address) { walletDeriving = false; changed(); }
-                @Override public void err(String msg) { walletDeriving = false; bootNote = "ETH key: " + msg; }   // never log key material
+                @Override public void err(String msg) { walletDeriving = false; bootNote = "ETH key: " + mx(msg); }   // never log key material
             });
         }
         if (!minima.ready() && !minimaSettingUp) {
@@ -387,7 +403,7 @@ public final class DoorHost {
                     engine.setMyMinimaPk(pk);
                     changed();
                 }
-                @Override public void err(String m) { minimaSettingUp = false; bootNote = "Minima swap key: " + m; }
+                @Override public void err(String m) { minimaSettingUp = false; bootNote = "Minima swap key: " + mx(m); }
             });
         }
         if (minima.ready() && !keysLoaded && !keysLoading) {
@@ -426,7 +442,7 @@ public final class DoorHost {
                     } catch (Exception e) { h.post(() -> { identityDeriving = false; bootNote = "Identity derive failed"; }); }
                 });
             }
-            @Override public void failed(String m) { identityDeriving = false; bootNote = "Identity: " + m; }
+            @Override public void failed(String m) { identityDeriving = false; bootNote = "Identity: " + mx(m); }
         };
         if (legacy) com.eurobuddha.dexicon.identity.SeedSource.legacy(node, got);
         else com.eurobuddha.dexicon.identity.SeedSource.derive(node, com.eurobuddha.dexicon.identity.SeedSource.DOORS, got);
@@ -572,7 +588,13 @@ public final class DoorHost {
 
     // ------------------------------------------------------------------ the maker (AtomiX SwapService, ported)
 
-    /** One trading app per phone: while AtomiX / PandaPools is present Dexicon publishes and arms NOTHING. */
+    /** One trading app per phone: while AtomiX / PandaPools is present Dexicon publishes and arms NOTHING.
+     *
+     *  TODO(re-vendor AtomiX 0.1.91+): wire the engine's own host gate in the constructor, right after the engine is built:
+     *      engine.setHostGate(() -> TradingGate.blocked(app) || switching);
+     *  SwapEngine.setHostGate(BooleanSupplier) folds it into halted() and is consulted where OTC execution starts a lock, so
+     *  a local OTC Accept whose ACCEPT confirms after the gate shut no longer locks leg 1 (OtcController.accept →
+     *  executeDeal runs in the send callback). Until then OtcTab re-checks the gate right before Accept is sent. */
     public boolean gated() { return TradingGate.blocked(app); }
 
     public Order loadOrder() { return Order.fromConfigJson(prefs.getString("order_config", "")); }
@@ -607,24 +629,33 @@ public final class DoorHost {
      */
     void withdrawOnConflict() {
         if (!TradingGate.conflict(app) || switching) return;
-        if (prefs.getBoolean("auto_publish", false) && tombstones.ready(ids.get(market))) {
+        boolean otcOn = prefs.getBoolean("otc_enable", false) || prefs.getBoolean("otc_auto", false);
+        boolean marketOn = prefs.getBoolean("auto_publish", false) && tombstones.ready(ids.get(market));
+        if (!otcOn && !marketOn) return;
+        // ONE generation bump for both withdrawals, before either is sent: a second bump (the old withdrawOtcOffer after the
+        // tombstone) voided the tombstone already in flight.
+        if (otcOn) prefs.edit().putBoolean("otc_enable", false).putBoolean("otc_auto", false).apply();
+        if (marketOn) {
             prefs.edit().putBoolean("auto_publish", false).apply();   // kill-safe first
             Order off = loadOrder();          // persisted disabled, exactly as withdrawOrder: a reopened gate re-arms nothing
             for (Order.Pair p : off.pairs.values()) p.enable = false;
             saveOrder(off);
-            PublishGate.bumpGen();            // an in-flight publish must not re-list it
-            engine.setMyOrder(new Order());   // disarm now, even if the tombstone fails
-            final TradingContext m0 = market;
-            markWithdrawal(m0);
-            lastReassertMs = System.currentTimeMillis();   // this is the belt's tombstone, sent now
-            tombstones.send(ids.get(m0), tombstone(), new CommsTransport.SendCb() {
-                @Override public void onSent(String txpowid) { withdrawalLanded(m0); changed(); }
-                @Override public void onFailed(String message) { /* flushWithdrawal re-sends it */ }
-            });
-            Notifier.alert(app, "AtomiX · market withdrawn", "AtomiX or PandaPools is on this phone, so your " + DoorPlan.coin(m0)
-                    + " market was taken off the book. Place it again once trading is back.");
         }
-        if (prefs.getBoolean("otc_enable", false) || prefs.getBoolean("otc_auto", false)) withdrawOtcOffer(s -> {});
+        PublishGate.bumpGen();                // an in-flight publish must not re-list either
+        if (otcOn) sendOtcWithdrawal(s -> {});
+        if (!marketOn) return;
+        engine.setMyOrder(new Order());       // disarm now, even if the tombstone fails
+        final TradingContext m0 = market;
+        markWithdrawal(m0);
+        lastReassertMs = System.currentTimeMillis();   // this is the belt's tombstone, sent now
+        if (PublishGate.tryAcquire(PublishGate.ORDER))   // one ORDER publish at a time: flushWithdrawal cannot duplicate it
+            tombstones.send(ids.get(m0), tombstone(), new CommsTransport.SendCb() {
+                @Override public void onSent(String txpowid) { PublishGate.release(PublishGate.ORDER); withdrawalLanded(m0); changed(); }
+                @Override public void onFailed(String message) { PublishGate.release(PublishGate.ORDER); /* flushWithdrawal re-sends it */ }
+            });
+        // else a (now void) publish still holds the slot: the marker is set, flushWithdrawal sends it next pass
+        Notifier.alert(app, "AtomiX · market withdrawn", "AtomiX or PandaPools is on this phone, so your " + DoorPlan.coin(m0)
+                + " market was taken off the book. Place it again once trading is back.");
     }
 
     /** What a confirmed publish may arm: the order, unless the gate shut or the keys were lost while it was in flight. */
@@ -735,7 +766,6 @@ public final class DoorHost {
         final double pegMid = PriceOracle.appliedMid();
         PublishGate.bumpGen();   // manual supersedes auto
         final long gen = PublishGate.gen();
-        prefs.edit().putBoolean("auto_publish", true).apply();   // opt in to keep it live + fresh
         st.say("Publishing your order…");
         final CommsIdentity id = ids.get(market);
         engine.ensureLadderCoins(o, !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE, () -> {
@@ -744,7 +774,8 @@ public final class DoorHost {
             engine.publishFresh(ls(), id, o, gen, new CommsTransport.SendCb() {
             @Override public void onSent(String txpowid) {
                 if (gen != PublishGate.gen()) return;
-                prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).apply();
+                // opt in to keep it live + fresh ONLY once it is on the book (a failed or voided publish leaves it off)
+                prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).putBoolean("auto_publish", true).apply();
                 if (peg == PriceOracle.PEG_APPLIED || wide) PriceOracle.commitPeg(prefs, pegMid, wide);
                 engine.setMyOrder(armable(o));
                 st.say(!o.hasLiquidity() ? "✓ Order withdrawn — removed from the book" : wide
@@ -857,8 +888,14 @@ public final class DoorHost {
 
     /** AtomiX withdrawOtcOffer: off at once, then an empty offer on the board. Allowed even while gated. */
     public void withdrawOtcOffer(Status st) {
+        if (switching) { st.say(SWITCHING); return; }
         PublishGate.bumpGen();
         prefs.edit().putBoolean("otc_enable", false).putBoolean("otc_auto", false).apply();
+        sendOtcWithdrawal(st);
+    }
+
+    /** The empty offer on the board, under the current generation (the caller bumped it and switched OTC off). */
+    private void sendOtcWithdrawal(Status st) {
         if (!makerReady()) { st.say("OTC switched off."); return; }
         OtcBook.publish(node, ls(), ids.get(market), otcOffer(false, 0, 0), new CommsTransport.SendCb() {
             @Override public void onSent(String txpowid) { st.say("✓ OTC offer withdrawn"); changed(); }
@@ -919,7 +956,7 @@ public final class DoorHost {
      *  been down past the window, tombstone the order and DISARM the guard. With a last-good mid the peg stays live at a
      *  widened defensive spread instead. auto_publish stays on either way. A withdrawal is allowed even while gated. */
     private void maybePegWithdraw() {
-        if (!makerReady()) return;
+        if (switching || !makerReady()) return;
         final boolean withdrawn = prefs.getBoolean(PriceOracle.P_WITHDRAWN, false);
         if (withdrawn && prefs.getBoolean(PriceOracle.P_TOMBSTONED, false)) return;   // tombstone confirmed — done
         if (PriceOracle.mid() > 0 && !PriceOracle.feedDownPastCeiling()) return;
@@ -1137,7 +1174,7 @@ public final class DoorHost {
                         engine.noteTakeSent(hash, leg.maker.commsPublicId);   // the only sender whose notice we accept
                         SwapTake.send(node, crypto.get(market), leg.maker.commsPublicId, ids.get(market).publicId(), hash, market, new CommsTransport.SendCb() {
                             @Override public void onSent(String txpowid) {}
-                            @Override public void onFailed(String message) { Notifier.alert(app, "AtomiX", "USDT locked, but telling the maker failed (" + message + ") — swap " + hash); }
+                            @Override public void onFailed(String message) { Notifier.alert(app, "AtomiX", "USDT locked, but telling the maker failed (" + mx(message) + ") — swap " + hash); }
                         });
                     }
                     if (busy) fireLeg(market, plan, to, i + 1, ok + 1, pr);   // a stalled-then-late leg still notifies its maker, but starts nothing new
@@ -1153,7 +1190,7 @@ public final class DoorHost {
             @Override public void err(String msg) {
                 if (answered[0]) return;
                 answered[0] = true;
-                if (busy) endTake(pr, "AtomiX stopped at part " + (i + 1) + "/" + total + ": " + msg, true);
+                if (busy) endTake(pr, "AtomiX stopped at part " + (i + 1) + "/" + total + ": " + mx(msg), true);
             }
         };
         if (plan.sell) engine.startMinimaToErc20(leg.maker, leg.minima, DoorPlan.SYM, leg.usdt, cb);

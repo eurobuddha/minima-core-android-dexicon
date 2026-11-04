@@ -170,6 +170,9 @@ public final class OtcTab extends LinearLayout {
                     if (refuse()) return;
                     String fundErr = host.otcCheckFunds(d.role, d.side, d.amount, d.price);
                     if (fundErr != null) { act.toast(fundErr); return; }
+                    // the gate as of the moment ACCEPT is sent (an instigator locks leg 1 on its confirmation; the engine's
+                    // own host gate takes over once AtomiX 0.1.91+ is re-vendored — see DoorHost.gated)
+                    if (refuse()) return;
                     host.otc().accept(d, res("Accepted"));
                 }), m);
                 row.addView(pill("Counter", false, () -> counter(d)), m);

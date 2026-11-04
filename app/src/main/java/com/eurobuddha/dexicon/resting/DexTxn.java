@@ -117,7 +117,8 @@ public class DexTxn {
             CoinLock.reserve(got); cb.found(got); return;
         }
         String id = ids.get(i);
-        if (!FundingCoins.hex(id) || CoinLock.isReserved(id)) { presetCoins(token, need, ids, i + 1, got, sum, cb); return; }
+        // Dexicon glue (0.1.79): nor one a ② pool selection holds in PandaPools' CoinLock
+        if (!FundingCoins.hex(id) || CoinLock.isReserved(id) || com.eurobuddha.pandapools.DexiconPools.poolReserved(id)) { presetCoins(token, need, ids, i + 1, got, sum, cb); return; }
         node.cmd("coins relevant:true sendable:true checkmempool:true coinid:" + id, new NodeApi.Cb() {   // checkmempool: never a coin a pending txn already spends
             public void onResult(JSONObject j) {
                 org.json.JSONArray arr = FundingCoins.rows(j);
@@ -436,7 +437,13 @@ public class DexTxn {
         if (owners == null) { lastFundError = com.eurobuddha.pandapools.DexiconPools.OWNERS_UNREADABLE; cb.found(null); return; }   // fail closed
         java.util.Set<String> exclude = new java.util.HashSet<>(owners);
         if (excludeAddrsLower != null) exclude.addAll(excludeAddrsLower);
-        FundingCoins.select(node::cmd, tokenid, need, exclude, maxInputs, new FundingCoins.Done() {
+        // Dexicon glue (0.1.79): FundingCoins is PandaDEX's copy and knows only its own CoinLock; a coin a ② pool selection
+        // holds in PandaPools' CoinLock is dropped from its wallet coin reads here, so it never becomes a candidate.
+        FundingCoins.Command reads = (c, r) -> node.cmd(c, !c.startsWith("coins") ? r : new NodeApi.Cb() {
+            public void onResult(JSONObject j) { r.onResult(com.eurobuddha.pandapools.DexiconPools.withoutPoolReserved(j)); }
+            public void onError(String m) { r.onError(m); }
+        });
+        FundingCoins.select(reads, tokenid, need, exclude, maxInputs, new FundingCoins.Done() {
             public void ok(List<JSONObject> coins, BigDecimal sum) { cb.found(coins); }
             public void fail(String message) { lastFundError = message; cb.found(null); }
         });

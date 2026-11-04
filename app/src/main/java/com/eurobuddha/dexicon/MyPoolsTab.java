@@ -62,10 +62,11 @@ public final class MyPoolsTab extends LinearLayout {
             fix.setOnClickListener(v -> { DexiconPools.resolveInterruptedWrite(act); });
             w.addView(fix);
         }
-        List<String> waiting = DexiconPools.keptElsewhereNow(act);
+        DexiconPools.Custody k = DexiconPools.custodyForUi(act, () -> { if (isAttachedToWindow()) render(); });   // never a provider read here
+        List<String> waiting = DexiconPools.keptElsewhereForUi(act, k);
         if (!waiting.isEmpty()) {
             LinearLayout a = Ui.card(notices);
-            boolean unreadable = DexiconPools.custodyUnreadable(act);
+            boolean unreadable = DexiconPools.unreadableForUi(act, k);
             a.addView(Ui.text(act, unreadable ? "UPDATE PANDAPOOLS" : "KEPT BY PANDAPOOLS", 13f, unreadable ? Design.RED() : Design.ACCENT(), Design.sansBold()));
             a.addView(Ui.para(act, unreadable
                     ? "Standalone PandaPools is installed but cannot tell Dexicon which pools it keeps, so Dexicon signs for none of these "

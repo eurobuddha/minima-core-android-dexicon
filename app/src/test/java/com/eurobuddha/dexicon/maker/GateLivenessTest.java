@@ -61,4 +61,20 @@ public class GateLivenessTest {
         s.runPendingRepublish();   // no recipe for it here: DexiconPools.republish signs nothing
         assertFalse(p.contains("pending"));
     }
+
+    /** 9 (0.1.79): a queued Re-publish a guard holds back (PandaPools keeps the pool) stays queued until it can run. */
+    @Test public void aRepublishHeldBackByAGuardStaysQueued() {
+        Application app = RuntimeEnvironment.getApplication();
+        com.eurobuddha.dexicon.CustodyFake.install(app, com.eurobuddha.dexicon.CustodyFake.Install.OLD, 980);   // unreadable: kept elsewhere
+        com.eurobuddha.pandapools.Pool pool = new com.eurobuddha.pandapools.Pool();
+        pool.address = "0x" + "f2".repeat(32); pool.opk = "0x" + "b9".repeat(32); pool.oadr = "0x" + "c9".repeat(32);
+        pool.tok = "0x" + "d9".repeat(32); pool.kmin = "100"; pool.covenantScript = "RETURN TRUE";
+        assertTrue(com.eurobuddha.pandapools.OwnPoolStore.recordDurably(app, pool));
+        MakerService s = Robolectric.buildService(MakerService.class).get();
+        s.queueRepublish(pool.address);
+        s.runPendingRepublish();
+        android.content.SharedPreferences p = s.getSharedPreferences(MakerService.PREFS_REPUBLISH, android.content.Context.MODE_PRIVATE);
+        assertTrue("not run, so not forgotten", p.getStringSet("pending", new java.util.HashSet<>()).contains(pool.address));
+        com.eurobuddha.dexicon.CustodyFake.install(app, com.eurobuddha.dexicon.CustodyFake.Install.NONE, 0);
+    }
 }

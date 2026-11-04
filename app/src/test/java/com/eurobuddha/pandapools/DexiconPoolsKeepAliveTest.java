@@ -138,10 +138,48 @@ public class DexiconPoolsKeepAliveTest {
         assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
         assertTrue(DexiconPools.custodyUnreadable(ctx));
         assertTrue(Handover.keepable(ctx, OwnPoolStore.all(ctx)).isEmpty());
-        assertFalse(DexiconPools.sweepAllowed(ctx));
+        String oadr = pool(A).oadr;
+        assertEquals(DexiconPools.KEPT_ELSEWHERE_COLLECT, sweep("balance address:" + oadr));
         CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.NONE, 0);
-        assertTrue("PandaPools gone: Dexicon keeps (and sweeps) everything", DexiconPools.sweepAllowed(ctx));
+        assertNull("PandaPools gone: Dexicon keeps (and sweeps) everything", sweep("balance address:" + oadr));
         assertEquals(1, Handover.keepable(ctx, OwnPoolStore.all(ctx)).size());
+    }
+
+    /** What the sweep's node connection answers for one command: the refusal, or null when it went to the node. */
+    private String sweep(String command) {
+        final String[] err = new String[1];
+        int before = sent.size();
+        DexiconPools.sweepNode(ctx, dex).cmd(command, new NodeApi.Cb() {
+            public void onResult(JSONObject j) {}
+            public void onError(String m) { err[0] = m; }
+        });
+        return sent.size() > before ? null : err[0];
+    }
+
+    /** 9 (0.1.79): the sweep is filtered PER ENTRY — a pending payout of the pool Dexicon keeps is still forwarded while
+     *  another entry belongs to a pool PandaPools keeps. */
+    @Test public void theSweepSkipsOnlyTheEntriesOfPoolsKeptElsewhere() {
+        Pool mine = pool(B);
+        mine.oadr = "0x" + String.join("", Collections.nCopies(64, "e"));
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), DexiconPools.KEPT_HERE}, {B.toLowerCase(), "handed_over"}};
+        CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.NEW, 981);
+        assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
+        assertTrue(OwnPoolStore.recordDurably(ctx, mine));
+        assertEquals(DexiconPools.KEPT_ELSEWHERE_COLLECT, sweep("checkaddress address:" + pool(A).oadr));
+        assertNull("Dexicon's own pool's payout is still forwarded", sweep("balance address:" + mine.oadr));
+    }
+
+    /** 6 (0.1.79): an owner-signing step re-reads custody when the pass-start read is over ~5 s old. */
+    @Test public void aTakeBackBetweenPassStartAndSigningStopsTheSignature() {
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), "handed_over"}};
+        CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.NEW, 981);
+        assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
+        assertEquals(1, Handover.keepable(ctx, OwnPoolStore.all(ctx)).size());
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), DexiconPools.KEPT_HERE}};
+        assertFalse("a read under ~5 s old stands", Handover.keptByDexicon(ctx, A));
+        DexiconPools.ageCustody(6_000);
+        assertFalse("the UI/generic read keeps its minute-long cache", DexiconPools.keptElsewhere(ctx, A));
+        assertTrue("re-read before signing: taken back", Handover.keptByDexicon(ctx, A));
     }
 
     /** B: every pool owner payout address, in full and lower-case, for Dexicon's coin selection to skip. */

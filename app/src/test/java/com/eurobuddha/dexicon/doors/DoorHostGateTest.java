@@ -149,6 +149,58 @@ public class DoorHostGateTest {
         assertFalse("gated: an ACCEPT is not routed", host.routeOtc("coin", new Opened(true, "peer", m.toWire()), new JSONObject()));
     }
 
+    /** 7a (0.1.79): OTC and market are withdrawn under ONE generation (a second bump voided the tombstone in flight), and
+     *  the tombstone holds the ORDER slot, so flushWithdrawal cannot send a duplicate in the same pass. */
+    @Test public void theGateWithdrawsOtcAndMarketUnderOneGeneration() {
+        PublishGate.release(PublishGate.ORDER);
+        host.prefs().edit().putString("order_config", Order.toConfigJson(liquid())).putBoolean("auto_publish", true)
+                .putBoolean("otc_enable", true).putBoolean("otc_auto", true).commit();
+        installAtomiX();
+        long gen0 = PublishGate.gen();
+        host.gateChanged();
+        assertEquals("one bump for both", gen0 + 1, PublishGate.gen());
+        assertFalse(host.prefs().getBoolean("otc_enable", true) || host.prefs().getBoolean("otc_auto", true));
+        assertEquals(1, sent.size());
+        host.flushWithdrawal();
+        assertEquals("the in-flight tombstone holds the ORDER slot: no duplicate", 1, sent.size());
+        cbs.get(0).onFailed("lost");
+        host.flushWithdrawal();
+        assertEquals("unconfirmed: re-sent on the next pass", 2, sent.size());
+        cbs.get(1).onSent("0x02");
+        assertFalse(host.withdrawalPending(TradingContext.MXUSDT));
+    }
+
+    /** 7a: a (voided) publish still holding the ORDER slot: the marker is set, and the next pass sends it. */
+    @Test public void aBusyOrderSlotDefersTheTombstoneToTheNextPass() {
+        host.prefs().edit().putString("order_config", Order.toConfigJson(liquid())).putBoolean("auto_publish", true).commit();
+        assertTrue(PublishGate.tryAcquire(PublishGate.ORDER));
+        installAtomiX();
+        host.gateChanged();
+        assertTrue(sent.isEmpty());
+        assertTrue(host.withdrawalPending(TradingContext.MXUSDT));
+        PublishGate.release(PublishGate.ORDER);
+        host.flushWithdrawal();
+        assertEquals(1, sent.size());
+        cbs.get(0).onSent("0x03");
+    }
+
+    /** 7d: no ⇄ switch while an OTC deal of this market is agreed or its first lock waits — and the user is told why. */
+    @Test public void theSwitchWaitsForAnOtcDealMidExecution() {
+        OtcDb.Deal d = new OtcDb.Deal();
+        d.ref = "gate-test-agreed"; d.role = OtcDb.ROLE_INSTIGATOR; d.peerCommsId = "peer"; d.side = OtcOffer.LP_SELLS_MINIMA;
+        d.amount = "2"; d.price = "1"; d.status = OtcDb.ST_AGREED; d.whoseTurn = OtcDb.TURN_ME; d.currency = TradingContext.MXUSDT.key;
+        assertTrue(host.otcDb().createDeal(d));
+        try {
+            assertEquals(DoorHost.OTC_MID_EXECUTION, host.switchMarket(TradingContext.MINIMA, null));
+            assertEquals(TradingContext.MXUSDT, host.market());
+        } finally {
+            OtcDb.Deal done = host.otcDb().getDeal(d.ref).copy(); done.status = OtcDb.ST_REJECTED;
+            assertTrue(host.otcDb().replaceDeal(host.otcDb().getDeal(d.ref), done));
+        }
+        assertNull(host.switchMarket(TradingContext.MINIMA, null));
+        idle(5);
+    }
+
     @Test public void theSwitchVoidsQueuedPublicationsBeforeItsTombstone() {
         host.prefs().edit().putString("order_config", Order.toConfigJson(liquid())).putBoolean("auto_publish", true).commit();
         long gen0 = PublishGate.gen();
@@ -156,6 +208,9 @@ public class DoorHostGateTest {
         assertTrue(host.switching());
         assertTrue("bumped at the start, while the tombstone is still in flight", PublishGate.gen() > gen0);
         assertEquals(1, sent.size());
+        final String[] said = new String[1];
+        host.withdrawOtcOffer(m -> said[0] = m);
+        assertEquals("7b: nothing is withdrawn mid-switch (its bump would void the tombstone)", DoorHost.SWITCHING, said[0]);
         idle(5);
     }
 }

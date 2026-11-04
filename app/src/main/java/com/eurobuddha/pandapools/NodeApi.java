@@ -60,11 +60,18 @@ public class NodeApi {
     }
 
     /** Dexicon's shared connection (the Activity's or MakerService's); {@link #onDestroy} leaves it open. */
-    public NodeApi(com.eurobuddha.dexicon.NodeApi shared) {
+    public NodeApi(com.eurobuddha.dexicon.NodeApi shared) { this(shared, null); }
+
+    /** As {@link #NodeApi(com.eurobuddha.dexicon.NodeApi)}; {@code refuse} names commands that must not leave the phone
+     *  (null = none): each gets {@code onError(reason)} instead. Dexicon's per-entry filter for the vendored
+     *  CollectSweeper, which takes no filter of its own (see DexiconPools.sweepNode). */
+    NodeApi(com.eurobuddha.dexicon.NodeApi shared, java.util.function.Function<String, String> refuse) {
         mContext = shared.context();
         node = shared;
         owned = false;
+        this.refuse = refuse;
     }
+    private java.util.function.Function<String, String> refuse;
 
     Context context() { return mContext.getApplicationContext(); }
 
@@ -160,6 +167,8 @@ public class NodeApi {
     public void cmd(String command, Cb cb) {
         if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, cb)); return; }
         if (command == null || command.trim().isEmpty()) { if (cb != null) cb.onError("Empty node command."); return; }
+        String refused = refuse == null ? null : refuse.apply(command);
+        if (refused != null) { if (cb != null) cb.onError(refused); return; }
         final Write w = new Write(command);
         node.cmd(command, w::admit, timeoutFor(command), new com.eurobuddha.dexicon.NodeApi.Cb() {
             @Override public void onResult(JSONObject reply) {

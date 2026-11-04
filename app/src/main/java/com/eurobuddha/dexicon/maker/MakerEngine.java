@@ -99,6 +99,7 @@ public final class MakerEngine {
                     for (JSONObject r : NodeApi.rows(j)) {
                         Coin c = Coin.of(r);
                         if (!c.spendable() || !c.sameToken(tokenid)) continue;
+                        if (com.eurobuddha.pandapools.DexiconPools.poolReserved(c.coinid)) continue;   // a ② pool selection holds it
                         String sc = scripts.get(c.address.toLowerCase(Locale.ROOT));
                         if (sc == null) continue;
                         c.script = sc; out.add(c);

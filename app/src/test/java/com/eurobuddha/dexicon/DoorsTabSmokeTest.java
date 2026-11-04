@@ -23,6 +23,7 @@ public class DoorsTabSmokeTest {
     }
     /** The trading screens, as on a phone whose node's MiniHub has been read once and held neither app. */
     static MainActivity launch() {
+        com.eurobuddha.pandapools.DexiconPools.custodyExecutorForTest(Runnable::run);   // the background custody read, inline
         TradingGate.record(org.robolectric.RuntimeEnvironment.getApplication(), new org.json.JSONArray());
         return org.robolectric.Robolectric.buildActivity(MainActivity.class).setup().get();
     }

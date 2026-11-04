@@ -205,6 +205,9 @@ public class MakerService extends Service {
             } catch (RuntimeException e) { log("doors poll: " + e); }
             else if (door % 3 == 0 && paired) try { com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this).discover(); }
             catch (RuntimeException e) { log("doors discover: " + e); }
+            // The MiniHub re-read (the trading gate's MiniDapp half) never waits behind a slow relay chain either.
+            long nowMs = System.currentTimeMillis();
+            if (paired && nowMs - lastHubMs >= HUB_EVERY_MS) { lastHubMs = nowMs; com.eurobuddha.dexicon.TradingGate.checkMiniHub(MakerService.this, node, MakerService.this::changed); }
             // Only the relay chain waits on `ticking`: door settlement above never stalls behind a slow inbox/take chain.
             if (ticking) return;
             if (!paired) {
@@ -212,8 +215,6 @@ public class MakerService extends Service {
                 if (now - lastRegisterMs >= REREGISTER_GAP_MS) { lastRegisterMs = now; node.reRegister(); }
                 return;
             }
-            long nowMs = System.currentTimeMillis();
-            if (nowMs - lastHubMs >= HUB_EVERY_MS) { lastHubMs = nowMs; com.eurobuddha.dexicon.TradingGate.checkMiniHub(MakerService.this, node, MakerService.this::changed); }
             ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
             runPendingRepublish();
             // ② Pools: PandaPools' keep-alive (keep-fresh, stranding alarm, re-announce, collections), at most every 5 min.
@@ -250,14 +251,15 @@ public class MakerService extends Service {
         p.edit().putStringSet("pending", s).commit();
     }
 
-    /** Paired: run (and forget) every queued Re-publish; every signing guard of DexiconPools.republish still applies. */
+    /** Paired: run every queued Re-publish; every signing guard of DexiconPools.republish still applies. An address is
+     *  forgotten only once its republish actually ran (or has no recipe here) — one a guard held back stays queued. */
     void runPendingRepublish() {
         android.content.SharedPreferences p = getSharedPreferences(PREFS_REPUBLISH, MODE_PRIVATE);
         Set<String> s = p.getStringSet("pending", null);
         if (s == null || s.isEmpty()) return;
-        List<String> todo = new ArrayList<>(s);
-        p.edit().remove("pending").commit();
-        for (String a : todo) com.eurobuddha.pandapools.DexiconPools.republish(this, node, a);
+        Set<String> keep = new HashSet<>();
+        for (String a : new ArrayList<>(s)) if (!com.eurobuddha.pandapools.DexiconPools.republish(this, node, a)) keep.add(a);
+        if (keep.isEmpty()) p.edit().remove("pending").commit(); else p.edit().putStringSet("pending", keep).commit();
     }
 
     /** Re-hold (every tick, inside PandaPools' ~3 min reservation) the coins backing my live ③ orders in PandaPools' CoinLock. */

@@ -17,7 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  *     keeper must leave alone. Read from Dexicon's side the rule is the same — "another app keeps this pool": standalone
  *     PandaPools' custody signal lists it as kept_here, or PandaPools is installed and that signal cannot be read
  *     ({@link DexiconPools#keptElsewhere}); Dexicon's keeper (keep-fresh, re-announce, stranding alarm, owner sweeps) then
- *     leaves it alone. Two keepers must never rebuild the same pool's reserves.
+ *     leaves it alone. Two keepers must never rebuild the same pool's reserves. Both ask on a custody read at most ~5 s
+ *     old ({@link DexiconPools#keptElsewhereToSign}): they gate an owner-key signature, so a take-back must stop it.
  */
 final class Handover {
     private Handover() {}
@@ -47,12 +48,12 @@ final class Handover {
     }
 
     /** Another app (standalone PandaPools) still keeps this pool: Dexicon must not refresh or re-announce it. */
-    static boolean keptByDexicon(Context c, String address) { return DexiconPools.keptElsewhere(c, address); }
+    static boolean keptByDexicon(Context c, String address) { return DexiconPools.keptElsewhereToSign(c, address); }
 
     /** {@code pools} minus the ones another app still keeps. */
     static List<Pool> keepable(Context c, List<Pool> pools) {
         List<Pool> out = new ArrayList<>();
-        for (Pool p : pools) if (p != null && !DexiconPools.keptElsewhere(c, p.address)) out.add(p);
+        for (Pool p : pools) if (p != null && !DexiconPools.keptElsewhereToSign(c, p.address)) out.add(p);
         return out;
     }
 }
