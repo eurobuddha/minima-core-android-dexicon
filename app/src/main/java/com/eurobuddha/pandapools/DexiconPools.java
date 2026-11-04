@@ -258,8 +258,8 @@ public final class DexiconPools {
      * spend only when signing with it could harm its pool — (a) PandaPools' own OwnerKeyRecovery.checkConsolidation says
      * that pool's owner key is NOT safe to sign with, or (b) that pool is kept elsewhere (standalone PandaPools keeps it,
      * or its custody is unreadable). Otherwise the spend goes ahead: dust anyone sends to a public $OADR no longer blocks
-     * comms posts, HTLC locks, splits or door forwards. Every owner address found holding coins is queued in PandaPools'
-     * PendingCollect, so the keep-alive's CollectSweeper forwards them (dust included). {@code cb} gets null (go ahead)
+     * comms posts, HTLC locks, splits or door forwards. Nothing is queued for collection here (an evidence-less
+     * PendingCollect entry would block that address's real collections). {@code cb} gets null (go ahead)
      * or why nothing was sent (starting {@link #REFUSED}, or {@link #OWNERS_UNREADABLE}). Fails closed: unreadable
      * recipes, coins, keys or custody refuse.
      */
@@ -302,9 +302,10 @@ public final class DexiconPools {
             boolean unsure = pandaPoolsInstalled(ctx) && stale(ctx, k, CUSTODY_SIGN_MAX_AGE_MS);   // a failed read leaves an old cache
             for (Pool p : pools.get())
                 if (unsure || keptBy(ctx, k, p.address)) {
-                    cb.accept(REFUSED + OWNER_COINS + low(p.oadr) + "\nof the pool\n" + low(p.address) + "\nwhich "
-                            + (k == null || k.keptHere == null ? "PandaPools may still keep (it is installed and could not say which pools it keeps)"
-                                                               : "standalone PandaPools still keeps")
+                    String who = unsure ? "Dexicon could not confirm right now which app keeps (try again in a moment)"
+                            : k == null || k.keptHere == null ? "PandaPools may still keep (it is installed and could not say which pools it keeps)"
+                            : "standalone PandaPools still keeps";
+                    cb.accept(REFUSED + OWNER_COINS + low(p.oadr) + "\nof the pool\n" + low(p.address) + "\nwhich " + who
                             + ", so Dexicon never signs with its owner key. Collect them in PandaPools (or hand the pool over), then try again.");
                     return;
                 }
@@ -318,7 +319,7 @@ public final class DexiconPools {
             OwnerKeyRecovery.checkConsolidation(keysRead, pools, why -> {
                 if (why == null) { cb.accept(null); return; }
                 cb.accept(REFUSED + OWNER_COINS + String.join("\n", found) + "\nand that pool's owner key is not safe to sign with right now. "
-                        + "They are queued for collection.\n\n" + why);
+                        + "Confirm the pool's signing state on ② My pools (or collect them there), then try again.\n\n" + why);
             });
         };
         if (!pandaPoolsInstalled(ctx)) judge.run();

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.95 app/src/main/java/com/eurobuddha/comms/CryptoProvider.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.96 app/src/main/java/com/eurobuddha/comms/CryptoProvider.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.comms;
 
 /**
