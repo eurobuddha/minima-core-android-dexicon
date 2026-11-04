@@ -108,6 +108,12 @@ public final class MarketTab extends LinearLayout {
         body.addView(hint);
         if (PriceOracle.mid() > 0) body.addView(Ui.text(act, DoorHost.mx(PriceOracle.describe()), 11.5f, Design.DIM(), Design.mono()), Ui.wide(act, 2, 2));
         if (host.gated()) body.addView(Ui.text(act, "One trading app per phone: while AtomiX or PandaPools is present, nothing is published or armed here.", 11.5f, Design.RED(), Design.sansBold()), Ui.wide(act, 6, 0));
+        String blocked = AtomixConsolidate.warning(host.market(), host.market() == TradingContext.MINIMA ? act.minimaCoins : act.mxusdCoins);
+        if (blocked != null) {   // AtomiX: a maker with too many coins declines every buy — say so where the market is run
+            TextView w = Design.pill(act, blocked, Design.SURFACE2(), Design.RED());
+            w.setOnClickListener(v -> AtomixConsolidate.dialog(act)); Design.pressable(w);
+            body.addView(w, Ui.wide(act, 6, 0));
+        }
 
         renderMyOffer();
 

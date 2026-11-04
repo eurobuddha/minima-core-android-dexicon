@@ -196,7 +196,17 @@ public final class AssetsTab extends LinearLayout {
         LinearLayout tools = new LinearLayout(getContext());
         TextView cons = Ui.button(act, "CONSOLIDATE"), split = Ui.button(act, "SPLIT ×" + WalletTools.SPLIT_COUNT);
         cons.setTextColor(Design.ACCENT()); split.setTextColor(Design.ACCENT());
-        cons.setOnClickListener(v -> WalletTools.consolidate(act, tokenid, name, coins));
+        // the ACTIVE AtomiX market's coin consolidates AtomiX's way (engine wallet lock, Preview, aged-coin wait);
+        // the other coin through the node's own consolidate
+        com.eurobuddha.atomix.TradingContext active = com.eurobuddha.dexicon.doors.DoorHost.get(act).market();
+        boolean atomix = active.tokenId.equalsIgnoreCase(tokenid);
+        cons.setOnClickListener(v -> { if (atomix) AtomixConsolidate.dialog(act); else WalletTools.consolidate(act, tokenid, name, coins); });
+        String blocked = atomix ? AtomixConsolidate.warning(active, coins) : null;
+        if (blocked != null) {
+            TextView w = t(blocked, Design.RED(), 12.5f, Design.sansBold());
+            w.setOnClickListener(v -> AtomixConsolidate.dialog(act));
+            c.addView(w, Ui.wide(act, 6, 0));   // outside the fold: a maker must see it
+        }
         split.setOnClickListener(v -> WalletTools.split(act, tokenid, name, sendable));
         LayoutParams l1 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f); l1.rightMargin = Design.dp(getContext(), 6);
         tools.addView(cons, l1); tools.addView(split, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));

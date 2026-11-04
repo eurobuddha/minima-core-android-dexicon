@@ -127,4 +127,20 @@ public class MarketTabSmokeTest {
         if (v instanceof android.view.ViewGroup) for (int i = 0; i < ((android.view.ViewGroup) v).getChildCount(); i++) out.addAll(all(((android.view.ViewGroup) v).getChildAt(i)));
         return out;
     }
+
+    /** 0.2.7 (AtomiX Wallet): too many coins to read → buys are declined; Market says so and offers AtomiX's consolidate. */
+    @Test public void tooManyCoinsWarnsTheMakerOnMarket() {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        TradingContext m = DoorHost.get(app).market();
+        int cap = com.eurobuddha.atomix.swap.MinimaHtlc.maxSafeCoinRows(m.tokenId);
+        assertNull(AtomixConsolidate.warning(m, cap));
+        assertTrue(AtomixConsolidate.warning(m, cap + 1).contains("AtomiX buys are being declined"));
+        MainActivity a = DoorsTabSmokeTest.launch();
+        if (m == TradingContext.MINIMA) a.minimaCoins = cap + 5; else a.mxusdCoins = cap + 5;
+        View root = a.getWindow().getDecorView();
+        DoorsTabSmokeTest.tab(root, "Market").performClick();
+        assertNotNull("the maker is told, where the market is run", PoolsRoomSmokeTest.containing(root, "AtomiX buys are being declined"));
+    }
 }

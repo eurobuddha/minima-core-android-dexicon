@@ -188,6 +188,8 @@ public final class DoorHost {
     public static final String SWITCHING = "Switching markets — try again in a moment.";
     /** This host's prefs — AtomiX's keys for the ACTIVE market (order_config, auto_publish, peg_*, otc_*). */
     public SharedPreferences prefs() { return prefs; }
+    /** AtomiX's Minima side (its consolidate runs here, under the engine's wallet lock). */
+    public MinimaHtlc minima() { return minima; }
     public String launchNote() { return market == TradingContext.MINIMA ? launchNote : null; }
 
     /** Is a swap of {@code m} (either role) still in flight — anything left to claim or refund? */
