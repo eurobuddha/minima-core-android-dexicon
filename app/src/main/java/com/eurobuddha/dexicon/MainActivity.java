@@ -70,17 +70,21 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9, TAB_PSWAP = 10, TAB_PMINE = 11;
+    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9, TAB_PSWAP = 10, TAB_PMINE = 11, TAB_PWALLET = 12, TAB_PACT = 13;
     /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange, picked in a one-line
      *  switcher at the top. ONE bottom bar, AtomiX's own (icon over label): the room's three pages, then ACTIVITY /
      *  ASSETS / SETTINGS shared by all three — six tabs, nothing to tap above AND below (owner, 4 Nov). */
     static final String[] ROOMS = {"① Dollars in", "② Pools", "③ Exchange"};
-    static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_PSWAP, TAB_POOLS, TAB_PMINE}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
+    /** ② is PandaPools (owner, 4 Nov: "keep the new app feel, true to PandaPools"): its five pages, its own screens, as
+     *  tabs on Dexicon's bottom bar — the way ① carries AtomiX's. */
+    static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_PSWAP, TAB_POOLS, TAB_PMINE, TAB_PWALLET, TAB_PACT}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
+    /** PandaPools' own tab titles (MainActivity: { "SWAP", "POOLS", "MY LP", "WALLET", "ACTIVITY" }). */
+    static final String[] POOL_TITLES = {"SWAP", "POOLS", "MY LP", "WALLET", "ACTIVITY"};
     private static final int[] SHARED = {TAB_ACTIVITY, TAB_ASSETS, TAB_RELAYS};
-    static final String[] TAB_NAMES = {"Trade", "Activity", "Orders", "History", "Assets", "Swap", "Settings", "Pools", "Market", "OTC", "Swap", "My pools"};
+    static final String[] TAB_NAMES = {"Trade", "Activity", "Orders", "History", "Assets", "Swap", "Settings", "Pools", "Market", "OTC", "Swap", "My LP", "Wallet", "Activity"};
     private static final int[] TAB_ICONS = {R.drawable.ic_tab_trade, R.drawable.ic_tab_activity, R.drawable.ic_tab_orders, R.drawable.ic_tab_history,
             R.drawable.ic_tab_wallet, R.drawable.ic_tab_swap, R.drawable.ic_tab_settings, R.drawable.ic_tab_pools, R.drawable.ic_tab_market,
-            R.drawable.ic_tab_otc, R.drawable.ic_tab_swap, R.drawable.ic_tab_mypools};
+            R.drawable.ic_tab_otc, R.drawable.ic_tab_swap, R.drawable.ic_tab_mypools, R.drawable.ic_tab_wallet, R.drawable.ic_tab_activity};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
@@ -132,20 +136,23 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private AssetsTab assetsTab;
     private RelaysTab relaysTab;
     private DoorsTab doorsTab;
-    private PoolsTab poolsTab;
-    private PoolSwapTab poolSwapTab;
-    private MyPoolsTab myPoolsTab;     // ② My pools: PandaPools' MyLpView + ActivityView (vendored)   // ② Swap: PandaPools' SwapView (vendored), framed by Dexicon's explainer
+    /** ② = PandaPools' own five screens (vendored), hosted as they are. */
+    private com.eurobuddha.pandapools.SwapView pSwap;
+    private com.eurobuddha.pandapools.PoolsView pPools;
+    private com.eurobuddha.pandapools.MyLpView pMyLp;
+    private com.eurobuddha.pandapools.WalletView pWallet;
+    private com.eurobuddha.pandapools.ActivityView pAct;
     private MarketTab marketTab;
     private OtcTab otcTab;
     private LinearLayout content;          // the visible page(s): one, or two side by side on a wide screen
-    private ScrollView[] panes;
+    private android.view.ViewGroup[] panes;
     private LinearLayout tabBar, rail;
     private final LinearLayout[] tabCell = new LinearLayout[TAB_NAMES.length];
     private final android.widget.ImageView[] tabIcon = new android.widget.ImageView[TAB_NAMES.length];
     private final TextView[] tabBtn = new TextView[TAB_NAMES.length];
     private final TextView[] roomBtn = new TextView[3];
     private int room = 0;
-    private final int[] roomLast = {TAB_DOORS, TAB_POOLS, TAB_TRADE};
+    private final int[] roomLast = {TAB_DOORS, TAB_PSWAP, TAB_TRADE};   // ② opens on SWAP, as PandaPools does
     private TextView pairPill, blockPill, stageTv, ccyPill;
     /** The ⇄ pill's glow (AtomiX startCcyGlow): an Animator is not a Handler callback, so it is cancelled explicitly. */
     private android.animation.ValueAnimator ccyGlowAnim;
@@ -1072,11 +1079,18 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         content = new LinearLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); assetsTab = new AssetsTab(this, track(new com.eurobuddha.pandapools.WalletView(this))); poolSwapTab = new PoolSwapTab(this, track(new com.eurobuddha.pandapools.SwapView(this))); poolsTab = new PoolsTab(this, track(new com.eurobuddha.pandapools.PoolsView(this))); myPoolsTab = new MyPoolsTab(this, track(new com.eurobuddha.pandapools.MyLpView(this)), track(new com.eurobuddha.pandapools.ActivityView(this))); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); assetsTab = new AssetsTab(this, track(new com.eurobuddha.pandapools.WalletView(this))); pSwap = track(new com.eurobuddha.pandapools.SwapView(this)); pPools = track(new com.eurobuddha.pandapools.PoolsView(this)); pMyLp = track(new com.eurobuddha.pandapools.MyLpView(this)); pWallet = track(new com.eurobuddha.pandapools.WalletView(this)); pAct = track(new com.eurobuddha.pandapools.ActivityView(this)); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
         View[] tv = tabViews();
-        panes = new ScrollView[tv.length];   // each page scrolls on its own, so two side by side never drag each other
+        panes = new android.view.ViewGroup[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
-            ScrollView pane = panes[i] = new ScrollView(this);
+            if (roomOf(i) == 1) {   // PandaPools' screens scroll themselves (their own NestedScrollView / list): hosted as they are
+                FrameLayout host = new FrameLayout(this);
+                host.addView(tv[i], new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                panes[i] = host;
+                continue;
+            }
+            ScrollView pane = new ScrollView(this);
+            panes[i] = pane;
             pane.addView(tv[i], new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
             // A focused input pulls its ScrollView back to it on every relayout (a live swap list repainting below it made
             // the page jump, owner 4 Nov). The pane itself can hold focus, and an input scrolled off screen hands it over.
@@ -1210,6 +1224,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     /** Show page {@code left} alone, or with {@code right} beside it (wide screens only). */
     void showPages(int left, int right) {
         if (right == left || !com.eurobuddha.dexicon.ui.Wide.on(this)) right = -1;
+        if (roomOf(left) == 1 || roomOf(right) == 1) right = -1;   // PandaPools is one page at a time
         tab = left; tab2 = right;
         content.removeAllViews();
         int gap = Design.dp(this, 1);
@@ -1226,6 +1241,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         for (int t : new int[]{left, right}) poolPageShown(t);   // a ② page coming into view refreshes like a PandaPools tab
         int r = roomOf(left);
         if (r >= 0) { room = r; roomLast[r] = left; }
+
         for (int i = 0; i < tabCell.length; i++) {
             if (tabCell[i] == null) continue;
             boolean on = i == left || i == right;
@@ -1234,7 +1250,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             tabBtn[i].setTextColor(on ? Design.TEXT() : Design.DIM());
             tabBtn[i].setTypeface(on ? Design.sansBold() : Design.sans());
             tabCell[i].setSelected(on);
+            // ② is PandaPools' five tabs alone (its own Wallet and Activity); ① and ③ add the shared three
             if (!isShared(i)) tabCell[i].setVisibility(roomOf(i) == room ? View.VISIBLE : View.GONE);
+            else tabCell[i].setVisibility(room == 1 ? View.GONE : View.VISIBLE);
         }
         for (int i = 0; i < 3; i++) {
             boolean on = i == room;
@@ -1250,31 +1268,34 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         if (tabBar != null && tab2 >= 0 && !com.eurobuddha.dexicon.ui.Wide.on(this)) selectTab(tab);
     }
 
-    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, poolsTab, marketTab, otcTab, poolSwapTab, myPoolsTab}; }
+    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, pPools.getRoot(), marketTab, otcTab, pSwap.getRoot(), pMyLp.getRoot(), pWallet.getRoot(), pAct.getRoot()}; }
 
     /** A vendored PandaPools screen joins this Activity's pool-screen fan-out (new block, stop, destroy). */
     private <V extends com.eurobuddha.pandapools.BaseView> V track(V v) { poolViews.add(v); return v; }
 
     /** PandaPools' own tab numbers (the vendored screens ask for and jump to these), as Dexicon's ② pages. */
     private static final int PP_SWAP = com.eurobuddha.pandapools.MainActivity.TAB_SWAP, PP_POOLS = com.eurobuddha.pandapools.MainActivity.TAB_POOLS,
-            PP_MYLP = com.eurobuddha.pandapools.MainActivity.TAB_MYLP, PP_ACTIVITY = com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY;
+            PP_MYLP = com.eurobuddha.pandapools.MainActivity.TAB_MYLP, PP_ACTIVITY = com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY,
+            PP_WALLET = com.eurobuddha.pandapools.MainActivity.TAB_WALLET;
 
+    /** PandaPools asks which of ITS tabs is showing (ActivityView refreshes only while it is) — ② is its five pages, 1:1. */
     @Override public int currentTab() {
-        // its only reader is PandaPools' ActivityView ("am I on screen?"): My pools on EITHER side of a two-page Fold
-        // view wins, or a pool swap on the left would stop the activity under My pools on the right from refreshing
-        if (tab == TAB_PMINE || tab2 == TAB_PMINE) return PP_ACTIVITY;   // PandaPools' pool activity sits under My pools
-        for (int t : new int[]{tab, tab2}) {
-            if (t == TAB_PSWAP) return PP_SWAP;
-            if (t == TAB_POOLS) return PP_POOLS;
-            if (t == TAB_PMINE) return PP_ACTIVITY;   // PandaPools' pool activity sits under My pools
+        switch (tab) {
+            case TAB_PSWAP: return PP_SWAP;
+            case TAB_POOLS: return PP_POOLS;
+            case TAB_PMINE: return PP_MYLP;
+            case TAB_PWALLET: return PP_WALLET;
+            case TAB_PACT: return PP_ACTIVITY;
+            default: return -1;
         }
-        return -1;
     }
 
     @Override public void goToTab(int index) {
         if (index == PP_SWAP) selectTab(TAB_PSWAP);
         else if (index == PP_POOLS) selectTab(TAB_POOLS);
-        else if (index == PP_MYLP || index == PP_ACTIVITY) selectTab(TAB_PMINE);
+        else if (index == PP_MYLP) selectTab(TAB_PMINE);
+        else if (index == PP_WALLET) selectTab(TAB_PWALLET);
+        else if (index == PP_ACTIVITY) selectTab(TAB_PACT);
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -1332,9 +1353,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             case TAB_HISTORY: historyTab.render(); break;
             case TAB_ASSETS: assetsTab.render(); break;
             case TAB_DOORS: doorsTab.render(); break;
-            case TAB_POOLS: poolsTab.render(); break;
-            case TAB_PSWAP: break;   // PandaPools' SwapView repaints itself
-            case TAB_PMINE: myPoolsTab.render(); break;
+            case TAB_POOLS: case TAB_PSWAP: case TAB_PMINE: case TAB_PWALLET: case TAB_PACT: break;   // PandaPools' screens paint themselves
             case TAB_MARKET: marketTab.render(); break;
             case TAB_OTC: otcTab.render(); break;
             default: relaysTab.render();
@@ -1348,11 +1367,14 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         getDelegate().setLocalNightMode(Design.isDark() ? androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES : androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO);
     }
 
+    /** PandaPools' onPageSelected: the page coming into view refreshes (views[position].onShown()). */
     private void poolPageShown(int t) {
-        if (t == TAB_ASSETS) assetsTab.shown();   // PandaPools' wallet lives on ASSETS
-        if (t == TAB_PSWAP) poolSwapTab.shown();
-        if (t == TAB_POOLS) poolsTab.shown();
-        if (t == TAB_PMINE) myPoolsTab.shown();
+        if (t == TAB_ASSETS) assetsTab.shown();   // the wallet on Dexicon's ASSETS
+        if (t == TAB_PSWAP) pSwap.onShown();
+        if (t == TAB_POOLS) pPools.onShown();
+        if (t == TAB_PMINE) pMyLp.onShown();
+        if (t == TAB_PWALLET) pWallet.onShown();
+        if (t == TAB_PACT) pAct.onShown();
     }
 
     @Override protected void onResume() {

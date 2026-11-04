@@ -29,7 +29,11 @@ public class DoorsTabSmokeTest {
     }
     static String room(int r) { return MainActivity.ROOMS[r]; }
     /** A bottom-bar tab: the cell (icon over label) that takes the tap. */
-    static View tab(View root, String name) { TextView t = find(root, name); return t == null ? null : (View) t.getParent(); }
+    static View tab(View root, String name) {
+        TextView t = PoolsRoomSmokeTest.shownTab(root, name);   // the tab on screen (② carries its own Swap / Activity)
+        if (t == null) t = find(root, name);
+        return t == null ? null : (View) t.getParent();
+    }
 
     @Test public void doorsTabRendersBothRoutes() {
         // no node in a JVM test: the IPC transport's bindService must not deliver a null binder
@@ -38,16 +42,17 @@ public class DoorsTabSmokeTest {
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
-        for (String tab : new String[]{"Trade", "Activity", "Orders", "History", "Assets", "Settings", "Market", "OTC", "My pools", room(0), room(1), room(2)}) assertNotNull(tab, find(root, tab));
+        for (String tab : new String[]{"Trade", "Activity", "Orders", "History", "Assets", "Settings", "Market", "OTC", "My LP", room(0), room(1), room(2)}) assertNotNull(tab, find(root, tab));
         assertTrue("every launch opens on ① Swap, the form first", find(root, "Swap MxUSD ⇄ USDT").isShown());
-        assertTrue("six tabs: the room's three pages and the shared three", find(root, "Swap").isShown() && find(root, "Market").isShown() && find(root, "OTC").isShown()
-                && find(root, "Activity").isShown() && find(root, "Assets").isShown() && find(root, "Settings").isShown());
+        for (String t : new String[]{"Swap", "Market", "OTC", "Activity", "Assets", "Settings"})
+            assertNotNull("six tabs: the room's three pages and the shared three — " + t, PoolsRoomSmokeTest.shownTab(root, t));
+        assertNull("② PandaPools' own tabs are not on ①'s bar", PoolsRoomSmokeTest.shownTab(root, "My LP"));
         assertFalse("other rooms' pages are not on the bar", find(root, "Trade").isShown());
         assertNotNull("① explains why it comes first, folded to one line", find(root, "WHY THIS STEP  ▸"));
         find(root, room(1)).performClick();
-        assertTrue("② is optional: Skip is the main button", find(root, "Skip — go to the exchange →").isShown());
-        find(root, "Skip — go to the exchange →").performClick();
-        assertTrue("Skip lands on ③", find(root, "Trade").isShown());
+        assertNull("② is PandaPools as it is — no Dexicon detour", find(root, "Skip — go to the exchange →"));
+        find(root, room(2)).performClick();
+        assertTrue("③", find(root, "Trade").isShown());
         find(root, room(0)).performClick();
         // 0.1.93: AtomiX's own Swap tab — header, Sell / Buy toggle, both shown; one market at a time
         assertTrue("AtomiX's header", find(root, "Swap MxUSD ⇄ USDT").isShown());

@@ -34,16 +34,21 @@ public class PoolsRoomSmokeTest {
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
     }
 
-    @Test public void poolsPageShowsPandaPoolsListAndKeepsSkipFirst() {
+    /** 0.2.19 (owner: parity): ② is PandaPools — its five tabs on the bar, its own screens, nothing of Dexicon's added. */
+    @Test public void poolsRoomIsPandaPoolsFiveTabs() {
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
         DoorsTabSmokeTest.find(root, DoorsTabSmokeTest.room(1)).performClick();
-        assertTrue("Skip stays the main ② button", DoorsTabSmokeTest.find(root, "Skip — go to the exchange →").isShown());
-        assertTrue("PandaPools' live pool list", a.findViewById(R.id.poolList).isShown());
-        assertNotNull(containing(root, "unpruned MegaMMR"));
-        assertNotNull(containing(root, "You don't host a pool"));
-        assertNotNull("② has its own sub-tabs", shownTab(root, "Swap"));
-        assertNotNull(shownTab(root, "Pools"));
+        for (String t : new String[]{"Swap", "Pools", "My LP", "Wallet", "Activity"}) assertNotNull("PandaPools' " + t + " tab", shownTab(root, t));
+        assertNull("its own Wallet and Activity — not Dexicon's shared tabs", shownTab(root, "Assets"));
+        assertNull(shownTab(root, "Settings"));
+        assertTrue("opens on SWAP, as PandaPools", a.findViewById(R.id.swapAmount).isShown());
+        assertNull("no Dexicon additions", containing(root, "Skip — go to the exchange"));
+        assertNull(containing(root, "Create a pool (advanced)"));
+        assertNull(containing(root, "WHAT A POOL IS"));
+        ((View) shownTab(root, "Pools").getParent()).performClick();
+        assertTrue("PandaPools' pool list", a.findViewById(R.id.poolList).isShown());
+        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_POOLS, a.currentTab());
     }
 
     @Test public void swapPageIsPandaPoolsSwap() {
@@ -54,14 +59,14 @@ public class PoolsRoomSmokeTest {
         assertTrue("SwapView's pay field", a.findViewById(R.id.swapAmount).isShown());
         assertTrue(a.findViewById(R.id.swapFlip).isShown());
         assertTrue(a.findViewById(R.id.swapBtn).isShown());
-        assertTrue(containing(root, "SWAP WITH THE POOLS").isShown());
-        assertNotNull(containing(root, "0.50% fee"));
         View list = a.findViewById(R.id.poolList);
         assertTrue("the pools list is a different page", list == null || !list.isShown());
-        // PandaPools' "See all → Activity" style jumps land on Dexicon's ② pages
-        a.goToTab(com.eurobuddha.pandapools.MainActivity.TAB_POOLS);
+        a.goToTab(com.eurobuddha.pandapools.MainActivity.TAB_POOLS);   // PandaPools' own jumps land on its own pages
         assertTrue(a.findViewById(R.id.poolList).isShown());
-        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_POOLS, a.currentTab());
+        a.goToTab(com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY);
+        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY, a.currentTab());
+        a.goToTab(com.eurobuddha.pandapools.MainActivity.TAB_WALLET);
+        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_WALLET, a.currentTab());
     }
 
     @Test public void theHostServesThePoolEngine() {
@@ -71,38 +76,18 @@ public class PoolsRoomSmokeTest {
         assertNotNull(a.history());
     }
 
-    @Test public void myPoolsIsPandaPoolsMyLpWithItsCreateGate() {
+    @Test public void myLpIsPandaPoolsMyLpWithItsCreateGate() {
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
         DoorsTabSmokeTest.find(root, DoorsTabSmokeTest.room(1)).performClick();
-        DoorsTabSmokeTest.find(root, "Create a pool (advanced)").performClick();
-        assertTrue("lands on My pools", a.findViewById(R.id.lpCreateBtn).isShown());
+        ((View) shownTab(root, "My LP").getParent()).performClick();
+        assertTrue(a.findViewById(R.id.lpCreateBtn).isShown());
         assertTrue(a.findViewById(R.id.lpRecoveryBtn).isShown());
-        assertNotNull("PandaPools' pool activity", a.findViewById(R.id.actContainer));
-        assertNotNull(containing(root, "KEEPING YOUR POOL ALIVE"));
-        assertNotNull(containing(root, "eurobuddha.com:9001 · unpruned MegaMMR"));
-        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY, a.currentTab());
+        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_MYLP, a.currentTab());
         a.findViewById(R.id.lpCreateBtn).performClick();
         android.app.Dialog d = org.robolectric.shadows.ShadowDialog.getLatestDialog();
         assertNotNull("create opens PandaPools' obligations first", d);
         assertNotNull(containing(d.getWindow().getDecorView(), "Two things this pool will need from you"));
-    }
-
-    @Test public void poolsPandaPoolsKeepsAreListedInFullOnMyPools() {
-        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
-        String pool = "0x" + "ab".repeat(32);
-        com.eurobuddha.pandapools.Pool p = new com.eurobuddha.pandapools.Pool();
-        p.address = pool; p.opk = "0x" + "b0".repeat(32); p.oadr = "0x" + "c0".repeat(32); p.tok = "0x" + "d0".repeat(32);
-        p.kmin = "100"; p.covenantScript = "RETURN TRUE";
-        assertTrue(com.eurobuddha.pandapools.OwnPoolStore.recordDurably(app, p));
-        MainActivity a = DoorsTabSmokeTest.launch();
-        CustodyFake.rows = new String[][]{{pool, com.eurobuddha.pandapools.DexiconPools.KEPT_HERE}};
-        CustodyFake.install(app, CustodyFake.Install.NEW, 981);   // after launch: the card, not the gate
-        a.showTab(MainActivity.TAB_PMINE);
-        View root = a.getWindow().getDecorView();
-        assertNotNull(containing(root, "KEPT BY PANDAPOOLS"));
-        assertNotNull("the full address", containing(root, pool));
-        CustodyFake.rows = new String[0][];
     }
 
     /** 0.1.98 (PandaPools MainActivity.onCreate): pool dialogs follow Dexicon's ☀/☾, not the phone's day/night. */
@@ -128,10 +113,8 @@ public class PoolsRoomSmokeTest {
         org.robolectric.android.controller.ActivityController<MainActivity> c = org.robolectric.Robolectric.buildActivity(MainActivity.class).setup();
         MainActivity a = c.get();
         a.showTab(MainActivity.TAB_PMINE);
-        java.lang.reflect.Field tabF = MainActivity.class.getDeclaredField("myPoolsTab"); tabF.setAccessible(true);
-        Object tab = tabF.get(a);
-        java.lang.reflect.Field mineF = tab.getClass().getDeclaredField("mine"); mineF.setAccessible(true);
-        Object lp = mineF.get(tab);
+        java.lang.reflect.Field lpF = MainActivity.class.getDeclaredField("pMyLp"); lpF.setAccessible(true);
+        Object lp = lpF.get(a);
         java.lang.reflect.Field stopped = lp.getClass().getDeclaredField("stopped"); stopped.setAccessible(true);
         c.pause().stop();
         assertTrue("backgrounded: the pool views stop", (boolean) stopped.get(lp));

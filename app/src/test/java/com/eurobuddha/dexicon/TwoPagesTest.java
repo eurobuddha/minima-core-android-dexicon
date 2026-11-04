@@ -58,31 +58,14 @@ public class TwoPagesTest {
         assertNull("folded: the second page is closed", page(root, "History"));
     }
 
-    @Test public void aRoomButtonPairsAsItsPage() {
-        android.app.Application app = RuntimeEnvironment.getApplication();
-        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
-                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
-        MainActivity a = DoorsTabSmokeTest.launch();
-        View root = a.getWindow().getDecorView();
-        View pools = DoorsTabSmokeTest.find(root, DoorsTabSmokeTest.room(1)), activity = DoorsTabSmokeTest.tab(root, "Activity");
-        touch(pools, MotionEvent.ACTION_DOWN);              // hold ② (a one-page room: no button of its own in the row)…
-        touch(activity, MotionEvent.ACTION_DOWN);           // …and put a second finger on ACTIVITY
-        touch(activity, MotionEvent.ACTION_UP);
-        touch(pools, MotionEvent.ACTION_UP);
-        View poolsPage = DoorsTabSmokeTest.find(root, "WHAT A POOL IS  ▾");
-        if (poolsPage == null) poolsPage = DoorsTabSmokeTest.find(root, "WHAT A POOL IS  ▸");
-        assertTrue("left: ② POOLS", poolsPage.isShown());
-        assertTrue("right: ACTIVITY", page(root, "Activity").isShown());
-    }
-
-    /** 0.2.17: My pools on either side of a two-page view counts as PandaPools' activity being on screen. */
-    @Test public void myPoolsOnTheRightStillCountsAsShown() {
+    /** 0.2.19: PandaPools is one page at a time — ② never opens a second page beside it. */
+    @Test public void poolsIsOnePageAtATime() {
         android.app.Application app = RuntimeEnvironment.getApplication();
         org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
         MainActivity a = DoorsTabSmokeTest.launch();
         a.showPages(MainActivity.TAB_PSWAP, MainActivity.TAB_PMINE);
-        org.junit.Assume.assumeTrue("needs the wide (two-page) Fold layout", a.currentTab() != -1);
-        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY, a.currentTab());
+        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_SWAP, a.currentTab());
+        assertFalse(a.findViewById(R.id.lpCreateBtn) != null && a.findViewById(R.id.lpCreateBtn).isShown());
     }
 }
