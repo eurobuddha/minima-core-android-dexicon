@@ -787,7 +787,7 @@ public final class DoorsTab extends LinearLayout {
             host.readBalances(act::repaint);
             host.inspect(hash, lines -> {
                 StringBuilder sb = new StringBuilder();
-                for (String l : lines) sb.append(l).append("\n\n");
+                for (String l : lines) sb.append(DoorHost.mx(l)).append("\n\n");   // RULE 2: the engine says mxUSDT; the token is MxUSD
                 TextView t = Ui.text(act, sb.toString().trim(), 13f, Design.TEXT(), Design.sans());
                 t.setTextIsSelectable(true);
                 int p = Design.dp(act, 20); t.setPadding(p, Design.dp(act, 12), p, Design.dp(act, 4));

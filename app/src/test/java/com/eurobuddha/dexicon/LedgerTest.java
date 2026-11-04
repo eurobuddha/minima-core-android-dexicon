@@ -364,4 +364,16 @@ public class LedgerTest {
         assertEquals(0, new java.math.BigDecimal("30.236826").compareTo(AssetsTab.atomixIncoming(l, "MxUSD")));
         assertEquals(0, new java.math.BigDecimal("100").compareTo(AssetsTab.atomixIncoming(l, "MINIMA")));
     }
+
+    /** 0.2.20 RULE 2: an engine note naming "mxUSDT" reaches the screen as MxUSD. */
+    @Test public void engineTextSaysMxUsd() {
+        assertEquals("Sell 5 MxUSD → 5 USDT", com.eurobuddha.dexicon.doors.DoorHost.mx("Sell 5 mxUSDT → 5 USDT"));
+        com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap();
+        s.hash = "ab".repeat(32); s.role = "RESPONDER"; s.direction = "MINIMA_TO_ERC20"; s.status = "STARTED";
+        s.sellToken = "mxUSDT"; s.sellAmount = "5"; s.buyToken = "USDT"; s.buyAmount = "5"; s.created = 1_700_000_000_000L; s.updated = s.created;
+        com.eurobuddha.atomix.swap.SwapDb.Event e = new com.eurobuddha.atomix.swap.SwapDb.Event();
+        e.event = com.eurobuddha.atomix.swap.SwapDb.EV_DECLINED; e.note = "mxUSDT too fragmented to lock"; e.date = s.created + 1000;
+        Ledger.Item it = Ledger.swap(s, java.util.Collections.singletonList(e), null, 0, 0, null, null, java.util.TimeZone.getTimeZone("UTC"));
+        assertFalse(it.steps.toString(), it.steps.toString().contains("mxUSDT"));
+    }
 }

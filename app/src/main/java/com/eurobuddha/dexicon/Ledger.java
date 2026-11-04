@@ -330,7 +330,7 @@ public final class Ledger {
         }
         boolean usdtIn = "USDT".equals(buy);
         it.step(Mark.OK, hms(s.created, tz), "A taker bought " + s.sellAmount + " " + sell + " from your market for " + s.buyAmount + " " + buy);
-        if (declined != null) it.step(Mark.WARN, hms(declinedAt, tz), "Not locked: " + declined);
+        if (declined != null) it.step(Mark.WARN, hms(declinedAt, tz), "Not locked: " + com.eurobuddha.dexicon.doors.DoorHost.mx(declined));
         if (lockedAt > 0 || !SwapDb.ST_STARTED.equals(st)) it.step(Mark.OK, lockedAt > 0 ? hms(lockedAt, tz) : "", "You locked " + s.sellAmount + " " + sell);
         if (SwapDb.ST_STARTED.equals(st) || SwapDb.ST_LOCKED.equals(st))
             it.step(Mark.WAIT, "", "Waiting for the taker to claim — that reveals the secret that pays you. If they never do, your " + sell + " comes back after the timelock.");
