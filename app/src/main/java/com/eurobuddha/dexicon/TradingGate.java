@@ -65,15 +65,34 @@ public final class TradingGate {
      *  (and, before the first success, keeps trading off). The Activity and MakerService both call it. */
     public static void checkMiniHub(Context c, NodeApi node, Runnable done) {
         if (node == null) { if (done != null) done.run(); return; }
+        note(c, "asked the node");
         node.cmd("mds", new NodeApi.Cb() {
-            public void onResult(JSONObject j) {
-                JSONObject r = j.optJSONObject("response");
-                if (j.optBoolean("status", true)) record(c, r == null ? null : r.optJSONArray("minidapps"));
-                if (done != null) done.run();
-            }
-            public void onError(String m) { if (done != null) done.run(); }
+            public void onResult(JSONObject j) { onReply(c, j); if (done != null) done.run(); }
+            public void onError(String m) { note(c, "failed: " + m); if (done != null) done.run(); }
         });
     }
+
+    /** One `mds` reply. A node built without MDS (the bears: PandaBear, BlackBear) answers "Command not found": it has no
+     *  MiniHub, so no MiniDapp can be paired with it, and that is a definite "none", not an unknown. */
+    static void onReply(Context c, JSONObject j) {
+        JSONObject r = j.optJSONObject("response");
+        JSONArray list = r == null ? null : r.optJSONArray("minidapps");
+        String why = String.valueOf(j.opt("error") != null ? j.opt("error") : j.opt("response"));
+        if (j.optBoolean("status", true) && list != null) { record(c, list); note(c, "read " + list.length() + " MiniDapps"); }
+        else if (!j.optBoolean("status", true) && why.toLowerCase(Locale.ROOT).contains("command not found")) {
+            record(c, new JSONArray()); note(c, "this node has no MiniHub, so no MiniDapps can be paired");
+        }
+        else note(c, "the node's reply had no MiniDapp list: status " + j.opt("status") + ", " + clip(why));
+    }
+
+    /** The outcome of the last MiniHub read, for the "Checking your node…" screen and logcat (tag Dexicon). */
+    static void note(Context c, String what) {
+        String line = new java.text.SimpleDateFormat("HH:mm:ss", Locale.ROOT).format(new java.util.Date()) + " " + what;
+        android.util.Log.i("Dexicon", "MiniHub check: " + line);
+        prefs(c).edit().putString("minihub_last", line).apply();
+    }
+    public static String lastCheck(Context c) { return prefs(c).getString("minihub_last", ""); }
+    private static String clip(Object o) { String s = String.valueOf(o); return s.length() > 300 ? s.substring(0, 300) + "…" : s; }
 
     /** A successful MiniHub read: the matching rows, and the "checked" marker. A reply without a list proves nothing. */
     public static void record(Context c, JSONArray list) {

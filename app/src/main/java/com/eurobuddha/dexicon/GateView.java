@@ -86,6 +86,8 @@ final class GateView extends ScrollView {
             open.setOnClickListener(v -> act.openNodeApp());
             body.addView(open, Ui.wide(act, 4, 8));
         }
+        String last = TradingGate.lastCheck(act);
+        if (!last.isEmpty()) body.addView(Ui.text(act, "Last check: " + last, 12.5f, Design.DIM(), Design.mono()), Ui.wide(act, 0, 10));
         body.addView(para("Nothing is traded or published until then. Anything already in flight keeps settling in the background."));
         TextView again = Ui.button(act, "Check again");
         again.setOnClickListener(v -> act.recheckGate());

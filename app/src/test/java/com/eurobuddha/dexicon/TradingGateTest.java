@@ -100,6 +100,21 @@ public class TradingGateTest {
         assertNull(DoorsTabSmokeTest.find(root, "TRADE"));
     }
 
+    /** 0.1.90: the bears' node has no MDS; "Command not found" means no MiniHub, so nothing can be paired. Any other failure proves nothing. */
+    @Test public void aNodeWithoutMdsCountsAsNothingPaired() throws Exception {
+        TradingGate.onReply(app, new org.json.JSONObject("{\"command\":\"mds\",\"status\":false,\"error\":\"Command not found\"}"));
+        assertTrue(TradingGate.miniHubChecked(app));
+        assertFalse(TradingGate.blocked(app));
+        assertTrue(TradingGate.lastCheck(app).contains("no MiniHub"));
+    }
+
+    @Test public void anyOtherFailedReplyStillProvesNothing() throws Exception {
+        TradingGate.onReply(app, new org.json.JSONObject("{\"command\":\"mds\",\"status\":false,\"error\":\"Something else\"}"));
+        assertFalse(TradingGate.miniHubChecked(app));
+        assertTrue(TradingGate.blocked(app));
+        assertTrue(TradingGate.lastCheck(app).contains("Something else"));
+    }
+
     @Test public void miniHubMatchesOnlyTheTwoAppsByExactName() throws Exception {
         JSONArray list = new JSONArray("[{\"uid\":\"0xAA\",\"conf\":{\"name\":\"AtomiX\"}},{\"uid\":\"0xBB\",\"conf\":{\"name\":\"pandapools\"}},"
                 + "{\"uid\":\"0xCC\",\"conf\":{\"name\":\"AtomiX Explorer\"}},{\"uid\":\"0xDD\"}]");
