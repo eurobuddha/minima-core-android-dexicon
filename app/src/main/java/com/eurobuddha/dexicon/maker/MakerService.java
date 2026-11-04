@@ -102,7 +102,12 @@ public class MakerService extends Service {
         ls = Sodium.get();
         db = new DexDb(this);
         relay = new RelayClient(new HttpTransport());
-        node = new NodeApi(getApplicationContext(), en -> { paired = en; if (en) { lastHubMs = 0; deriveIdentity(); } });
+        unpairedSince = System.currentTimeMillis();
+        node = new NodeApi(getApplicationContext(), en -> {
+            paired = en;
+            if (en) { lastHubMs = 0; deriveIdentity(); unpairedSince = 0; lastOfflineAlertMs = 0; cancelOfflineAlert(); }
+            else if (unpairedSince == 0) unpairedSince = System.currentTimeMillis();
+        });
         lastRegisterMs = System.currentTimeMillis();
         HeartbeatReceiver.schedule(this);
         started = true;
@@ -206,6 +211,7 @@ public class MakerService extends Service {
             } catch (RuntimeException e) { log("doors poll: " + e); }
             else if (door % 3 == 0 && paired) try { com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this).discover(); }
             catch (RuntimeException e) { log("doors discover: " + e); }
+            try { maybeOfflineAlert(); } catch (RuntimeException e) { log("offline alert: " + e); }
             // The MiniHub re-read (the trading gate's MiniDapp half) never waits behind a slow relay chain either.
             long nowMs = System.currentTimeMillis();
             if (paired && nowMs - lastHubMs >= HUB_EVERY_MS) { lastHubMs = nowMs; com.eurobuddha.dexicon.TradingGate.checkMiniHub(MakerService.this, node, MakerService.this::changed); }
@@ -591,10 +597,44 @@ public class MakerService extends Service {
 
     @Override public void onTimeout(int startId) { stopSelf(); }
 
+    // ----- AtomiX SwapService.maybeOfflineAlert: a published AtomiX market with the node gone -----
+    private static final String CH_OFFLINE = "dexicon_offline";
+    private static final int OFFLINE_ID = 7602;
+    static final long OFFLINE_ALERT_AFTER_MS = 3 * 60_000, OFFLINE_REALERT_MS = 60 * 60_000;
+    private long unpairedSince, lastOfflineAlertMs;
+
+    /** Unpaired more than 3 min with an AtomiX market or OTC offer on → HIGH-priority alert, re-posted hourly until the
+     *  node returns. The tap opens the node app (a service can't launch another app's Activity; a notification can). */
+    private void maybeOfflineAlert() {
+        long now = System.currentTimeMillis();
+        if (!offlineAlertDue(paired, com.eurobuddha.dexicon.doors.DoorHost.get(this).makerLive(), unpairedSince, lastOfflineAlertMs, now)) return;
+        lastOfflineAlertMs = now;
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        Intent launch = com.eurobuddha.minimaapi.MinimaAPI.launchNode(this);
+        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 13, launch != null ? launch : new Intent(this, com.eurobuddha.dexicon.MainActivity.class),
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
+        String body = "Your Minima node isn't running — your published AtomiX market will drop off the book. Tap to open it.";
+        try {
+            nm.notify(OFFLINE_ID, new NotificationCompat.Builder(this, CH_OFFLINE).setContentTitle("Market offline").setContentText(body)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(body)).setSmallIcon(android.R.drawable.stat_notify_error)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH).setContentIntent(pi).setAutoCancel(true).build());
+        } catch (SecurityException noPermission) { /* notifications off: the in-app status still says so */ }
+        log("market offline alert (unpaired " + (now - unpairedSince) / 60_000 + " min)");
+    }
+    static boolean offlineAlertDue(boolean paired, boolean marketLive, long unpairedSince, long lastAlertMs, long now) {
+        return !paired && marketLive && unpairedSince != 0 && now - unpairedSince >= OFFLINE_ALERT_AFTER_MS
+                && (lastAlertMs == 0 || now - lastAlertMs >= OFFLINE_REALERT_MS);
+    }
+    private void cancelOfflineAlert() {
+        try { NotificationManager nm = getSystemService(NotificationManager.class); if (nm != null) nm.cancel(OFFLINE_ID); } catch (Exception ignored) {}
+    }
+
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) nm.createNotificationChannel(new NotificationChannel(CH_FG, "Maker engine", NotificationManager.IMPORTANCE_LOW));
+            if (nm != null) nm.createNotificationChannel(new NotificationChannel(CH_OFFLINE, "Market offline", NotificationManager.IMPORTANCE_HIGH));
             Notifier.ensureChannels(this);
         }
     }

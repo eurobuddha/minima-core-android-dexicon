@@ -240,6 +240,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     private void onPaired() {
         TradingGate.checkMiniHub(this, node, this::applyGate);
+        ensureKeepAlive();   // weekly battery-exemption ask for pool hosts and AtomiX makers (no-op otherwise)
         poolsPaired();   // ② Pools: PandaPools' boot (sentinel untrack, re-track my pools, foreign-tracking hygiene)
         readBalances(); readBlock();
         if (me == null) deriveIdentity();
