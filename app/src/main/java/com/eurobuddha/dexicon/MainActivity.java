@@ -973,6 +973,15 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         saveCsv.launch("dexicon-fills-" + System.currentTimeMillis() / 1000 + ".csv");
     }
 
+    /** AtomiX's "⬇ Export CSV": every AtomiX swap, maker and taker, in AtomiX's own columns (dexHistory reads them). */
+    void exportAtomixCsv() {
+        com.eurobuddha.dexicon.doors.DoorHost h = com.eurobuddha.dexicon.doors.DoorHost.get(this);
+        java.util.List<com.eurobuddha.atomix.swap.SwapDb.Swap> all = h.swaps();
+        if (all.isEmpty()) { toast("No swaps to export"); return; }
+        pendingCsv = AtomixCsv.csv(all, h::events);
+        saveCsv.launch(AtomixCsv.FILE);
+    }
+
     private void confirm(String title, String body, Runnable yes) {
         track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle(title).setMessage(body)
                 .setPositiveButton("Confirm", (d, w) -> yes.run()).setNegativeButton("Back", null).show());

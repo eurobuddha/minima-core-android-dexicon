@@ -39,6 +39,12 @@ public final class ActivityTab extends LinearLayout {
                 "Trades and swaps roll in here step by step while they happen. When one finishes it folds to a single line — tap any line "
                 + "to see every step and the full on-chain proof. A trade is confirmed (done) after " + ActivityLog.CONFIRM_BLOCKS + " blocks. "
                 + "The txpow id is the pre-mining id; inclusion is proven by an output coin. Ids are always shown in full; tap one to copy it.");
+        // AtomiX: "⬇ Export CSV" sits with the swap history — all your AtomiX swaps, maker and taker, one file
+        TextView exportSwaps = Design.pill(act, "⬇ Export AtomiX swaps (CSV)", Design.SURFACE2(), Design.DIM());
+        exportSwaps.setOnClickListener(v -> act.exportAtomixCsv()); Design.pressable(exportSwaps);
+        LinearLayout.LayoutParams xl = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        xl.topMargin = Design.dp(act, 4);
+        addView(exportSwaps, xl);
         empty = Ui.para(act, "No trades yet. Every BUY/SELL you make, every fill your node co-signs and every AtomiX swap shows its live progress here.");
         addView(empty, Ui.wide(act, 8, 8));
         rows = new LinearLayout(act); rows.setOrientation(VERTICAL);
