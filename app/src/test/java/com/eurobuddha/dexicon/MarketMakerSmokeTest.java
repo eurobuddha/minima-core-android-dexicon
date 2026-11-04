@@ -24,7 +24,7 @@ public class MarketMakerSmokeTest {
         android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
         org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
         DoorsTabSmokeTest.find(root, "ORDERS").performClick();
         assertNotNull(DoorsTabSmokeTest.find(root, "MARKET MAKER"));

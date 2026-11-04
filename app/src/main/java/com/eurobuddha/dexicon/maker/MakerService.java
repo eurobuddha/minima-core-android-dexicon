@@ -74,15 +74,18 @@ public class MakerService extends Service {
     private final Handler h = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-svc-net"); t.setDaemon(true); return t; });
     private LazySodium ls;
-    private NodeApi node;
-    private DexDb db;
-    private RelayClient relay;
-    private DexIdentity me;
-    private MakerEngine engine;
+    NodeApi node;
+    DexDb db;
+    RelayClient relay;
+    DexIdentity me;
+    MakerEngine engine;
     private LadderRunner ladder;   // the fast market maker (ORDERS › MARKET MAKER)
     private AutoCross cross;       // trades PandaPools back to the ladder's rungs
     private boolean started, paired, deriving, ticking;
-    private long lastRegisterMs, ticks, doorTicks;
+    private long lastRegisterMs, ticks, doorTicks, lastHubMs;
+    /** The trading gate's MiniHub half is re-read here too, so it holds with the Activity closed (an upgrade restarts
+     *  only this service). */
+    static final long HUB_EVERY_MS = 5 * 60_000;
     private final Map<String, Long> coinLocks = new HashMap<>();   // coinid → unix ms the lock expires (3 min)
     private final Set<String> myAddresses = new HashSet<>();
     private String fgText = "";
@@ -96,7 +99,7 @@ public class MakerService extends Service {
         ls = Sodium.get();
         db = new DexDb(this);
         relay = new RelayClient(new HttpTransport());
-        node = new NodeApi(getApplicationContext(), en -> { paired = en; if (en) deriveIdentity(); });
+        node = new NodeApi(getApplicationContext(), en -> { paired = en; if (en) { lastHubMs = 0; deriveIdentity(); } });
         lastRegisterMs = System.currentTimeMillis();
         HeartbeatReceiver.schedule(this);
         started = true;
@@ -196,6 +199,8 @@ public class MakerService extends Service {
                 if (now - lastRegisterMs >= REREGISTER_GAP_MS) { lastRegisterMs = now; node.reRegister(); }
                 return;
             }
+            long nowMs = System.currentTimeMillis();
+            if (nowMs - lastHubMs >= HUB_EVERY_MS) { lastHubMs = nowMs; com.eurobuddha.dexicon.TradingGate.checkMiniHub(MakerService.this, node, MakerService.this::changed); }
             ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
             if (me == null) { deriveIdentity(); return; }
             List<String> relays = RelayStore.load(MakerService.this);
@@ -248,14 +253,7 @@ public class MakerService extends Service {
             }
             else if ("taken".equals(k) || "refused".equals(k)) onReply(inner);
         }
-        if (com.eurobuddha.dexicon.TradingGate.blocked(this)) {
-            // One trading app per phone: AtomiX / PandaPools is present, so make no new trade (every take refused, no
-            // ladder, no auto-cross, no republish: my orders age off the relays). What is already in flight keeps settling.
-            for (JSONObject t : takes) reply(t.optString("_from", ""), refused(t.optString("orderId", ""), "maker paused"));
-            if (ticks % 3 == 0) { settleFills(); voidStaleTakes(); }
-            tickDone();
-            return;
-        }
+        if (com.eurobuddha.dexicon.TradingGate.blocked(this)) { pausedPass(takes); return; }
         processTakes(takes, 0, () -> {
             if (ticks % 3 == 0) { settleFills(); voidStaleTakes(); }
             ladder.pass(() -> cross.run(() -> afterCross(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
@@ -269,6 +267,32 @@ public class MakerService extends Service {
                 else tickDone();
             }))));
         });
+    }
+
+    /** Why a take is refused while the gate is shut. It must match {@link #MOVE_ON}, so a taker's one-click run moves to
+     *  the next order instead of stopping (and voiding a coin) on my paused one. */
+    static final String PAUSED = "not live (maker paused)";
+    /** A refusal the taker moves past to the next level (MainActivity.followTake, onReply). */
+    public static final String MOVE_ON = "(?i).*(taken|not live|advertised|spent|visible|cover).*";
+
+    /**
+     * One trading app per phone, gate shut: no new trade (every take refused, no ladder, no auto-cross, no republish).
+     * When an app was actually FOUND my live orders are WITHDRAWN (a cancel each, then the relay sweep) — a withdrawal,
+     * not a trade — so no taker keeps hitting them for up to {@link MakerEngine#EXPIRY_SECONDS}. While the MiniHub is
+     * merely unread nothing is withdrawn, takes are only refused until the first read. Settlement continues.
+     */
+    void pausedPass(List<JSONObject> takes) {
+        for (JSONObject t : takes) reply(t.optString("_from", ""), refused(t.optString("orderId", ""), PAUSED));
+        if (ticks % 3 == 0) { settleFills(); voidStaleTakes(); }
+        if (!com.eurobuddha.dexicon.TradingGate.conflict(this)) { tickDone(); return; }
+        List<MyOrder> live = new ArrayList<>();
+        for (MyOrder o : db.myOrders()) if (o.live()) live.add(o);
+        if (!live.isEmpty()) log("trading gate shut: withdrawing " + live.size() + " live order(s)");
+        cancelEach(engine, live, 0, () -> engine.syncRelays(rep -> {
+            for (String l : rep.lines) log(l);
+            if (!live.isEmpty() || rep.fixed > 0) changed();
+            tickDone();
+        }));
     }
 
     /** A maker answered one of MY takes (app.js inboxLoop). */
@@ -307,7 +331,7 @@ public class MakerService extends Service {
             String reason = inner.optString("reason", "refused");
             db.setMeta("last_refusal", reason);
             ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.REFUSED).put("reason", reason).put("cosignMs", answeredMs - pt.optLong("sent", answeredMs)));
-            if (reason.matches("(?i).*(taken|not live|advertised|spent|visible|cover).*")) db.setMeta("retry_due", orderId);   // the Activity re-plans at the next level
+            if (reason.matches(MOVE_ON)) db.setMeta("retry_due", orderId);   // the Activity re-plans at the next level
             Notifier.alert(this, "Take refused", "The maker refused: " + reason);
             voidTake(pt);   // a refusal is not proof: the maker still holds my signed half until one of its coins moves
             changed();
@@ -365,7 +389,7 @@ public class MakerService extends Service {
         handleTake(takes.get(i), () -> processTakes(takes, i + 1, done));
     }
 
-    private void reply(String toPublicId, JSONObject obj) {
+    void reply(String toPublicId, JSONObject obj) {
         try {
             String blob = me.seal(toPublicId, obj.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             String raw = Envelopes.msg(me, toPublicId, blob, MakerEngine.now() + 300);
@@ -425,7 +449,7 @@ public class MakerService extends Service {
         });
     }
 
-    private static JSONObject refused(String orderId, String reason) {
+    static JSONObject refused(String orderId, String reason) {
         try { return new JSONObject().put("k", "refused").put("orderId", orderId).put("reason", reason); } catch (Exception e) { return new JSONObject(); }
     }
 

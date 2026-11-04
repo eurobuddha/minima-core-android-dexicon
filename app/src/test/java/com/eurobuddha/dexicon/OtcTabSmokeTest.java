@@ -34,7 +34,7 @@ public class OtcTabSmokeTest {
     @After public void down() { host.prefs().edit().putBoolean("otc_enable", false).putBoolean("otc_auto", false).remove("otc_sell_size").remove("otc_buy_size").commit(); }
 
     @Test public void otcPageRendersAndStaysOffWithoutANode() {
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
         DoorsTabSmokeTest.find(root, "OTC").performClick();
         assertTrue(DoorsTabSmokeTest.find(root, "OTC — A PRIVATE DEAL  ▾").isShown());

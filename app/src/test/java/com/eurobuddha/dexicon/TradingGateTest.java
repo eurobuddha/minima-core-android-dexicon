@@ -2,10 +2,17 @@ package com.eurobuddha.dexicon;
 
 import static org.junit.Assert.*;
 
+import android.app.Activity;
+import android.app.Application;
+import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.view.View;
+import android.widget.TextView;
+
+import androidx.appcompat.app.AlertDialog;
 
 import org.json.JSONArray;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
@@ -13,19 +20,34 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowDialog;
 
-/** One trading app per phone: AtomiX / PandaPools present → the gate replaces every trading screen; gone → trading is back. */
+/** One trading app per phone: AtomiX / PandaPools present (or the MiniHub never read) → the gate replaces every trading
+ *  screen; gone → trading is back. Removing an app needs a FRESH hand-over answer, never a stored one. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class TradingGateTest {
+    private Application app;
 
-    @Test public void atomixInstalledBlocksTradingUntilRemoved() {
-        android.app.Application app = RuntimeEnvironment.getApplication();
+    @Before public void up() {
+        app = RuntimeEnvironment.getApplication();
         Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
-        PackageInfo pi = new PackageInfo(); pi.packageName = TradingGate.ATOMIX; pi.versionName = "0.1.86";
-        Shadows.shadowOf(app.getPackageManager()).installPackage(pi);
+    }
 
+    private void installAtomix(int versionCode) {
+        PackageInfo pi = new PackageInfo(); pi.packageName = TradingGate.ATOMIX; pi.versionName = "0.1.86";
+        pi.versionCode = versionCode; pi.setLongVersionCode(versionCode);
+        Shadows.shadowOf(app.getPackageManager()).installPackage(pi);
+    }
+
+    private static Intent answer(boolean ok, String pkg, int version) {
+        return new Intent().putExtra("handover", ok).putExtra("app", pkg).putExtra("version", version);
+    }
+
+    @Test public void atomixInstalledBlocksTradingUntilRemoved() {
+        TradingGate.record(app, new JSONArray());
+        installAtomix(186);
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
         View root = a.getWindow().getDecorView();
         assertNotNull("gate shown", DoorsTabSmokeTest.find(root, "One trading app per phone"));
@@ -36,9 +58,37 @@ public class TradingGateTest {
 
         Shadows.shadowOf(app.getPackageManager()).removePackage(TradingGate.ATOMIX);
         a.recheckGate();
+        a.showTab(MainActivity.TAB_TRADE);   // ③
         root = a.getWindow().getDecorView();
         assertNull(DoorsTabSmokeTest.find(root, "One trading app per phone"));
-        assertNotNull("trading is back", DoorsTabSmokeTest.find(root, "TRADE"));
+        TextView trade = DoorsTabSmokeTest.find(root, "TRADE");
+        assertNotNull(trade);
+        assertTrue("trading is back, and visible", trade.isShown());
+    }
+
+    @Test public void failsClosedUntilTheMiniHubHasBeenReadOnce() throws Exception {
+        assertFalse(TradingGate.miniHubChecked(app));
+        assertTrue("never read: blocked", TradingGate.blocked(app));
+        assertFalse("but nothing was FOUND, so nothing is withdrawn", TradingGate.conflict(app));
+        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        View root = a.getWindow().getDecorView();
+        assertNotNull("a short checking state, not the trading chrome", DoorsTabSmokeTest.find(root, "Checking your node…"));
+        assertNull(DoorsTabSmokeTest.find(root, "TRADE"));
+
+        TradingGate.record(app, null);
+        assertTrue("a reply without a list proves nothing", TradingGate.blocked(app));
+        TradingGate.record(app, new JSONArray("[{\"uid\":\"0xCC\",\"conf\":{\"name\":\"Wallet\"}}]"));
+        assertFalse(TradingGate.blocked(app));
+        a.recheckGate();
+        assertNotNull(DoorsTabSmokeTest.find(a.getWindow().getDecorView(), "TRADE"));
+
+        TradingGate.record(app, new JSONArray("[{\"uid\":\"0xAA\",\"conf\":{\"name\":\"AtomiX\"}}]"));
+        assertTrue("the MiniHub list alone blocks", TradingGate.blocked(app));
+        assertTrue(TradingGate.conflict(app));
+        a.recheckGate();
+        root = a.getWindow().getDecorView();
+        assertNotNull(DoorsTabSmokeTest.find(root, "AtomiX MiniDapp on your node"));
+        assertNull(DoorsTabSmokeTest.find(root, "TRADE"));
     }
 
     @Test public void miniHubMatchesOnlyTheTwoAppsByExactName() throws Exception {
@@ -47,11 +97,73 @@ public class TradingGateTest {
         assertEquals("AtomiX|0xAA\nPandaPools|0xBB\n", TradingGate.match(list));
     }
 
-    @Test public void handOverExpires() {
-        long now = 1_000_000_000L;
-        assertTrue(TradingGate.fresh(now - 60_000, now));
-        assertFalse(TradingGate.fresh(now - TradingGate.HANDOVER_VALID_MS - 1, now));
-        assertFalse(TradingGate.fresh(0, now));
-        assertFalse("clock moved back", TradingGate.fresh(now + 5_000, now));
+    private MainActivity gated() {
+        TradingGate.record(app, new JSONArray());
+        installAtomix(186);
+        return Robolectric.buildActivity(MainActivity.class).setup().get();
+    }
+
+    /** The next started activity, skipping the notification-permission prompt onCreate asks for. */
+    private static Intent next(Activity a) {
+        Intent i;
+        do i = Shadows.shadowOf(a).getNextStartedActivity(); while (i != null && "android.content.pm.action.REQUEST_PERMISSIONS".equals(i.getAction()));
+        return i;
+    }
+
+    @Test public void removeAsksAFreshHandOverThenUninstallsOnAValidYes() {
+        MainActivity a = gated();
+        a.startHandover(TradingGate.ATOMIX, "AtomiX", false);
+        assertEquals(TradingGate.ACTION_HANDOVER, next(a).getAction());
+        a.onHandover(Activity.RESULT_OK, answer(true, TradingGate.ATOMIX, 186));
+        assertNull("step 1 alone never uninstalls", next(a));
+        assertTrue(TradingGate.lastAnswerOk(app, TradingGate.ATOMIX));
+
+        View rm = DoorsTabSmokeTest.find(a.getWindow().getDecorView(), "2 · Remove AtomiX");
+        assertTrue(rm.isEnabled());
+        rm.performClick();
+        Intent asked = next(a);
+        assertEquals("Remove asks again: no stored OK", TradingGate.ACTION_HANDOVER, asked.getAction());
+        assertEquals(TradingGate.ATOMIX, asked.getPackage());
+        a.onHandover(Activity.RESULT_OK, answer(true, TradingGate.ATOMIX, 186));
+        Intent del = next(a);
+        assertEquals(Intent.ACTION_DELETE, del.getAction());
+        assertEquals("package:" + TradingGate.ATOMIX, del.getDataString());
+    }
+
+    @Test public void doubleTapOpensTheHandOverOnce() {
+        MainActivity a = gated();
+        a.startHandover(TradingGate.ATOMIX, "AtomiX", true);
+        a.startHandover(TradingGate.ATOMIX, "AtomiX", true);
+        assertNotNull(next(a));
+        assertNull(next(a));
+    }
+
+    @Test public void wrongAppWrongVersionOrCancelNeverUninstalls() {
+        MainActivity a = gated();
+        a.startHandover(TradingGate.ATOMIX, "AtomiX", true); next(a);
+        a.onHandover(Activity.RESULT_OK, answer(true, TradingGate.PANDAPOOLS, 186));
+        assertNull("another app's yes", next(a));
+        assertFalse(TradingGate.lastAnswerOk(app, TradingGate.ATOMIX));
+
+        a.startHandover(TradingGate.ATOMIX, "AtomiX", true); next(a);
+        a.onHandover(Activity.RESULT_OK, answer(true, TradingGate.ATOMIX, 185));
+        assertNull("a yes from another version", next(a));
+
+        a.startHandover(TradingGate.ATOMIX, "AtomiX", true); next(a);
+        a.onHandover(Activity.RESULT_CANCELED, new Intent().putExtra("reason", "2 swaps are still in flight"));
+        assertNull(next(a));
+        AlertDialog d = (AlertDialog) ShadowDialog.getLatestDialog();
+        assertTrue(d.isShowing());
+        assertEquals("2 swaps are still in flight", ((TextView) d.findViewById(android.R.id.message)).getText().toString());
+    }
+
+    @Test public void aLostPendingAppFallsBackToTheAnswerButNeverUninstalls() {
+        MainActivity a = gated();
+        assertNull(a.handoverPkg);
+        a.onHandover(Activity.RESULT_OK, answer(true, "com.evil.app", 186));
+        assertNull("only AtomiX / PandaPools may be named", next(a));
+        a.onHandover(Activity.RESULT_OK, answer(true, TradingGate.ATOMIX, 186));
+        assertNull("process death lost the Remove intent: no uninstall", next(a));
+        assertTrue("but the answer is shown on the card", TradingGate.lastAnswerOk(app, TradingGate.ATOMIX));
     }
 }

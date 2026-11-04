@@ -111,7 +111,14 @@ public class MainActivity extends AppCompatActivity {
     private GateView gate;
     private Boolean gateShown;
     private ActivityResultLauncher<Intent> handover;
-    private String handoverPkg, handoverName;
+    /** The hand-over asked for (persisted across process death: the answer can come back to a new process). */
+    String handoverPkg, handoverName;
+    private boolean handoverRemove;
+    private long handoverAt;
+    /** Bumped each time the gate shuts: an automatic retry captured before it never fires after it. */
+    private int gateGen;
+    /** Open trade / market dialogs: dismissed when the gate shuts or the market switches under them. */
+    private final List<android.app.Dialog> dialogs = new ArrayList<>();
 
     private TradeView trade;
     private ActivityTab activityTab;
@@ -175,6 +182,11 @@ public class MainActivity extends AppCompatActivity {
             pendingCsv = null;
         });
         handover = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), r -> onHandover(r.getResultCode(), r.getData()));
+        if (savedInstanceState != null) {
+            handoverPkg = TradingGate.gatedApp(savedInstanceState.getString("ho_pkg"));
+            handoverName = savedInstanceState.getString("ho_name"); handoverRemove = savedInstanceState.getBoolean("ho_remove");
+            handoverAt = savedInstanceState.getLong("ho_at");
+        }
         com.eurobuddha.dexicon.doors.DoorHost.get(this).applyLaunchRule();   // MxUSD every launch, unless MINIMA is live (Q1)
         chromeRoot = buildChrome();
         selectTab(tab);
@@ -184,6 +196,7 @@ public class MainActivity extends AppCompatActivity {
             paired = enabled; pairingKnown = true;
             if (enabled) onPaired();
             repaint();
+            applyGate();   // the "Checking your node…" screen says what is needed while unpaired
         });
         restingRepo = new BookRepository(node);
         poolRepo = new PoolLiquidityRepository(node);
@@ -335,6 +348,28 @@ public class MainActivity extends AppCompatActivity {
         toast(label + " copied");
     }
 
+    /** The node app (its Apps screen holds Dexicon's toggle). */
+    void openNodeApp() {
+        String pkg = NodeApi.nodeApp(this)[0];
+        android.content.Intent open = pkg.isEmpty() ? null : getPackageManager().getLaunchIntentForPackage(pkg);
+        if (open != null) startActivity(open); else toast("Install or start your Minima node app first");
+    }
+
+    /** One trading app per phone: every confirmed or automatic trade asks here first (MakerEngine asks again). */
+    boolean gateRefuses() {
+        if (!TradingGate.blocked(this)) return false;
+        toast("Trading is off: one trading app per phone (see the first screen)");
+        return true;
+    }
+
+    /** Shows {@code d} and remembers it, so the gate or a market switch can close it under the user. */
+    public <T extends android.app.Dialog> T track(T d) {
+        for (java.util.Iterator<android.app.Dialog> it = dialogs.iterator(); it.hasNext(); ) if (!it.next().isShowing()) it.remove();
+        dialogs.add(d);
+        return d;
+    }
+    public void dismissDialogs() { for (android.app.Dialog d : dialogs) if (d.isShowing()) d.dismiss(); dialogs.clear(); }
+
     // ---- order desk ----
 
     /** Best FAST order on the opposite side that a limit at {@code price} crosses (never mine, never unbacked). */
@@ -354,6 +389,7 @@ public class MainActivity extends AppCompatActivity {
      * crosses → the order rests on the relays as a FAST order.
      */
     void placeOrder(boolean buy, BigDecimal price, BigDecimal amount) {
+        if (gateRefuses()) return;
         if (me == null || engine == null) { toast("Identity not ready — is Dexicon enabled in Minima Core?"); return; }
         if (busy) { toast("A transaction is in progress"); return; }
         final Envelope best = bestFastCross(buy, price);
@@ -388,6 +424,7 @@ public class MainActivity extends AppCompatActivity {
         confirm((buy ? "Buy " : "Sell ") + Util.fmt(amount) + " MINIMA @ " + Util.fmt(price) + " MxUSD",
                 "Rests on the relays as your order. Your wallet coins back it; the maker engine co-signs fills while the phone is in your pocket.",
                 () -> {
+                    if (gateRefuses()) return;
                     if (engine == null) { toast("Not paired — try again once PAIRED"); return; }
                     busy = true; setStage("Publishing order…"); repaint();
                     engine.create(buy ? "buy" : "sell", price.toPlainString(), amount.toPlainString(), (err, o) -> {
@@ -427,15 +464,16 @@ public class MainActivity extends AppCompatActivity {
         if (fastBest != null) sb.append("\nBeats the best FAST ").append(buy ? "ask" : "bid").append(" @ ").append(fastBest.price).append(" for this size; FAST is not used in this trade.\n");
         if (rest.signum() > 0) sb.append("\nThe remaining ").append(PriceMath.fmt(rest)).append(" MINIMA is NOT traded or rested by this transaction — place it again once it confirms.\n");
         sb.append("\nOne atomic transaction, signed by your node; final after one block.");
-        new AlertDialog.Builder(this, Design.dialogTheme())
+        track(new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle(buy ? "Confirm buy · BOOK/POOL" : "Confirm sell · BOOK/POOL")
                 .setMessage(sb.toString())
                 .setPositiveButton("Execute", (d, w) -> executeComposite(plan, buy, amount, price, 0))
                 .setNegativeButton("Back", null)
-                .show();
+                .show());
     }
 
     private void executeComposite(CompositeRouter.Plan plan, boolean buy, BigDecimal amount, BigDecimal price, int retry) {
+        if (gateRefuses()) { setStage(""); return; }
         if (busy) { toast("A transaction is in progress"); return; }
         busy = true;
         final String route = plan.orderMinima.signum() > 0 && plan.poolMinima.signum() > 0 ? "BOOK+POOL" : plan.poolMinima.signum() > 0 ? "POOL" : "BOOK";
@@ -520,8 +558,10 @@ public class MainActivity extends AppCompatActivity {
     /** Poll once a block (≤ 10) until the token is spendable again (and, after a consolidation, settled), then re-plan the
      *  same trade at the same limit and execute it — no second confirmation: the user already confirmed this trade. */
     private void waitThenRetry(boolean buy, BigDecimal amount, BigDecimal price, String token, BigDecimal need, long startBlock, boolean consolidated) {
+        final int gen = gateGen;
         ui.postDelayed(() -> {
             if (closed) return;
+            if (gen != gateGen || TradingGate.blocked(this)) { setStage(""); return; }   // the gate shut while it waited: nothing re-executes
             if (chainBlock - startBlock > 10) { setStage(""); toast("Gave up waiting for the wallet after 10 blocks — try the trade again"); return; }
             node.cmd("balance tokenid:" + token, new NodeApi.Cb() {
                 public void onResult(JSONObject j) {
@@ -573,6 +613,7 @@ public class MainActivity extends AppCompatActivity {
         String due = db.meta("rest_due", "");
         if (due.isEmpty() || engine == null || busy) return;
         db.setMeta("rest_due", "");
+        if (TradingGate.blocked(this)) { db.setMeta("retry", ""); return; }   // never rest a remainder while the gate is shut
         JSONObject r; try { r = new JSONObject(db.meta("retry", "{}")); } catch (Exception e) { return; }
         BigDecimal rest; try { rest = new BigDecimal(r.optString("rest", "0")); } catch (Exception e) { return; }
         org.json.JSONArray tried = r.optJSONArray("tried");
@@ -613,12 +654,13 @@ public class MainActivity extends AppCompatActivity {
         EditText price = new EditText(this); price.setHint("Price (MxUSD per MINIMA)"); price.setText(o.price);
         EditText amount = new EditText(this); amount.setHint("Amount (MINIMA)"); amount.setText(o.remaining);
         box.addView(price); box.addView(amount);
-        new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Edit order").setView(box)
+        track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Edit order").setView(box)
                 .setPositiveButton("Update", (d, w) -> {
+                    if (gateRefuses()) return;
                     busy = true; repaint();
                     if (engine == null) { busy = false; toast("Not paired — try again once PAIRED"); repaint(); return; }
                     engine.edit(o.orderId, price.getText().toString().trim(), amount.getText().toString().trim(), (err, x) -> { busy = false; setStage(err != null ? "Edit failed: " + err : "Order updated"); repaint(); });
-                }).setNegativeButton("Back", null).show();
+                }).setNegativeButton("Back", null).show());
     }
 
     private interface CoinsCb { void done(String err, List<Coin> coins); }
@@ -724,6 +766,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void nextOrder() {
         TakeRun r = run; if (r == null) return;
+        if (TradingGate.blocked(this)) { logStep("Stopped: trading is off (one trading app per phone). Nothing more was sent."); endRun(); return; }
         List<Envelope> hits = new ArrayList<>();
         for (Envelope e : relay.orders(r.buy ? "sell" : "buy")) {
             if (isMine(e) || e.coins.isEmpty() || r.tried.contains(e.orderId)) continue;
@@ -787,6 +830,8 @@ public class MainActivity extends AppCompatActivity {
     /** Build + sign my side, seal the take to the maker, publish to every relay. */
     private void sendTake(Envelope order, FillPlan.Plan plan) {
         final TakeRun r = run;
+        if (r == null) return;
+        if (TradingGate.blocked(this)) { logStep("Stopped: trading is off (one trading app per phone). Nothing was sent."); endRun(); return; }
         busy = true;
         final String actId = ActivityLog.newId("fast_");
         final long t = System.currentTimeMillis();
@@ -870,8 +915,8 @@ public class MainActivity extends AppCompatActivity {
                 String why = a.optString("reason");
                 for (String id : r.order.coins) makerCoinCache.remove(id);
                 db.setMeta("retry_due", "");
-                logStep("  maker refused: " + why + (why.matches("(?i).*(taken|not live|advertised|spent|visible|cover).*") ? " — next order" : ""));
-                if (why.matches("(?i).*(taken|not live|advertised|spent|visible|cover).*")) { r.act = null; nextOrder(); } else endRun();
+                logStep("  maker refused: " + why + (why.matches(MakerService.MOVE_ON) ? " — next order" : ""));
+                if (why.matches(MakerService.MOVE_ON)) { r.act = null; nextOrder(); } else endRun();
             } else if (ActivityLog.FAILED.equals(st) || ActivityLog.LOST.equals(st)) {
                 logStep("  " + a.optString("reason")); endRun();
             }
@@ -905,8 +950,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void confirm(String title, String body, Runnable yes) {
-        new AlertDialog.Builder(this, Design.dialogTheme()).setTitle(title).setMessage(body)
-                .setPositiveButton("Confirm", (d, w) -> yes.run()).setNegativeButton("Back", null).show();
+        track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle(title).setMessage(body)
+                .setPositiveButton("Confirm", (d, w) -> yes.run()).setNegativeButton("Back", null).show());
     }
 
     // ---- chrome ----
@@ -944,12 +989,7 @@ public class MainActivity extends AppCompatActivity {
         nodeRow.setGravity(Gravity.CENTER_VERTICAL);
         nodeRow.setPadding(pad, 0, pad, Design.dp(this, 6));
         pairPill = Design.pill(this, "CONNECTING…", Design.SURFACE2(), Design.DIM());
-        pairPill.setOnClickListener(v -> {   // not paired: one tap to the node app (its Apps screen holds the toggle)
-            if (paired) return;
-            String pkg = NodeApi.nodeApp(this)[0];
-            android.content.Intent open = pkg.isEmpty() ? null : getPackageManager().getLaunchIntentForPackage(pkg);
-            if (open != null) startActivity(open); else toast("Install or start your Minima node app first");
-        });
+        pairPill.setOnClickListener(v -> { if (!paired) openNodeApp(); });   // not paired: one tap to the node app (its Apps screen holds the toggle)
         nodeRow.addView(pairPill, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         // The AtomiX currency switch (apks/atomix buildHeader): names the ACTIVE market; tap to switch, long-press cycles the glow.
         ccyPill = Design.pill(this, "", Design.SURFACE2(), Design.TEXT());
@@ -1067,7 +1107,7 @@ public class MainActivity extends AppCompatActivity {
     /** (Re)start the pill's glow, cancelling any previous one (AtomiX startCcyGlow). Never animates a hidden pill. */
     private void startCcyGlow() {
         stopCcyGlow();
-        if (ccyPill == null || !FOREGROUND) return;
+        if (ccyPill == null || !FOREGROUND || Boolean.TRUE.equals(gateShown)) return;   // never under the gate
         com.eurobuddha.atomix.TradingContext m = com.eurobuddha.dexicon.doors.DoorHost.get(this).market();
         ccyGlowAnim = Design.glow(ccyPill, Design.ccyRing(this, DoorsTab.soft(m), m.other().accent, m == com.eurobuddha.atomix.TradingContext.MINIMA), Design.glowLevel(this));
     }
@@ -1079,7 +1119,7 @@ public class MainActivity extends AppCompatActivity {
         com.eurobuddha.dexicon.doors.DoorHost host = com.eurobuddha.dexicon.doors.DoorHost.get(this);
         final com.eurobuddha.atomix.TradingContext target = host.market().other();
         String to = com.eurobuddha.dexicon.doors.DoorPlan.coin(target), from = com.eurobuddha.dexicon.doors.DoorPlan.coin(host.market());
-        new AlertDialog.Builder(this, Design.dialogTheme())
+        track(new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle("Switch to " + to + "?")
                 .setMessage("AtomiX publishes and market-makes in ONE currency at a time. Switching to " + to
                         + " re-themes ① Dollars in and moves your swaps, order/market-making and OTC to the " + to + " book.\n\nYour current "
@@ -1090,7 +1130,7 @@ public class MainActivity extends AppCompatActivity {
                     if (err != null) toast(err);
                 })
                 .setNegativeButton("Cancel", null)
-                .show();
+                .show());
     }
 
     /** Switch to a tab (e.g. ATOMIX → "Finished swaps are in History ›"). */
@@ -1209,44 +1249,69 @@ public class MainActivity extends AppCompatActivity {
 
     // ---- one trading app per phone ----
 
-    /** Shows the gate instead of the trading screens while AtomiX or PandaPools is present, and the screens once both are gone. */
+    /** Shows the gate instead of the trading screens while AtomiX or PandaPools is present (or the node's MiniHub has
+     *  not been read yet), and the screens once both are gone. Shutting stops every trade this screen could still fire. */
     void applyGate() {
         if (closed || chromeRoot == null) return;
         boolean blocked = TradingGate.blocked(this);
         if (blocked) {
-            if (!Boolean.TRUE.equals(gateShown)) { gate = new GateView(this); setContentView(gate); gateShown = true; }
+            if (!Boolean.TRUE.equals(gateShown)) { haltTrading(); gate = new GateView(this); setContentView(gate); gateShown = true; }
             gate.render();
         } else if (!Boolean.FALSE.equals(gateShown)) {
             gate = null; gateShown = false;
             setContentView(chromeRoot);
+            startCcyGlow();
             repaint();
         }
     }
 
+    /** The gate shut: end a one-click run, forget a pending remainder or retry, close confirm / edit dialogs. */
+    private void haltTrading() {
+        gateGen++;
+        if (run != null) endRun();
+        if (db != null) { db.setMeta("rest_due", ""); db.setMeta("retry", ""); db.setMeta("retry_due", ""); }
+        dismissDialogs();
+        stopCcyGlow();
+    }
+
     void recheckGate() { if (node != null && paired) TradingGate.checkMiniHub(this, node, this::applyGate); else applyGate(); }
 
-    /** Opens the app's own "Hand over to Dexicon" step; it answers only to Dexicon (it checks the calling package). */
-    void startHandover(String pkg, String name) {
-        handoverPkg = pkg; handoverName = name;
+    /** Opens the app's own "Hand over to Dexicon" step; it answers only to Dexicon (it checks the calling package).
+     *  {@code remove}: on a FRESH yes for the installed version, uninstall at once — nothing is stored to replay. */
+    void startHandover(String pkg, String name, boolean remove) {
+        long now = System.currentTimeMillis();
+        if (handoverPkg != null && now - handoverAt < 60_000) return;   // a double tap opens it once
+        handoverPkg = pkg; handoverName = name; handoverRemove = remove; handoverAt = now;
         try { handover.launch(new Intent(TradingGate.ACTION_HANDOVER).setPackage(pkg)); }
         catch (android.content.ActivityNotFoundException e) {
+            handoverPkg = null;
             explain(name + " needs an update", "This version of " + name + " has no \"Hand over to Dexicon\" step yet. Update " + name + " from the store, then try again.");
         }
     }
 
-    private void onHandover(int code, Intent d) {
+    void onHandover(int code, Intent d) {
         String pkg = handoverPkg, name = handoverName;
-        handoverPkg = null;
-        if (pkg == null) return;
+        boolean remove = handoverRemove;
+        handoverPkg = null; handoverName = null; handoverRemove = false;
+        if (pkg == null) { pkg = TradingGate.gatedApp(d == null ? null : d.getStringExtra("app")); remove = false; }   // lost: answer names it
+        if (pkg == null) { applyGate(); return; }
+        if (name == null) name = TradingGate.ATOMIX.equals(pkg) ? "AtomiX" : "PandaPools";
         long ver = TradingGate.versionOf(this, pkg);
-        if (code == RESULT_OK && d != null && d.getBooleanExtra("handover", false) && pkg.equals(d.getStringExtra("app")) && d.getIntExtra("version", -1) == ver) {
-            TradingGate.noteHandover(this, pkg, ver);
-            toast(name + " handed over. You can remove it now.");
+        if (TradingGate.validHandover(code == RESULT_OK, d, pkg, ver)) {
+            TradingGate.noteAnswer(this, pkg, ver);
+            if (remove) startActivity(new Intent(Intent.ACTION_DELETE, android.net.Uri.parse("package:" + pkg)));
+            else toast(name + " handed over. You can remove it now.");
         } else {
+            TradingGate.noteAnswer(this, pkg, -2);   // the card follows the LAST answer
             String why = d == null ? null : d.getStringExtra("reason");
             explain(name + " is not ready to remove", why == null || why.isEmpty() ? name + " did not confirm the hand-over, so nothing changed." : why);
         }
         applyGate();
+    }
+
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        out.putString("ho_pkg", handoverPkg); out.putString("ho_name", handoverName); out.putBoolean("ho_remove", handoverRemove); out.putLong("ho_at", handoverAt);
     }
 
     private void explain(String title, String body) {

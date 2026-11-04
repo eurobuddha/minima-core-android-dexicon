@@ -366,7 +366,7 @@ public final class DoorsTab extends LinearLayout {
         TextView msg = t(body, Design.TEXT(), 10.5f, Design.mono());
         int p = Design.dp(getContext(), 18); msg.setPadding(p, p / 2, p, 0); msg.setTextIsSelectable(true);
         android.widget.ScrollView sv = new android.widget.ScrollView(getContext()); sv.addView(msg);
-        new AlertDialog.Builder(act, Design.dialogTheme()).setTitle(head).setView(sv)
+        act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle(head).setView(sv)
                 .setPositiveButton("START", (d, w) -> {
                     String err = host.take(market, plan, dest, new DoorHost.Progress() {
                         @Override public void stage(String s) { act.setStage(s); }
@@ -375,7 +375,7 @@ public final class DoorsTab extends LinearLayout {
                     if (err != null) act.toast(err); else amt.setText("");
                     render();
                 })
-                .setNegativeButton("Back", null).show();
+                .setNegativeButton("Back", null).show());
     }
 
     // ------------------------------------------------------------------ door swaps (IN PROGRESS here; the same lines in ACTIVITY / HISTORY)

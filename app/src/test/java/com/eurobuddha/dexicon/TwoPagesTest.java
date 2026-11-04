@@ -27,7 +27,7 @@ public class TwoPagesTest {
         android.app.Application app = RuntimeEnvironment.getApplication();
         org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
         DoorsTabSmokeTest.find(root, DoorsTabSmokeTest.room(2)).performClick();   // ③ EXCHANGE: its pages show in the row under the rail
         View activity = DoorsTabSmokeTest.find(root, "ACTIVITY"), history = DoorsTabSmokeTest.find(root, "HISTORY"), assets = DoorsTabSmokeTest.find(root, "ASSETS");

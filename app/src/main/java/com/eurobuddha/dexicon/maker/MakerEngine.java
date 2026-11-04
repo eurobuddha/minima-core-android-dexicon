@@ -329,6 +329,7 @@ public final class MakerEngine {
         Map<String, String> errors = new HashMap<>();
         Map<String, MyOrder> made = new HashMap<>();
         if (ops.isEmpty()) { cb.done(errors, made); return; }
+        if (gated()) { for (Op op : ops) errors.put(op.key, GATED); cb.done(errors, made); return; }
         boolean anyCreate = false; for (Op op : ops) if (op.orderId == null) anyCreate = true;
         java.util.function.Consumer<String> go = addr -> tip(t -> {
             List<Op> norm = new ArrayList<>();
@@ -379,7 +380,12 @@ public final class MakerEngine {
 
     // ---- create / cancel / edit / afterFill ----
 
+    /** One trading app per phone: the last word for every caller (Activity and service) — nothing new is offered. */
+    public static final String GATED = "trading is off: one trading app per phone";
+    private boolean gated() { return com.eurobuddha.dexicon.TradingGate.blocked(ctx); }
+
     public void create(String side, String priceIn, String amountIn, OrderDone cb) {
+        if (gated()) { cb.done(GATED, null); return; }
         if (!"buy".equals(side) && !"sell".equals(side)) { cb.done("side must be buy or sell", null); return; }
         final String price, amount;
         try { price = FillPlan.plain(FillPlan.d(priceIn)); amount = FillPlan.plain(FillPlan.down8(FillPlan.d(amountIn))); }
@@ -420,6 +426,7 @@ public final class MakerEngine {
 
     /** Edit price and/or amount (null = keep): re-select backing, higher seq, publish. */
     public void edit(String orderId, String priceIn, String amountIn, OrderDone cb) {
+        if (gated()) { cb.done(GATED, null); return; }
         MyOrder o = db.myOrder(orderId);
         if (o == null || !o.live()) { cb.done("order is not live", null); return; }
         final String price = priceIn != null ? FillPlan.plain(FillPlan.d(priceIn)) : o.price;

@@ -211,7 +211,7 @@ public final class OtcTab extends LinearLayout {
         EditText amtE = input(); amtE.setText(amount); box.addView(amtE);
         box.addView(Ui.label(act, "Price (USDT per " + ccy() + ")"));
         EditText prE = input(); prE.setText(price); box.addView(prE);
-        new AlertDialog.Builder(act, Design.dialogTheme()).setTitle(title).setView(box)
+        act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle(title).setView(box)
                 .setPositiveButton(ok, (dg, w) -> {
                     double a = MarketTab.parseD(amtE.getText().toString(), 0), pr = MarketTab.parseD(prE.getText().toString(), 0);
                     if (!(a > 0) || !(pr > 0) || !Double.isFinite(a) || !Double.isFinite(pr) || !OtcController.validTerms(DoorHost.plain(a), DoorHost.sig(pr))) { act.toast("Enter amount + price"); return; }
@@ -219,7 +219,7 @@ public final class OtcTab extends LinearLayout {
                 })
                 .setNegativeButton("Cancel", null)
                 .setOnDismissListener(dg -> act.repaint())
-                .show();
+                .show());
     }
 
     private void propose(OtcOffer lp, String dealSide) {

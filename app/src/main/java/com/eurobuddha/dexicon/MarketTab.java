@@ -408,11 +408,11 @@ public final class MarketTab extends LinearLayout {
         bidSizeE.addTextChangedListener(gw); biasE.addTextChangedListener(gw); levelsE.addTextChangedListener(gw);
 
         ScrollView sv = new ScrollView(act); sv.addView(box);
-        final AlertDialog editor = new AlertDialog.Builder(act, Design.dialogTheme())
+        final AlertDialog editor = act.track(new AlertDialog.Builder(act, Design.dialogTheme())
                 .setTitle("My market / ladder · " + c).setView(sv)
                 .setPositiveButton("Save", null).setNegativeButton("Cancel", null)
                 .setOnDismissListener(d -> { open[0] = false; removeCallbacks(tick[0]); act.repaint(); })
-                .show();
+                .show());
         editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if (!paramsValid(params, pegSw.isChecked()) || !rowsValid(askRows, bidRows)) { invalid(pv); pv.post(() -> pv.requestRectangleOnScreen(new android.graphics.Rect(0, 0, pv.getWidth(), pv.getHeight()), true)); return; }
             p.enable = sw.isChecked();

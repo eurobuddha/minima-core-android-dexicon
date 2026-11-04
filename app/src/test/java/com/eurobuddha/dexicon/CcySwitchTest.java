@@ -36,7 +36,7 @@ public class CcySwitchTest {
     @After public void down() { quiet(); host.switchMarket(TradingContext.MXUSDT, null); }
     private void quiet() { host.prefs().edit().remove("market_mxusdt").remove("market_minima").remove("order_config").putBoolean("auto_publish", false).putBoolean("otc_enable", false).putBoolean("otc_auto", false).commit(); }
 
-    private MainActivity launch() { return Robolectric.buildActivity(MainActivity.class).setup().get(); }
+    private MainActivity launch() { return DoorsTabSmokeTest.launch(); }
 
     @Test public void pillSwitchesTheOneMarket() {
         MainActivity a = launch();

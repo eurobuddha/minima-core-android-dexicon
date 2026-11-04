@@ -26,6 +26,7 @@ public class DoorHostMakerTest {
     @Before public void up() {
         app = RuntimeEnvironment.getApplication();
         host = DoorHost.get(app);
+        com.eurobuddha.dexicon.TradingGate.record(app, new org.json.JSONArray());   // the MiniHub was read: neither app
         host.switchMarket(TradingContext.MXUSDT, null);
         Order o = Order.fromConfigJson("");
         Order.Pair p = o.pairs.values().iterator().next();

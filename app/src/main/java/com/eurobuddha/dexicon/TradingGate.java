@@ -17,8 +17,11 @@ import java.util.Locale;
  * be two makers on one wallet and two keepers rebuilding the same pool, working against each other.
  *
  * An app is removed only after it confirms, through its own "Hand over to Dexicon" step, that nothing of the user's
- * lives only inside it (no swap in flight, market withdrawn, no live pool). That confirmation is short-lived and tied
- * to the exact installed version, so it cannot be replayed after the app was used again or updated.
+ * lives only inside it (no swap in flight, market withdrawn, no live pool). Nothing is stored: "Remove" asks the app
+ * again and uninstalls only on that fresh answer, tied to the exact installed version (0.1.66).
+ *
+ * The MiniHub half FAILS CLOSED: until one `mds` read has succeeded on this install, Dexicon does not know whether the
+ * MiniDapps are paired, so it is {@link #blocked} (an upgrader from 0.1.58 starts with no list at all).
  */
 public final class TradingGate {
     private TradingGate() {}
@@ -27,7 +30,6 @@ public final class TradingGate {
     public static final String ACTION_HANDOVER = "com.eurobuddha.dexicon.action.HANDOVER";
     /** The MiniDapp names (dapp.conf "name") that count as the same apps. */
     static final String[] MINIDAPPS = {"AtomiX", "PandaPools"};
-    static final long HANDOVER_VALID_MS = 15 * 60_000L;
     private static final String PREFS = "dexicon_gate";
 
     private static SharedPreferences prefs(Context c) { return c.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
@@ -48,22 +50,35 @@ public final class TradingGate {
         return out;
     }
 
-    public static boolean blocked(Context c) {
+    /** Trading is off: one of the apps is here, or the MiniHub has never been read (fail closed). */
+    public static boolean blocked(Context c) { return conflict(c) || !miniHubChecked(c); }
+
+    /** One of the apps was actually FOUND (not just "not checked yet"): the maker withdraws its live orders. */
+    public static boolean conflict(Context c) {
         return installed(c, ATOMIX) || installed(c, PANDAPOOLS) || !miniDapps(c).isEmpty();
     }
 
-    /** Re-reads the node's MiniHub (`mds`, needs the ADMIN Dexicon already requires). A failed read keeps the last answer. */
+    /** At least one MiniHub read has succeeded on this install. */
+    public static boolean miniHubChecked(Context c) { return prefs(c).getLong("minihub_ok", 0) > 0; }
+
+    /** Re-reads the node's MiniHub (`mds`, needs the ADMIN Dexicon already requires). A failed read keeps the last answer
+     *  (and, before the first success, keeps trading off). The Activity and MakerService both call it. */
     public static void checkMiniHub(Context c, NodeApi node, Runnable done) {
         if (node == null) { if (done != null) done.run(); return; }
         node.cmd("mds", new NodeApi.Cb() {
             public void onResult(JSONObject j) {
                 JSONObject r = j.optJSONObject("response");
-                JSONArray list = r == null ? null : r.optJSONArray("minidapps");
-                if (list != null) prefs(c).edit().putString("minidapps", match(list)).apply();
+                if (j.optBoolean("status", true)) record(c, r == null ? null : r.optJSONArray("minidapps"));
                 if (done != null) done.run();
             }
             public void onError(String m) { if (done != null) done.run(); }
         });
+    }
+
+    /** A successful MiniHub read: the matching rows, and the "checked" marker. A reply without a list proves nothing. */
+    public static void record(Context c, JSONArray list) {
+        if (list == null) return;
+        prefs(c).edit().putString("minidapps", match(list)).putLong("minihub_ok", System.currentTimeMillis()).apply();
     }
 
     /** The matching rows of an `mds` minidapps list, one "name|uid" per line. */
@@ -80,15 +95,16 @@ public final class TradingGate {
         return sb.toString();
     }
 
-    /** The app's own hand-over step said yes, for this installed version. */
-    static void noteHandover(Context c, String pkg, long version) {
-        prefs(c).edit().putLong("ho_ts_" + pkg, System.currentTimeMillis()).putLong("ho_ver_" + pkg, version).apply();
+    /** The app's own hand-over step said yes, just now, for exactly the installed version of exactly the app asked. */
+    static boolean validHandover(boolean ok, android.content.Intent d, String pkg, long installedVersion) {
+        return ok && d != null && pkg != null && installedVersion >= 0 && d.getBooleanExtra("handover", false)
+                && pkg.equals(d.getStringExtra("app")) && d.getIntExtra("version", -1) == installedVersion;
     }
 
-    static boolean handedOver(Context c, String pkg) {
-        long ts = prefs(c).getLong("ho_ts_" + pkg, 0), ver = prefs(c).getLong("ho_ver_" + pkg, -2);
-        return fresh(ts, System.currentTimeMillis()) && ver == versionOf(c, pkg);
-    }
+    /** The last answer, for the card only (never a permission): the version that last said yes. */
+    static void noteAnswer(Context c, String pkg, long version) { prefs(c).edit().putLong("ho_ver_" + pkg, version).apply(); }
+    static boolean lastAnswerOk(Context c, String pkg) { long v = versionOf(c, pkg); return v >= 0 && prefs(c).getLong("ho_ver_" + pkg, -2) == v; }
 
-    static boolean fresh(long ts, long now) { return ts > 0 && now - ts >= 0 && now - ts <= HANDOVER_VALID_MS; }
+    /** Only the two apps Dexicon gates may be named by a hand-over answer. */
+    static String gatedApp(String pkg) { return ATOMIX.equals(pkg) || PANDAPOOLS.equals(pkg) ? pkg : null; }
 }

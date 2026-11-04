@@ -923,6 +923,7 @@ public final class DoorHost {
     public String take(TradingContext market, DoorPlan.Plan plan, String to, Progress pr) {
         if (!ready()) return "AtomiX not ready — " + bootNote();
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
+        if (gated()) return "Trading is off: one trading app per phone.";
         if (busy || scanning) return "An AtomiX swap is already starting — wait for it to finish.";
         if (plan == null || plan.legs.isEmpty()) return "Nothing to fill.";
         if (market != this.market) return "The market was switched — review the swap again.";

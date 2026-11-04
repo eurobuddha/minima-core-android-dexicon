@@ -1,7 +1,5 @@
 package com.eurobuddha.dexicon;
 
-import android.content.Intent;
-import android.net.Uri;
 import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -27,10 +25,17 @@ final class GateView extends ScrollView {
         body.setOrientation(LinearLayout.VERTICAL);
         int p = Design.dp(act, 16); body.setPadding(p, p, p, p);
         addView(body);
+        // edge-to-edge window (setDecorFitsSystemWindows(false)): pad for the bars exactly as the trading chrome does
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(this, (v, insets) -> {
+            androidx.core.graphics.Insets bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return insets;
+        });
     }
 
     void render() {
         body.removeAllViews();
+        if (!TradingGate.conflict(act)) { renderChecking(); return; }
         boolean ax = TradingGate.installed(act, TradingGate.ATOMIX), pp = TradingGate.installed(act, TradingGate.PANDAPOOLS);
         List<String> dapps = TradingGate.miniDapps(act);
 
@@ -64,6 +69,27 @@ final class GateView extends ScrollView {
         body.addView(Ui.text(act, "Prefer the separate apps? Uninstall Dexicon instead. AtomiX and PandaPools stay in the store.", 12f, Design.DIM2(), Design.sans()));
     }
 
+    /** Nothing found, but the node's MiniHub has never been read on this install: say what is needed, plainly. */
+    private void renderChecking() {
+        body.addView(Ui.text(act, "◆ DEXICON  v" + BuildConfig.VERSION_NAME, 13f, Design.DIM(), Design.monoBold()), Ui.wide(act, 0, 10));
+        body.addView(Ui.text(act, "Checking your node…", 24f, Design.TEXT(), Design.sansBold()), Ui.wide(act, 0, 10));
+        String node = NodeApi.nodeApp(act)[1];
+        if (act.paired()) {
+            body.addView(para("Before trading opens, Dexicon reads your node's MiniHub once to make sure the AtomiX and PandaPools MiniDapps are "
+                    + "not paired with it (one trading app per node). This takes a moment."));
+        } else {
+            body.addView(para("Dexicon needs your node first. Open " + node + " → Apps, enable Dexicon and give it ADMIN. Dexicon then checks "
+                    + "that the AtomiX and PandaPools MiniDapps are not paired with your node, and trading opens."));
+            TextView open = Ui.button(act, "Open " + node);
+            open.setOnClickListener(v -> act.openNodeApp());
+            body.addView(open, Ui.wide(act, 4, 8));
+        }
+        body.addView(para("Nothing is traded or published until then. Anything already in flight keeps settling in the background."));
+        TextView again = Ui.button(act, "Check again");
+        again.setOnClickListener(v -> act.recheckGate());
+        body.addView(again, Ui.wide(act, 4, 12));
+    }
+
     private static String found(boolean ax, boolean pp, List<String> dapps) {
         String apps = ax && pp ? "AtomiX and PandaPools are" : ax ? "AtomiX is" : pp ? "PandaPools is" : "";
         String s = apps.isEmpty() ? "" : apps + " also on this phone";
@@ -77,21 +103,19 @@ final class GateView extends ScrollView {
 
     private void appCard(String name, String pkg, String what) {
         LinearLayout c = Ui.card(body);
-        boolean ok = TradingGate.handedOver(act, pkg);
+        boolean ok = TradingGate.lastAnswerOk(act, pkg);   // information from the last answer only; Remove asks again
         LinearLayout head = new LinearLayout(act); head.setGravity(Gravity.CENTER_VERTICAL);
         head.addView(Ui.text(act, name + " app", 16f, Design.TEXT(), Design.sansBold()), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        head.addView(Ui.text(act, ok ? "READY TO REMOVE" : "1 STEP LEFT", 10.5f, ok ? Design.IN() : Design.ACCENT(), Design.sansBold()));
+        head.addView(Ui.text(act, ok ? "HANDED OVER" : "1 STEP LEFT", 10.5f, ok ? Design.IN() : Design.ACCENT(), Design.sansBold()));
         c.addView(head, Ui.wide(act, 0, 8));
-        c.addView(check(ok, ok ? name + " confirmed nothing of yours is left in it." : "Step 1: in " + name + ", " + what + ". Its \"Hand over to Dexicon\" step checks this for you."));
-        TextView hand = Ui.button(act, ok ? "Hand over again" : "1 · Hand over in " + name);
-        hand.setOnClickListener(v -> act.startHandover(pkg, name));
+        c.addView(check(ok, ok ? name + " last said nothing of yours is left in it. Remove asks it once more, then uninstalls."
+                : "Step 1: in " + name + ", " + what + ". Its \"Hand over to Dexicon\" step checks this for you."));
+        TextView hand = Ui.button(act, "1 · Hand over in " + name);
+        hand.setOnClickListener(v -> act.startHandover(pkg, name, false));
         c.addView(hand, Ui.wide(act, 6, 6));
         TextView rm = Ui.button(act, "2 · Remove " + name);
         rm.setEnabled(ok); rm.setAlpha(ok ? 1f : 0.4f);
-        rm.setOnClickListener(v -> {
-            if (!TradingGate.handedOver(act, pkg)) { act.toast("Hand over in " + name + " first"); render(); return; }
-            act.startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + pkg)));
-        });
+        rm.setOnClickListener(v -> act.startHandover(pkg, name, true));   // a FRESH answer, never a stored one
         c.addView(rm, Ui.wide(act, 0, 0));
     }
 
@@ -100,9 +124,17 @@ final class GateView extends ScrollView {
         String name = p[0], uid = p.length > 1 ? p[1] : "";
         LinearLayout c = Ui.card(body);
         c.addView(Ui.text(act, name + " MiniDapp on your node", 16f, Design.TEXT(), Design.sansBold()), Ui.wide(act, 0, 8));
-        c.addView(para("Same rule for the MiniDapp. Dexicon won't remove it for you, because removing it deletes its data. Open it in your node's MiniHub, "
-                + ("AtomiX".equals(name) ? "finish or refund every swap and withdraw your market" : "make sure no pool or withdrawal of yours is still live")
-                + ", then remove it there and tap Check again."));
+        c.addView(para("Same rule for the MiniDapp. Dexicon can't see inside it and won't remove it for you: removing a MiniDapp deletes its "
+                + "data, including any swap or pool record that exists only there. Open it in your node's MiniHub and check, one by one:"));
+        if ("AtomiX".equals(name)) {
+            c.addView(step("1", "Every swap is finished.", "Each one shows complete or refunded; none is still locked, waiting for its counterparty or waiting for a refund timelock."));
+            c.addView(step("2", "Your market is withdrawn.", "Your order is withdrawn from the book and auto-publish is off, so no taker can lock against it."));
+            c.addView(step("3", "OTC is off.", "Your OTC offer is withdrawn and no OTC deal is still open or executing."));
+        } else {
+            c.addView(step("1", "No pool of yours is live.", "Every pool you created or added to is withdrawn and its coins are back in your wallet."));
+            c.addView(step("2", "No withdrawal is pending.", "Nothing is still waiting to confirm on chain."));
+        }
+        c.addView(para("Only then remove it there, and tap Check again here."));
         if (!uid.isEmpty()) c.addView(Ui.evidence(act, "MiniDapp uid", uid));
     }
 

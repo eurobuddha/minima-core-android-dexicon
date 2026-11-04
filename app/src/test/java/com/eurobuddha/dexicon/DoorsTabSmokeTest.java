@@ -21,6 +21,11 @@ public class DoorsTabSmokeTest {
         if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) { TextView t = find(((ViewGroup) v).getChildAt(i), text); if (t != null) return t; }
         return null;
     }
+    /** The trading screens, as on a phone whose node's MiniHub has been read once and held neither app. */
+    static MainActivity launch() {
+        TradingGate.record(org.robolectric.RuntimeEnvironment.getApplication(), new org.json.JSONArray());
+        return org.robolectric.Robolectric.buildActivity(MainActivity.class).setup().get();
+    }
     static String room(int r) { return MainActivity.ROOMS[r] + "\n" + MainActivity.ROOM_SUBS[r] + (r == 0 ? "MxUSD" : ""); }
 
     @Test public void doorsTabRendersBothRoutes() {
@@ -28,7 +33,7 @@ public class DoorsTabSmokeTest {
         android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
         org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
         for (String tab : new String[]{"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SETTINGS", room(0), room(1), room(2)}) assertNotNull(tab, find(root, tab));
         assertTrue("every launch opens on ① Dollars in", find(root, "YOUR ETHEREUM WALLET").isShown());
@@ -52,7 +57,7 @@ public class DoorsTabSmokeTest {
         android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
         org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = DoorsTabSmokeTest.launch();
         String tx = "0x" + "0A5F".repeat(16), coin = "0x" + "9955".repeat(16);
         long now = System.currentTimeMillis();
         ActivityLog.add(a.db(), new org.json.JSONObject().put("id", "slow_x").put("route", "POOL").put("role", "taker").put("side", "buy").put("amount", "2728.1472894674")

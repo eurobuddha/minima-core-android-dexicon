@@ -37,7 +37,7 @@ public class MarketTabSmokeTest {
     @After public void down() { host.prefs().edit().remove("order_config").putBoolean("auto_publish", false).commit(); }
 
     @Test public void marketPageRendersAndEditorSaves() {
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
         assertTrue("① shows its pages in the sub row", DoorsTabSmokeTest.find(root, "SWAP").isShown());
         DoorsTabSmokeTest.find(root, "MARKET").performClick();
