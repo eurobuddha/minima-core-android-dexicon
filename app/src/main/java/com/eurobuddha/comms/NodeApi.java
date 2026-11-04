@@ -35,11 +35,45 @@ public class NodeApi {
 
     public void cmd(String command, Cb cb) { cmd(command, () -> true, cb); }
 
+    /**
+     * Dexicon's pool owner-coin seam (0.1.78): the vendored engine never spends a ② pool owner-address coin (it signs with
+     * the pool's one-time owner key). A wallet coin read ({@code coins … relevant:true}) comes back without owner-address
+     * rows — so the engine's explicit inputs (myFreeCoins → lockFromCoins) can never name one; a NODE-PICKED spend
+     * ({@code send}: the HTLC lock, the split, comms posts, the door forward; {@code consolidate}) first passes PandaPools'
+     * owner-key guard for that token. Both fail closed when the pool recipes cannot be read.
+     */
     public void cmd(String command, java.util.function.BooleanSupplier authorized, Cb cb) {
         if (!authorized(authorized)) { if (cb != null) cb.onError(ERR_COMMAND_CHANGED); return; }
+        String verb = verb(command);
+        if (verb.equals("send") || verb.equals("consolidate")) {
+            com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(node, tokenOf(command), why -> {
+                if (why != null) { if (cb != null) cb.onError(why); return; }
+                dispatch(command, authorized, cb, false);
+            });
+            return;
+        }
+        dispatch(command, authorized, cb, verb.equals("coins") && command.contains("relevant:true"));
+    }
+
+    private void dispatch(String command, java.util.function.BooleanSupplier authorized, Cb cb, boolean walletCoins) {
+        if (walletCoins && com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context()) == null) {
+            if (cb != null) cb.onError(com.eurobuddha.pandapools.DexiconPools.OWNERS_UNREADABLE); return;
+        }
         node.cmd(command, () -> authorized(authorized), new com.eurobuddha.dexicon.NodeApi.Cb() {
-            @Override public void onResult(JSONObject json) { if (cb != null) cb.onResult(json); }
+            @Override public void onResult(JSONObject json) {
+                if (cb == null) return;
+                if (!walletCoins) { cb.onResult(json); return; }
+                JSONObject kept = com.eurobuddha.pandapools.DexiconPools.withoutOwnerCoins(node.context(), json);
+                if (kept == null) cb.onError(com.eurobuddha.pandapools.DexiconPools.OWNERS_UNREADABLE); else cb.onResult(kept);
+            }
             @Override public void onError(String message) { if (cb != null) cb.onError(message); }
         });
+    }
+
+    static String verb(String command) { return command == null ? "" : command.trim().split("\\s+", 2)[0]; }
+    /** The token a node-picked spend draws on: its {@code tokenid:} (Minima's default for both verbs is 0x00). */
+    static String tokenOf(String command) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:^|\\s)tokenid:(\\S+)").matcher(command);
+        return m.find() ? m.group(1) : "0x00";
     }
 }

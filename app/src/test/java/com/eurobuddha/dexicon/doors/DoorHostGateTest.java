@@ -96,7 +96,19 @@ public class DoorHostGateTest {
         assertFalse(host.withdrawalPending(TradingContext.MXUSDT));
         host.gateChanged();
         assertEquals("once", 1, sent.size());
-        assertTrue("the saved ladder is kept to place again", Order.fromConfigJson(host.prefs().getString("order_config", "")).hasLiquidity());
+        Order saved = Order.fromConfigJson(host.prefs().getString("order_config", ""));
+        assertFalse("persisted DISABLED, exactly as withdrawOrder", saved.hasLiquidity());
+        for (Order.Pair p : saved.pairs.values()) { assertFalse(p.enable); assertFalse("the levels are kept to place again", p.asks.isEmpty()); }
+        Shadows.shadowOf(app.getPackageManager()).removePackage(TradingGate.ATOMIX);
+        assertFalse(TradingGate.blocked(app));
+        assertFalse("the reopened gate arms nothing stale", host.armMaker().hasLiquidity());
+    }
+
+    @Test public void anUnpublishedLadderNeverArms() {
+        host.prefs().edit().putString("order_config", Order.toConfigJson(liquid())).putBoolean("auto_publish", false).commit();
+        assertFalse("auto_publish off: every take declines", host.armMaker().hasLiquidity());
+        host.prefs().edit().putBoolean("auto_publish", true).commit();
+        assertTrue(host.armMaker().hasLiquidity());
     }
 
     @Test public void anUnreadMiniHubWithdrawsNothing() {

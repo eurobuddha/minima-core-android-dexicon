@@ -199,36 +199,36 @@ public final class DoorHost {
         return false;
     }
 
-    // A withdrawal (tombstone) of a market sent but not yet confirmed: the order is still on the book until it lands.
-    private void markWithdrawal(TradingContext m) { prefs.edit().putBoolean("withdraw_pending_" + m.key, true).apply(); }
-    private void withdrawalLanded(TradingContext m) { prefs.edit().remove("withdraw_pending_" + m.key).apply(); }
-    public boolean withdrawalPending(TradingContext m) { return prefs.getBoolean("withdraw_pending_" + m.key, false); }
-
-    /** Re-send an unconfirmed withdrawal (each pass) until it lands; a live re-publish of the ACTIVE market supersedes it.
-     *  The OTHER market's (a switch whose tombstone never confirmed) goes out under that market's own identity. */
-    private void flushWithdrawal() {
-        if (switching || !makerReady()) return;
-        if (withdrawalPending(market) && prefs.getBoolean("auto_publish", false)) withdrawalLanded(market);
-        for (TradingContext m : MARKETS) {
-            if (!withdrawalPending(m) || ids.get(m) == null) continue;
-            if (!PublishGate.tryAcquire(PublishGate.ORDER)) return;
-            Order t = m == market ? tombstone() : parkedTombstone(m);
-            tombstones.send(ids.get(m), t, new CommsTransport.SendCb() {
-                @Override public void onSent(String txpowid) { PublishGate.release(PublishGate.ORDER); withdrawalLanded(m); changed(); }
-                @Override public void onFailed(String message) { PublishGate.release(PublishGate.ORDER); }
-            });
-            return;   // one per pass (one ORDER publish at a time)
-        }
+    // A withdrawal (tombstone) of a market sent but not yet confirmed: the order is still on the book until it lands — or
+    // until it ages off on its own (~1 h of blocks after its last publish, which is never later than the marker).
+    static final long WITHDRAW_MARKER_MS = 70 * 60_000;
+    private void markWithdrawal(TradingContext m) {
+        prefs.edit().putBoolean("withdraw_pending_" + m.key, true).putLong("withdraw_pending_at_" + m.key, System.currentTimeMillis()).apply();
+    }
+    private void withdrawalLanded(TradingContext m) { prefs.edit().remove("withdraw_pending_" + m.key).remove("withdraw_pending_at_" + m.key).apply(); }
+    /** A withdrawal of {@code m} is unconfirmed and its order may still be on the book (aged out ~70 min after it was set). */
+    public boolean withdrawalPending(TradingContext m) {
+        if (!prefs.getBoolean("withdraw_pending_" + m.key, false)) return false;
+        long at = prefs.getLong("withdraw_pending_at_" + m.key, 0), now = System.currentTimeMillis();
+        if (at == 0) { prefs.edit().putLong("withdraw_pending_at_" + m.key, now).apply(); return true; }   // a pre-0.1.78 marker: its clock starts now
+        if (now - at < WITHDRAW_MARKER_MS) return true;
+        withdrawalLanded(m);   // the order has aged off the book by itself
+        return false;
     }
 
-    /** A tombstone for a market that is not active: its parked config (or an empty order), every pair off, my keys. */
-    private Order parkedTombstone(TradingContext m) {
-        Order o;
-        try { o = Order.fromConfigJson(new JSONObject(prefs.getString("market_" + m.key, "{}")).optString("order_config", "")); }
-        catch (Exception e) { o = Order.fromConfigJson(""); }
-        for (Order.Pair p : o.pairs.values()) p.enable = false;
-        o.minimaPublicKey = myPk(); o.ethAddress = wallet.address();
-        return o;
+    /** Re-send the ACTIVE market's unconfirmed withdrawal (each pass) until it lands; a live re-publish supersedes it.
+     *  Only the active market: the vendored Order and SwapOrderBook are bound to TradingContext.active() (an order built
+     *  now is the active market's and posts to the active book), so another market's tombstone cannot be sent from here —
+     *  its marker is kept and re-sent in-market once that market is active again, or ages out. */
+    void flushWithdrawal() {
+        if (switching || !tombstones.ready(ids.get(market)) || !withdrawalPending(market)) return;
+        if (prefs.getBoolean("auto_publish", false)) { withdrawalLanded(market); return; }
+        if (!PublishGate.tryAcquire(PublishGate.ORDER)) return;
+        final TradingContext m = market;
+        tombstones.send(ids.get(m), tombstone(), new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) { PublishGate.release(PublishGate.ORDER); withdrawalLanded(m); changed(); }
+            @Override public void onFailed(String message) { PublishGate.release(PublishGate.ORDER); }
+        });
     }
 
     /** The ACTIVE market has a maker side configured or kept live: a liquid saved order (it arms the responder), the
@@ -583,9 +583,14 @@ public final class DoorHost {
     /** Everything a publish signs with is ready: the active market's comms identity, the swap key, the ETH address. */
     boolean makerReady() { return ids.get(market) != null && myPk() != null && wallet.ready(); }
 
-    /** The responder guard: AtomiX's armSafe order (empty while a pegged order is withdrawn) — or EMPTY while gated or
-     *  halted, so every take declines. */
-    public Order armMaker() { Order o = gated() || IdentityWatch.halted() ? new Order() : PriceOracle.armSafe(loadOrder(), prefs); engine.setMyOrder(o); return o; }
+    /** The responder guard: AtomiX's armSafe order (empty while a pegged order is withdrawn) — or EMPTY while gated,
+     *  halted, or not kept published (auto_publish off: a saved, unpublished, unpegged ladder must never answer a take at
+     *  stale prices), so every take declines. */
+    public Order armMaker() {
+        Order o = gated() || IdentityWatch.halted() || !prefs.getBoolean("auto_publish", false) ? new Order() : PriceOracle.armSafe(loadOrder(), prefs);
+        engine.setMyOrder(o);
+        return o;
+    }
 
     /** The Activity saw the gate open or shut: re-arm the responder guard and withdraw a live market NOW, not next pass. */
     public void gateChanged() {
@@ -604,6 +609,9 @@ public final class DoorHost {
         if (!TradingGate.conflict(app) || switching) return;
         if (prefs.getBoolean("auto_publish", false) && tombstones.ready(ids.get(market))) {
             prefs.edit().putBoolean("auto_publish", false).apply();   // kill-safe first
+            Order off = loadOrder();          // persisted disabled, exactly as withdrawOrder: a reopened gate re-arms nothing
+            for (Order.Pair p : off.pairs.values()) p.enable = false;
+            saveOrder(off);
             PublishGate.bumpGen();            // an in-flight publish must not re-list it
             engine.setMyOrder(new Order());   // disarm now, even if the tombstone fails
             final TradingContext m0 = market;
@@ -1204,14 +1212,7 @@ public final class DoorHost {
             try { amt = new BigDecimal(s.buyAmount).subtract(new BigDecimal(DoorForwards.NOTIFY_AMOUNT)); } catch (Exception e) { done.run("bad amount", null, false); return; }
             if (amt.signum() <= 0) { done.run("nothing to forward", null, false); return; }
             try { f.put("amount", amt.stripTrailingZeros().toPlainString()).put("coin", token); } catch (Exception ignored) {}
-            dnode.cmdR("send amount:" + amt.stripTrailingZeros().toPlainString() + " address:" + to + " tokenid:" + token, new com.eurobuddha.dexicon.NodeApi.Cb() {
-                public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); done.run(null, r == null ? "" : r.optString("txpowid", ""), false); }
-                public void onError(String m) {
-                    // A lost reply to a `send` may still have gone through — never resend that automatically.
-                    boolean unknown = m != null && (m.contains("may still complete") || m.contains("didn't respond") || m.contains("Outcome is unknown"));
-                    done.run(m, null, unknown);
-                }
-            });
+            signedSend(node, "send amount:" + amt.stripTrailingZeros().toPlainString() + " address:" + to + " tokenid:" + token, done);
         } else {
             if (!DoorForwards.isEthAddr(to) || !wallet.ready()) { done.run("ETH side not ready", null, false); return; }
             final String amount = s.buyAmount, hash = f.optString("hash");
@@ -1229,5 +1230,27 @@ public final class DoorHost {
             });
         }
     }
-    private interface Done { void run(String err, String tx, boolean uncertain); }
+    interface Done { void run(String err, String tx, boolean uncertain); }
+
+    /** The door forward's `send`. It signs on the node, so it runs behind SignGate like every other signer (CommsTransport,
+     *  MinimaHtlc) — now that fill co-signs run concurrently — freeing the gate first thing in both callbacks; and through
+     *  the comms shim, so its node-picked inputs pass the pool owner-key guard. */
+    static void signedSend(NodeApi node, String cmd, Done done) {
+        com.eurobuddha.comms.SignGate.submit(gate -> node.cmd(cmd, new NodeApi.Cb() {
+            @Override public void onResult(JSONObject j) {
+                gate.free();
+                if (j.optBoolean("status", false)) { JSONObject r = j.optJSONObject("response"); done.run(null, r == null ? "" : r.optString("txpowid", ""), false); return; }
+                String e = j.optString("error", "");
+                if (e.isEmpty()) e = j.optString("message", "");
+                if (e.isEmpty()) { Object r = j.opt("response"); e = r == null ? "command failed" : String.valueOf(r); }
+                done.run(e, null, false);
+            }
+            @Override public void onError(String m) {
+                gate.free();
+                // A lost reply to a `send` may still have gone through — never resend that automatically.
+                boolean unknown = m != null && (m.contains("may still complete") || m.contains("didn't respond") || m.contains("Outcome is unknown"));
+                done.run(m, null, unknown);
+            }
+        }));
+    }
 }

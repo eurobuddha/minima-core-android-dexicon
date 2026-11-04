@@ -148,7 +148,7 @@ public class DexiconPoolsKeepAliveTest {
     @Test public void ownerAddressesNameEveryRecipesPayoutAddress() {
         assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
         assertTrue(DexiconPools.ownerAddresses(ctx).contains(pool(A).oadr.toLowerCase()));
-        assertTrue(DexiconPools.ownerAddresses(null).isEmpty());
+        assertNull("fails closed: no context, no answer", DexiconPools.ownerAddresses(null));
     }
 
     /** C: coins Dexicon holds (order backing, a trade's inputs) are reserved in PandaPools' own CoinLock. */

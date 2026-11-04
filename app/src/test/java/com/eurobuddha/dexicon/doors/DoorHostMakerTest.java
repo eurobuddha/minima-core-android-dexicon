@@ -40,6 +40,7 @@ public class DoorHostMakerTest {
 
     @Test public void armsTheSavedOrder() {
         assertFalse(host.gated());
+        host.prefs().edit().putBoolean("auto_publish", true).commit();   // armed only while kept published (0.1.78)
         assertTrue("the responder guard carries my ladder", host.armMaker().hasLiquidity());
         assertTrue("a saved liquid order counts as a live maker market", host.makerLive());
     }

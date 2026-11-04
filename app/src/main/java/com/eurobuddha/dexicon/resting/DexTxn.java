@@ -125,7 +125,7 @@ public class DexTxn {
                 Object st = c == null ? null : c.opt("state");
                 boolean ok = c != null && token.equalsIgnoreCase(c.optString("tokenid")) && id.equalsIgnoreCase(c.optString("coinid"))
                         && !c.optBoolean("spent", false)
-                        && !com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context()).contains(c.optString("address").toLowerCase(java.util.Locale.ROOT))   // Dexicon glue: never a pool owner-key coin
+                        && ownerSafe(c.optString("address"))   // Dexicon glue: never a pool owner-key coin (fails closed)
                         && !(st instanceof org.json.JSONArray && ((org.json.JSONArray) st).length() > 0) && !(st instanceof JSONObject && ((JSONObject) st).length() > 0);
                 BigDecimal v = ok ? coinValue(c) : null;
                 if (v != null && v.signum() > 0) { got.add(c); presetCoins(token, need, ids, i + 1, got, sum.add(v), cb); }
@@ -418,6 +418,11 @@ public class DexTxn {
     public interface CoinsCb { void found(List<JSONObject> coins); }
 
     private static BigDecimal coinValue(JSONObject c) { return FundingCoins.coinValue(c); }
+    /** Dexicon glue: not at a ② pool owner address; false when the owner addresses cannot be read (fail closed). */
+    private boolean ownerSafe(String address) {
+        java.util.Set<String> owners = com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context());
+        return owners != null && !owners.contains(address == null ? "" : address.toLowerCase(java.util.Locale.ROOT));
+    }
 
     public void findCoins(String tokenid, BigDecimal need, CoinsCb cb) {
         findCoins(tokenid, need, java.util.Collections.emptySet(), 8, cb);
@@ -427,7 +432,9 @@ public class DexTxn {
                           int maxInputs, CoinsCb cb) {
         lastFundError = null;
         // Dexicon glue (0.1.74): never a coin at a ② pool's owner payout address — it signs with the pool's one-time owner key.
-        java.util.Set<String> exclude = new java.util.HashSet<>(com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context()));
+        java.util.Set<String> owners = com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context());
+        if (owners == null) { lastFundError = com.eurobuddha.pandapools.DexiconPools.OWNERS_UNREADABLE; cb.found(null); return; }   // fail closed
+        java.util.Set<String> exclude = new java.util.HashSet<>(owners);
         if (excludeAddrsLower != null) exclude.addAll(excludeAddrsLower);
         FundingCoins.select(node::cmd, tokenid, need, exclude, maxInputs, new FundingCoins.Done() {
             public void ok(List<JSONObject> coins, BigDecimal sum) { cb.found(coins); }

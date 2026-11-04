@@ -117,10 +117,55 @@ public final class DexiconPools {
     }
 
     /** Pool owner payout addresses (lower-case, full) of every recipe here: a coin there signs with the pool's one-time owner
-     *  key, so no Dexicon trade, order or self-send may select it. */
+     *  key, so no Dexicon trade, order or self-send may select it. FAILS CLOSED: null when the recipes cannot be read (or
+     *  there is no context) — the caller must then refuse the selection / send, never treat it as "no owner coins". */
     public static Set<String> ownerAddresses(Context c) {
-        if (c == null) return new HashSet<>();
-        try { return OwnPoolStore.ownerAddresses(c.getApplicationContext()); } catch (RuntimeException unreadable) { return new HashSet<>(); }
+        if (c == null) return null;
+        try { return OwnPoolStore.ownerAddresses(c.getApplicationContext()); } catch (RuntimeException unreadable) { return null; }
+    }
+    public static final String OWNERS_UNREADABLE = "Could not read your pool recipes, so a pool owner-key coin cannot be ruled out. Nothing was sent.";
+
+    /** {@code coins} reply rows minus every row at a pool owner address; null when the owner addresses cannot be read. */
+    public static org.json.JSONObject withoutOwnerCoins(Context c, org.json.JSONObject reply) {
+        Set<String> owners = ownerAddresses(c);
+        if (owners == null) return null;
+        Object r = reply == null ? null : reply.opt("response");
+        if (owners.isEmpty() || !(r instanceof org.json.JSONArray)) return reply;
+        try {
+            org.json.JSONArray in = (org.json.JSONArray) r, out = new org.json.JSONArray();
+            for (int i = 0; i < in.length(); i++) {
+                org.json.JSONObject row = in.optJSONObject(i);
+                if (row == null || !owners.contains(low(row.optString("address", "")))) out.put(in.get(i));
+            }
+            return new org.json.JSONObject(reply.toString()).put("response", out);
+        } catch (org.json.JSONException e) { return null; }
+    }
+
+    /**
+     * Before a NODE-PICKED spend of {@code tokenid} (send / consolidate: the node chooses the inputs, so it may take a coin at
+     * a pool owner address and sign with that pool's one-time owner key) — PandaPools' consolidation guard, narrowed to the
+     * pools whose owner address holds sendable coins of that token. {@code cb} gets null (go ahead) or why nothing may be
+     * sent. Fails closed: unreadable recipes or coins refuse.
+     */
+    public static void guardNodePickedSpend(com.eurobuddha.dexicon.NodeApi dex, String tokenid, java.util.function.Consumer<String> cb) {
+        final Context ctx = dex == null ? null : dex.context();
+        final Set<String> owners = ownerAddresses(ctx);
+        if (owners == null) { cb.accept(OWNERS_UNREADABLE); return; }
+        if (owners.isEmpty()) { cb.accept(null); return; }
+        dex.cmd("coins relevant:true sendable:true tokenid:" + tokenid, new com.eurobuddha.dexicon.NodeApi.Cb() {
+            @Override public void onResult(org.json.JSONObject j) {
+                if (!j.optBoolean("status", false)) { cb.accept("Could not read your wallet coins, so a pool owner-key coin cannot be ruled out. Nothing was sent."); return; }
+                Set<String> at = new HashSet<>();
+                for (org.json.JSONObject row : com.eurobuddha.dexicon.NodeApi.rows(j)) { String a = low(row.optString("address", "")); if (owners.contains(a)) at.add(a); }
+                if (at.isEmpty()) { cb.accept(null); return; }
+                final List<Pool> pools = new ArrayList<>();
+                for (Pool p : OwnPoolStore.all(ctx)) if (p.oadr != null && at.contains(low(p.oadr))) pools.add(p);
+                NodeApi pp = new NodeApi(dex);
+                OwnerKeyRecovery.checkConsolidation(pp::cmd, () -> pools, why -> cb.accept(why == null ? null
+                        : "Nothing was sent: the node would choose the coins itself, and your wallet holds pool owner-key coins of this token.\n\n" + why));
+            }
+            @Override public void onError(String m) { cb.accept("Could not read your wallet coins (" + m + "). Nothing was sent."); }
+        });
     }
 
     /** Hold these wallet coins in PandaPools' own CoinLock (its ~3 min selection reservation), so ② pool coin selection

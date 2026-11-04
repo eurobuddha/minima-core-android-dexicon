@@ -90,7 +90,9 @@ public final class MakerEngine {
     public static void walletCoins(NodeApi node, String tokenid, CoinsCb cb) {
         simpleScripts(node, (e0, scripts) -> {
             if (e0 != null) { cb.done(e0, null); return; }
-            for (String owner : com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context())) scripts.remove(owner);
+            java.util.Set<String> owners = com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context());
+            if (owners == null) { cb.done(com.eurobuddha.pandapools.DexiconPools.OWNERS_UNREADABLE, null); return; }   // fail closed
+            for (String owner : owners) scripts.remove(owner);
             node.cmdR("coins relevant:true checkmempool:true tokenid:" + tokenid, new NodeApi.Cb() {   // a coin a pending txn spends is already gone
                 public void onResult(JSONObject j) {
                     List<Coin> out = new ArrayList<>();
