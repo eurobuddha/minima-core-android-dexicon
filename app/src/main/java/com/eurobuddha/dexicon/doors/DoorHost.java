@@ -547,6 +547,116 @@ public final class DoorHost {
         });
     }
 
+    // ------------------------------------------------------------------ ① Market's own actions (AtomiX MainActivity)
+
+    /** One status line back to the page (AtomiX's orderStatus), already in Dexicon's words (MxUSD). */
+    public interface Status { void say(String s); }
+
+    /** Why nothing may be published right now, or null. */
+    private String makerBlock() {
+        if (gated()) return "One trading app per phone: AtomiX or PandaPools is present, so Dexicon publishes nothing.";
+        if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
+        if (!ready() || !makerReady()) return "Still connecting to your node… " + bootNote();
+        return null;
+    }
+
+    /** Save the editor's order and arm the responder guard with it at once (AtomiX saveOrder). */
+    public void saveOrder(Order o) {
+        prefs.edit().putString("order_config", Order.toConfigJson(o)).apply();
+        armMaker();
+    }
+
+    /** AtomiX publishOrder: a pegged order grabs a live price first so a tapped Publish never quotes a stale one. */
+    public void publishOrder(Status st) {
+        String no = makerBlock();
+        if (no != null) { st.say(no); return; }
+        if (prefs.getBoolean(PriceOracle.P_ENABLE, false) && !PriceOracle.fresh()) {
+            st.say("Fetching " + PriceOracle.source() + " price…");
+            final TradingContext m = market;
+            final long generation = PublishGate.gen();
+            io.execute(() -> { PriceOracle.refreshSync(); h.post(() -> {
+                if (m != market || generation != PublishGate.gen()) { st.say(SwapOrderBook.MARKET_ERROR); return; }
+                publishOrderNow(st);
+            }); });
+            return;
+        }
+        publishOrderNow(st);
+    }
+
+    private void publishOrderNow(Status st) {
+        String no = makerBlock();
+        if (no != null) { st.say(no); return; }
+        final Order o = loadOrder();
+        o.minimaPublicKey = myPk(); o.ethAddress = wallet.address(); o.usdtAvail = usdtAvail();
+        boolean any = false;
+        for (Order.Pair p : o.pairs.values()) if (p.enable) { any = true; break; }
+        if (!any) { st.say("Enable your order in the editor first."); return; }
+        final int peg = PriceOracle.applyPeg(o, prefs);
+        if (peg == PriceOracle.PEG_STALE) { st.say("✗ " + PriceOracle.source() + " price unavailable — can't peg yet (no price)"); return; }
+        final boolean wide = peg == PriceOracle.PEG_WIDE;
+        final double pegMid = PriceOracle.appliedMid();
+        PublishGate.bumpGen();   // manual supersedes auto
+        final long gen = PublishGate.gen();
+        prefs.edit().putBoolean("auto_publish", true).apply();   // opt in to keep it live + fresh
+        st.say("Publishing your order…");
+        final CommsIdentity id = ids.get(market);
+        engine.ensureLadderCoins(o, !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE, () -> engine.publishFresh(ls(), id, o, gen, new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) {
+                if (gen != PublishGate.gen()) return;
+                prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).apply();
+                if (peg == PriceOracle.PEG_APPLIED || wide) PriceOracle.commitPeg(prefs, pegMid, wide);
+                engine.setMyOrder(o);
+                st.say(!o.hasLiquidity() ? "✓ Order withdrawn — removed from the book" : wide
+                        ? "✓ Order live — pegged to " + PriceOracle.source() + " (feed stale — defensive spread; auto-tightens when it recovers)"
+                        : peg == PriceOracle.PEG_APPLIED ? "✓ Order live — pegged to " + PriceOracle.source() + ", auto-reprices"
+                        : "✓ Order published — auto-refreshes every 30 min");
+                changed();
+                h.postDelayed(() -> scanBooks(DoorHost.this::changed), 2000);
+            }
+            @Override public void onFailed(String message) { st.say("Publish failed: " + mx(message)); }
+        }));
+    }
+
+    /** AtomiX pushOrderEdit: a saved edit reaches the book NOW. A liquid order re-publishes; an emptied/disabled one goes
+     *  out as a TOMBSTONE and stops auto-publishing. Withdrawing is allowed even while gated. */
+    public void pushOrderEdit(final Order o, Status st) {
+        final boolean live = o.hasLiquidity();
+        if (!live) prefs.edit().putBoolean("auto_publish", false).apply();   // first, kill-safe
+        if (live) { String no = makerBlock(); if (no != null) { st.say("Saved. " + no); return; } }
+        else if (!makerReady()) { st.say("Saved and switched off. The withdrawal goes out once the node is connected."); return; }
+        o.minimaPublicKey = myPk(); o.ethAddress = wallet.address(); o.usdtAvail = usdtAvail();
+        final int peg = live ? PriceOracle.applyPeg(o, prefs) : PriceOracle.PEG_OFF;
+        if (peg == PriceOracle.PEG_STALE) { st.say("Saved. " + PriceOracle.source() + " price unavailable — publishes when a price arrives."); return; }
+        final boolean wide = peg == PriceOracle.PEG_WIDE;
+        final double pegMid = PriceOracle.appliedMid();
+        PublishGate.bumpGen();
+        final long gen = PublishGate.gen();
+        st.say(live ? "Updating your order…" : "Withdrawing your order…");
+        final CommsIdentity id = ids.get(market);
+        final CommsTransport.SendCb cb = new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) {
+                if (gen != PublishGate.gen()) return;
+                prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).apply();
+                if (peg == PriceOracle.PEG_APPLIED || wide) PriceOracle.commitPeg(prefs, pegMid, wide);
+                engine.setMyOrder(live ? o : new Order());
+                st.say(live ? "✓ Order updated" : "✓ Order withdrawn — removed from the book");
+                changed();
+                h.postDelayed(() -> scanBooks(DoorHost.this::changed), 2000);
+            }
+            @Override public void onFailed(String message) { st.say((live ? "Update" : "Withdraw") + " failed: " + mx(message)); }
+        };
+        if (live) engine.ensureLadderCoins(o, !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE, () -> engine.publishFresh(ls(), id, o, gen, cb));
+        else SwapOrderBook.publish(node, ls(), id, o, cb);   // tombstone: no coins/balance read needed
+    }
+
+    /** Withdraw my market: the saved order disabled, armed empty at once, tombstoned on the book. */
+    public void withdrawOrder(Status st) {
+        Order o = loadOrder();
+        for (Order.Pair p : o.pairs.values()) p.enable = false;
+        saveOrder(o);
+        pushOrderEdit(o, st);
+    }
+
     /** SwapService.maybeRepublishOtc: the OTC offer ages off the board (~1 h) exactly like the order. */
     private void maybeRepublishOtc() {
         if (IdentityWatch.halted() || gated() || !makerReady()) return;
