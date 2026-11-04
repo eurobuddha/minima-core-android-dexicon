@@ -182,26 +182,21 @@ public class NodeApi {
     static boolean isConsolidate(String command) { return command != null && command.trim().toLowerCase(java.util.Locale.ROOT).startsWith("consolidate"); }
 
     private void send(String command, Cb cb) {
-        if (isConsolidate(command)) {
-            final Runnable unlock = com.eurobuddha.dexicon.WalletLock.take(com.eurobuddha.dexicon.WalletLock.tokenOf(command));
-            if (unlock == null) { if (cb != null) cb.onError(com.eurobuddha.dexicon.WalletLock.BUSY); return; }
-            final Cb inner = cb;
-            cb = new Cb() {   // released once, even if the callback throws and the error path runs too
-                public void onResult(JSONObject j) { unlock.run(); if (inner != null) inner.onResult(j); }
-                public void onError(String m) { unlock.run(); if (inner != null) inner.onError(m); }
-            };
-        }
         if (signs(command)) {   // the ONE process-wide signing queue (Dexicon / AtomiX SignGate): a pool signature never
             final Cb out = cb;   // interleaves with a door claim or a fill co-sign on the same one-time keys (code review B3)
             com.eurobuddha.dexicon.SignGate.submit(release -> {
                 java.util.concurrent.atomic.AtomicBoolean freed = new java.util.concurrent.atomic.AtomicBoolean();
                 Runnable free = () -> { if (freed.compareAndSet(false, true)) release.free(); };
+                // a node-picked consolidate also takes AtomiX's wallet lock — here, at the front of the queue, so it is never
+                // held while waiting behind other signers (a maker would decline buys for that whole wait)
+                Runnable unlock = isConsolidate(command) ? com.eurobuddha.dexicon.WalletLock.take(com.eurobuddha.dexicon.WalletLock.tokenOf(command)) : () -> {};
+                if (unlock == null) { free.run(); if (out != null) out.onError(com.eurobuddha.dexicon.WalletLock.BUSY); return; }
                 try {
-                    sendUnlocked(command, new Cb() {
-                        public void onResult(JSONObject j) { free.run(); if (out != null) out.onResult(j); }
-                        public void onError(String m) { free.run(); if (out != null) out.onError(m); }
+                    sendUnlocked(command, new Cb() {   // each released once, even if a callback throws and the error path runs too
+                        public void onResult(JSONObject j) { free.run(); unlock.run(); if (out != null) out.onResult(j); }
+                        public void onError(String m) { free.run(); unlock.run(); if (out != null) out.onError(m); }
                     });
-                } catch (RuntimeException e) { free.run(); throw e; }
+                } catch (RuntimeException e) { free.run(); unlock.run(); throw e; }
             });
             return;
         }

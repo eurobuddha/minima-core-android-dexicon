@@ -55,10 +55,12 @@ final class WalletTools {
     }
 
     private static void run(MainActivity act, String tokenid, String cmd, String label) {
-        Runnable unlock = WalletLock.take(tokenid);   // the node picks the coins: never one an AtomiX swap is locking
-        if (unlock == null) { message(act, "Nothing sent", WalletLock.BUSY); return; }
         act.toast(label + " — signing…");
-        SignGate.submit(release -> act.nodeApi().cmdR(cmd, new NodeApi.Cb() {
+        SignGate.submit(release -> {
+            // AtomiX's wallet lock only now, at the front of the signing queue: never held while waiting behind other signers
+            Runnable unlock = WalletLock.take(tokenid);   // the node picks the coins: never one an AtomiX swap is locking
+            if (unlock == null) { release.free(); message(act, "Nothing sent", WalletLock.BUSY); return; }
+            act.nodeApi().cmdR(cmd, new NodeApi.Cb() {
             public void onResult(JSONObject j) {
                 release.free(); unlock.run();
                 JSONObject r = j.optJSONObject("response");
@@ -68,7 +70,8 @@ final class WalletTools {
                         + (id.isEmpty() ? "" : "\n\ntxpow " + id));
             }
             public void onError(String m) { release.free(); unlock.run(); message(act, label + " failed", m); }
-        }));
+            });
+        });
     }
 
     private static void message(MainActivity act, String title, String text) {
