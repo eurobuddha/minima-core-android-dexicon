@@ -66,6 +66,11 @@ public final class DoorsTab extends LinearLayout {
         halt = t("", Design.RED(), 10.5f, Design.sansBold()); halt.setVisibility(GONE);
         addView(halt);
 
+        Ui.why(this, "WHY THIS STEP", "Dexicon's exchange (③) trades MINIMA against MxUSD, Minima's own dollar. If your dollars are USDT on "
+                + "Ethereum, swap them for MxUSD here first. Both sides lock their funds in a time-locked contract; if anything stalls, "
+                + "you are refunded automatically. Already hold MxUSD? Go straight to ③. Just swapping? You can stop here: your MxUSD "
+                + "stays in your Minima wallet.");
+
         LinearLayout dep = card(this);
         dep.addView(Ui.copyRow(act, "YOUR ETHEREUM WALLET", "ETH deposit address", host::ethAddress));
         ethAddr = t("—", Design.TEXT(), 12f, Design.mono());

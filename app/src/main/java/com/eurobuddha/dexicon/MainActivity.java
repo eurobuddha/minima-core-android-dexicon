@@ -70,8 +70,14 @@ public class MainActivity extends AppCompatActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6;
-    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "ATOMIX", "RELAYS"};
+    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7;
+    /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange. Each room's own pages
+     *  sit in the row under the rail; ACTIVITY / ASSETS / SETTINGS are shared by all three at the bottom. */
+    static final String[] ROOMS = {"① DOLLARS IN", "② POOLS", "③ EXCHANGE"};
+    static final String[] ROOM_SUBS = {"AtomiX · USDT ⇄ MxUSD", "optional", "MINIMA / MxUSD"};
+    static final int[][] ROOM_PAGES = {{TAB_DOORS}, {TAB_POOLS}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
+    private static final int[] SHARED = {TAB_ACTIVITY, TAB_ASSETS, TAB_RELAYS};
+    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
@@ -114,11 +120,16 @@ public class MainActivity extends AppCompatActivity {
     private AssetsTab assetsTab;
     private RelaysTab relaysTab;
     private DoorsTab doorsTab;
+    private PoolsTab poolsTab;
     private LinearLayout content;          // the visible page(s): one, or two side by side on a wide screen
     private ScrollView[] panes;
-    private LinearLayout tabBar;
+    private LinearLayout tabBar, rail, subBar;
+    private final TextView[] tabBtn = new TextView[TAB_NAMES.length];
+    private final TextView[] roomBtn = new TextView[3];
+    private int room = 0;
+    private final int[] roomLast = {TAB_DOORS, TAB_POOLS, TAB_TRADE};
     private TextView pairPill, blockPill, stageTv;
-    private int tab = TAB_TRADE, tab2 = -1;   // tab2: the right-hand page when two are open side by side (wide only)
+    private int tab = TAB_DOORS, tab2 = -1;   // every launch opens on ① (owner, 4 Nov 2026)   // tab2: the right-hand page when two are open side by side (wide only)
     private int tabsDown; private int heldTab = -1; private boolean pairMade;
 
     private final Runnable pollTask = new Runnable() {
@@ -941,10 +952,30 @@ public class MainActivity extends AppCompatActivity {
         nodeRow.addView(blockPill, bp);
         root.addView(nodeRow);
 
+        rail = new LinearLayout(this);
+        rail.setPadding(pad, 0, pad, Design.dp(this, 6));
+        for (int r = 0; r < 3; r++) {
+            final int rr = r;
+            TextView b = new TextView(this);
+            b.setText(ROOMS[r] + "\n" + ROOM_SUBS[r]); b.setTextSize(10.5f); b.setTypeface(Design.sansBold()); b.setGravity(Gravity.CENTER);
+            b.setMaxLines(2); b.setMinHeight(Design.dp(this, 48)); b.setPadding(Design.dp(this, 4), Design.dp(this, 6), Design.dp(this, 4), Design.dp(this, 6));
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(b, 7, 11, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+            b.setOnClickListener(v -> selectTab(roomLast[rr]));
+            Design.pressable(b);
+            LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            if (r > 0) rp.leftMargin = Design.dp(this, 6);
+            rail.addView(b, rp);
+            roomBtn[r] = b;
+        }
+        root.addView(rail);
+        subBar = new LinearLayout(this);
+        subBar.setPadding(pad, 0, pad, Design.dp(this, 4));
+        root.addView(subBar);
+
         content = new LinearLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this);
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsTab = new PoolsTab(this);
         View[] tv = tabViews();
         panes = new ScrollView[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
@@ -967,6 +998,7 @@ public class MainActivity extends AppCompatActivity {
         for (int i = 0; i < TAB_NAMES.length; i++) {
             final int idx = i;
             TextView t = new TextView(this);
+            tabBtn[i] = t;
             t.setText(TAB_NAMES[i]); t.setTextSize(10f); t.setTypeface(Design.sansBold()); t.setGravity(Gravity.CENTER); t.setMaxLines(1);
             // Seven tabs: a narrow phone (and the Fold's cover screen) shrinks the labels to fit (min 6sp); wide screens keep 10sp.
             androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(t, 6, 10, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
@@ -987,7 +1019,8 @@ public class MainActivity extends AppCompatActivity {
                 return false;
             });
             t.setOnClickListener(v -> { if (!pairMade) selectTab(idx); });
-            tabBar.addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            // the room's own pages go in the row under the rail; the shared pages in the bottom bar
+            (isShared(idx) ? tabBar : subBar).addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         }
         root.addView(tabBar);
         return root;
@@ -1014,11 +1047,20 @@ public class MainActivity extends AppCompatActivity {
         View[] views = tabViews();
         for (int i = 0; i < views.length; i++) views[i].setVisibility(i == left || i == right ? View.VISIBLE : View.GONE);
         trade.setSolo(right < 0);
-        for (int i = 0; i < tabBar.getChildCount(); i++) {
-            TextView t = (TextView) tabBar.getChildAt(i);
+        int r = roomOf(left);
+        if (r >= 0) { room = r; roomLast[r] = left; }
+        for (int i = 0; i < tabBtn.length; i++) {
+            TextView t = tabBtn[i];
             boolean on = i == left || i == right;
             t.setTextColor(on ? Design.ON_ACCENT() : Design.DIM());
             t.setBackground(on ? Design.roundBg(this, Design.ACCENT(), 10) : null);
+            if (!isShared(i)) t.setVisibility(roomOf(i) == room ? View.VISIBLE : View.GONE);
+        }
+        subBar.setVisibility(ROOM_PAGES[room].length > 1 ? View.VISIBLE : View.GONE);   // a one-page room needs no row
+        for (int i = 0; i < 3; i++) {
+            boolean on = i == room;
+            roomBtn[i].setTextColor(on ? Design.ON_ACCENT() : Design.DIM());
+            roomBtn[i].setBackground(on ? Design.roundBg(this, Design.ACCENT(), 12) : Design.stroked(this, Design.SURFACE2(), 12));
         }
         repaint();
     }
@@ -1029,7 +1071,10 @@ public class MainActivity extends AppCompatActivity {
         if (tabBar != null && tab2 >= 0 && !com.eurobuddha.dexicon.ui.Wide.on(this)) selectTab(tab);
     }
 
-    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab}; }
+    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, poolsTab}; }
+
+    static boolean isShared(int t) { for (int s : SHARED) if (s == t) return true; return false; }
+    static int roomOf(int t) { for (int r = 0; r < ROOM_PAGES.length; r++) for (int p : ROOM_PAGES[r]) if (p == t) return r; return -1; }
 
     /** The live line for the followed ACTIVITY row; null once it has been settled for two minutes. */
     private String liveLine() {
@@ -1077,6 +1122,7 @@ public class MainActivity extends AppCompatActivity {
             case TAB_HISTORY: historyTab.render(); break;
             case TAB_ASSETS: assetsTab.render(); break;
             case TAB_DOORS: doorsTab.render(); break;
+            case TAB_POOLS: poolsTab.render(); break;
             default: relaysTab.render();
         }
     }

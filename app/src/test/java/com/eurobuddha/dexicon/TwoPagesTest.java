@@ -29,6 +29,7 @@ public class TwoPagesTest {
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
         View root = a.getWindow().getDecorView();
+        DoorsTabSmokeTest.find(root, DoorsTabSmokeTest.room(2)).performClick();   // ③ EXCHANGE: its pages show in the row under the rail
         View activity = DoorsTabSmokeTest.find(root, "ACTIVITY"), history = DoorsTabSmokeTest.find(root, "HISTORY"), assets = DoorsTabSmokeTest.find(root, "ASSETS");
 
         touch(activity, MotionEvent.ACTION_DOWN);           // hold ACTIVITY…

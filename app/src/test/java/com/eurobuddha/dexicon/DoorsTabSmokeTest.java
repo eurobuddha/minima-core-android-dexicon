@@ -21,6 +21,8 @@ public class DoorsTabSmokeTest {
         if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) { TextView t = find(((ViewGroup) v).getChildAt(i), text); if (t != null) return t; }
         return null;
     }
+    static String room(int r) { return MainActivity.ROOMS[r] + "\n" + MainActivity.ROOM_SUBS[r]; }
+
     @Test public void doorsTabRendersBothRoutes() {
         // no node in a JVM test: the IPC transport's bindService must not deliver a null binder
         android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
@@ -28,8 +30,14 @@ public class DoorsTabSmokeTest {
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
         View root = a.getWindow().getDecorView();
-        for (String tab : new String[]{"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "ATOMIX", "RELAYS"}) assertNotNull(tab, find(root, tab));
-        find(root, "ATOMIX").performClick();
+        for (String tab : new String[]{"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SETTINGS", room(0), room(1), room(2)}) assertNotNull(tab, find(root, tab));
+        assertTrue("every launch opens on ① Dollars in", find(root, "YOUR ETHEREUM WALLET").isShown());
+        assertNotNull("① explains why it comes first", find(root, "WHY THIS STEP  ▾"));
+        find(root, room(1)).performClick();
+        assertTrue("② is optional: Skip is the main button", find(root, "Skip — go to the exchange →").isShown());
+        find(root, "Skip — go to the exchange →").performClick();
+        assertTrue("Skip lands on ③", find(root, "TRADE").isShown());
+        find(root, room(0)).performClick();
         assertNotNull("ENTRY pane title", find(root, "ENTRY — USDT → MxUSD or MINIMA"));
         assertNotNull("MxUSD route card", find(root, "● USDT → MxUSD"));
         assertNotNull("MINIMA route card", find(root, "○ USDT → MINIMA"));
@@ -78,7 +86,7 @@ public class DoorsTabSmokeTest {
         assertNotNull(find(root, "YOUR TRADING ID"));
         assertNotNull(find(root, "RECEIVE MINIMA OR MxUSD"));
 
-        find(root, "ATOMIX").performClick();
+        find(root, room(0)).performClick();
         assertNotNull(find(root, "YOUR ETHEREUM WALLET"));
         assertNotNull(find(root, "How this works ▸"));
     }

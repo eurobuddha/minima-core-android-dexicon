@@ -97,6 +97,22 @@ public final class Ui {
         return row;
     }
 
+    /** The explainer card every journey step carries: a title that folds a short "why" paragraph. Open until the user
+     *  folds it (the choice is remembered per title). */
+    public static LinearLayout why(LinearLayout parent, String title, String body) {
+        Context c = parent.getContext();
+        LinearLayout card = card(parent);
+        TextView head = label(c, title);
+        head.setMinHeight(Design.dp(c, 32)); head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView p = para(c, body);
+        card.addView(head); card.addView(p);
+        String key = "why_closed_" + title;
+        Runnable paint = () -> { boolean closed = isOpen(c, key); p.setVisibility(closed ? View.GONE : View.VISIBLE); head.setText(title + (closed ? "  ▸" : "  ▾")); };
+        head.setOnClickListener(v -> { setOpen(c, key, !isOpen(c, key)); paint.run(); });
+        paint.run();
+        return card;
+    }
+
     /** A plain-English paragraph (sans, DIM, 1.4 line spacing). */
     public static TextView para(Context c, String s) {
         TextView t = text(c, s, 12.5f, Design.DIM(), Design.sans());
