@@ -273,6 +273,11 @@ public final class MarketTab extends LinearLayout {
             double slip = sell ? 0 : Math.max(0, price / q.bestAsk - 1);   // a buy fills at or below the tapped price
             DoorPlan.Plan plan = DoorPlan.buildSweepPlan(one, sell, raw, slip, host.myPublicId(market));
             if (plan.legs.isEmpty()) { bad(out, "below-min".equals(plan.stopReason) ? "That's below the maker's minimum trade size." : "That level can't fill this right now."); return; }
+            // AtomiX takes the tapped level: never a part priced worse than the tap (a sell could add a dust part at a lower
+            // bid), never a partial fill passed off as the whole
+            for (DoorPlan.Leg leg : plan.legs)
+                if (sell ? leg.price < price - 1e-12 : leg.price > price + 1e-12) { bad(out, "That maker can't fill " + raw + " " + c + " at " + fmtPrice(price) + " right now — try a smaller amount."); return; }
+            if (plan.partial) { bad(out, "That level can fill only " + plan.filledMinima + " " + c + " right now — enter that or less."); return; }
             String err = DoorsTab.fundsCheck(host, plan, "", sell ? 0 : slip);
             if (!err.isEmpty()) { bad(out, err); return; }
             err = host.take(market, plan, "", new DoorHost.Progress() {
