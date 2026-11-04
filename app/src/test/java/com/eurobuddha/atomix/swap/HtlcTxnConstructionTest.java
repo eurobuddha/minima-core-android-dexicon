@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.96 app/src/test/java/com/eurobuddha/atomix/swap/HtlcTxnConstructionTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.97 app/src/test/java/com/eurobuddha/atomix/swap/HtlcTxnConstructionTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import static org.junit.Assert.assertEquals;
@@ -190,6 +190,10 @@ public class HtlcTxnConstructionTest {
         assertTrue("notify carries the coin's own token", notify.contains("tokenid:" + TOKEN));
 
         assertTrue("change goes back to me", change.contains("address:" + MY_ADDR));
+        // 0.1.97: the coin paid to me is a PLAIN wallet coin (stateless wallets — PandaPools — can spend it); the notify
+        // keeps the state the script's VERIFYOUT(... TRUE) demands
+        assertTrue("payout is stateless", change.contains("storestate:false"));
+        assertFalse("the notify keeps its state", notify.contains("storestate:false"));
         assertTrue("change = tokenamount(0.15) - 0.0001 notify = 0.1499 — proves the coloured-token VALUE "
                         + "was read (tokenamount), not the decoy `amount` (0.05, which would give 0.0499)",
                 change.contains("amount:0.1499 "));
@@ -242,6 +246,7 @@ public class HtlcTxnConstructionTest {
         assertEquals("output value == the coin's whole value", 0,
                 amountOf(outs.get(0)).compareTo(new BigDecimal("0.15")));
         assertTrue("refund uses the coin's own token", outs.get(0).contains("tokenid:" + TOKEN));
+        assertTrue("0.1.97: the refunded coin is a plain wallet coin", outs.get(0).contains("storestate:false"));
         assertTrue("must sign with the owner key from state[0] (the script's refund signer)",
                 contains(commands, "txnsign", "publickey:0x0FFEC0DE"));
         assertTrue("must actually broadcast (txnpost) and clean up (txndelete)",

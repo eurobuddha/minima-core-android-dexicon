@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.96 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.97 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -512,8 +512,10 @@ public final class MinimaHtlc {
         seq.add("txninput id:" + id + " coinid:" + coinid);
         // notify coin MUST be output 0 (the script's VERIFYOUT(@INPUT 0xFFEEDD9999 ...))
         seq.add("txnoutput id:" + id + " tokenid:" + tokenid + " amount:0.0001 address:" + NOTIFY);
-        // skip the change output for a dust-only lock (amount == 0.0001 → change == 0)
-        if (positive(change)) seq.add("txnoutput id:" + id + " tokenid:" + tokenid + " amount:" + change + " address:" + myAddress);
+        // skip the change output for a dust-only lock (amount == 0.0001 → change == 0). storestate:false: only output 0 (the
+        // notify) must keep the state (VERIFYOUT ... TRUE); the coin paid to me must be a PLAIN wallet coin, or a wallet that
+        // spends only stateless coins (PandaPools, PandaDEX) cannot use what this swap delivered (owner, 4 Nov 2026).
+        if (positive(change)) seq.add("txnoutput id:" + id + " tokenid:" + tokenid + " amount:" + change + " address:" + myAddress + " storestate:false");
         seq.add("txnstate id:" + id + " port:100 value:" + secret);
         seq.add("txnstate id:" + id + " port:101 value:" + hash);
         seq.add("txnstate id:" + id + " port:102 value:[" + owner + "]");
@@ -545,7 +547,7 @@ public final class MinimaHtlc {
         List<String> seq = new ArrayList<>();
         seq.add("txncreate id:" + id);
         seq.add("txninput id:" + id + " coinid:" + coinid);
-        seq.add("txnoutput id:" + id + " tokenid:" + tokenid + " amount:" + amount + " address:" + myAddress);
+        seq.add("txnoutput id:" + id + " tokenid:" + tokenid + " amount:" + amount + " address:" + myAddress + " storestate:false");   // a plain wallet coin back
         // sign with the coin's owner key (SIGNEDBY(owner)) — one of my 64 defaults, whichever locked it.
         seq.add("txnsign id:" + id + " publickey:" + owner);
         addValidation(seq, id);
