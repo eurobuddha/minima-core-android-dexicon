@@ -66,18 +66,18 @@ import java.util.concurrent.Executors;
  * clock, a continuous relay long-poll for the book while foreground, immediate repaint after every action, only the
  * visible tab renders. The maker side lives in {@link MakerService}; this Activity is the TAKER and the order desk.
  */
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9;
+    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9, TAB_PSWAP = 10;
     /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange. Each room's own pages
      *  sit in the row under the rail; ACTIVITY / ASSETS / SETTINGS are shared by all three at the bottom. */
     static final String[] ROOMS = {"① DOLLARS IN", "② POOLS", "③ EXCHANGE"};
     static final String[] ROOM_SUBS = {"AtomiX · USDT ⇄ ", "optional", "MINIMA / MxUSD"};   // ① ends with the active market
-    static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_POOLS}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
+    static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_PSWAP, TAB_POOLS}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
     private static final int[] SHARED = {TAB_ACTIVITY, TAB_ASSETS, TAB_RELAYS};
-    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS", "MARKET", "OTC"};
+    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS", "MARKET", "OTC", "SWAP"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
@@ -128,6 +128,7 @@ public class MainActivity extends AppCompatActivity {
     private RelaysTab relaysTab;
     private DoorsTab doorsTab;
     private PoolsTab poolsTab;
+    private PoolSwapTab poolSwapTab;   // ② Swap: PandaPools' SwapView (vendored), framed by Dexicon's explainer
     private MarketTab marketTab;
     private OtcTab otcTab;
     private LinearLayout content;          // the visible page(s): one, or two side by side on a wide screen
@@ -188,10 +189,7 @@ public class MainActivity extends AppCompatActivity {
             handoverAt = savedInstanceState.getLong("ho_at");
         }
         com.eurobuddha.dexicon.doors.DoorHost.get(this).applyLaunchRule();   // MxUSD every launch, unless MINIMA is live (Q1)
-        chromeRoot = buildChrome();
-        selectTab(tab);
-        applyGate();
-
+        // The node first: ② Pools' vendored PandaPools screens capture the pool engine (on this ONE connection) when built.
         node = new NodeApi(this, enabled -> {
             paired = enabled; pairingKnown = true;
             if (enabled) onPaired();
@@ -203,6 +201,12 @@ public class MainActivity extends AppCompatActivity {
         restingTxn = new DexTxn(node);
         restingRepo.subscribe((orders, syncing) -> repaint());
         poolRepo.subscribe((pools, syncing) -> repaint());
+        initPools(node);
+        chromeRoot = buildChrome();
+        selectTab(tab);
+        if (getIntent() != null && getIntent().getIntExtra(EXTRA_POOLS_PAGE, -1) >= 0) goToTab(getIntent().getIntExtra(EXTRA_POOLS_PAGE, -1));   // a pool notification
+        applyGate();
+
         changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { followTake(); settleStage(); repaint(); retryIfDue(); restIfDue(); warmWallet(); } };
         ContextCompat.registerReceiver(this, changedReceiver, new IntentFilter(MakerService.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
         nodeReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { if (paired) { readBalances(); readBlock(); } } };
@@ -222,6 +226,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void onPaired() {
         TradingGate.checkMiniHub(this, node, this::applyGate);
+        poolsPaired();   // ② Pools: PandaPools' boot (sentinel untrack, re-track my pools, foreign-tracking hygiene)
         readBalances(); readBlock();
         if (me == null) deriveIdentity();
         refreshResting();
@@ -250,7 +255,7 @@ public class MainActivity extends AppCompatActivity {
 
     Map<String, Order5> restingBook() { return restingRepo == null || !restingOn() ? java.util.Collections.emptyMap() : restingRepo.book(); }
     /** PandaDEX MainActivity.pools(): only a current scan is tradeable liquidity. */
-    List<Pool> pools() { return poolRepo == null || !restingOn() || !poolRepo.current() ? java.util.Collections.emptyList() : poolRepo.pools(); }
+    List<Pool> restingPools() { return poolRepo == null || !restingOn() || !poolRepo.current() ? java.util.Collections.emptyList() : poolRepo.pools(); }
 
     private void deriveIdentity() {
         if (deriving) return;
@@ -276,6 +281,7 @@ public class MainActivity extends AppCompatActivity {
                 try { chainBlock = Long.parseLong(r.optString("block", "0")); } catch (Exception ignored) {}
                 Tokens.noteBlock(chainBlock); Tokens.setMxUsd(RelayStore.mxusdOverride(MainActivity.this));   // the override only on a proven test chain
                 restingRepo.setChainBlock(chainBlock); restingTxn.setChainBlock(chainBlock);
+                poolsBlock(chainBlock);   // ② Pools: confirmations + one shared pool scan per new block (PandaPools pollBlock)
                 if (chainBlock != was) { refreshResting(); warmMakers(); warmWallet(); }   // book + pools follow the chain, once per new block
                 repaintHeader();
             }
@@ -317,7 +323,7 @@ public class MainActivity extends AppCompatActivity {
     DexDb db() { return db; }
     RelayClient relay() { return relay; }
     DexIdentity identity() { return me; }
-    long chainBlock() { return chainBlock; }
+    long tip() { return chainBlock; }
     boolean isBusy() { return busy; }
     boolean paired() { return paired; }
     int minimaCoins, mxusdCoins;   // wallet coin counts from `balance` (ASSETS › consolidate / split)
@@ -394,7 +400,7 @@ public class MainActivity extends AppCompatActivity {
         if (busy) { toast("A transaction is in progress"); return; }
         final Envelope best = bestFastCross(buy, price);
         final List<Order5> orders = new ArrayList<>(restingBook().values());
-        final List<Pool> pools = new ArrayList<>(pools());
+        final List<Pool> pools = new ArrayList<>(restingPools());
         if (orders.isEmpty() && pools.isEmpty()) { placeFast(buy, price, amount, best); return; }
         final long block = chainBlock;
         final BigDecimal fastQty = best == null ? null : amount.min(new BigDecimal(best.amount));
@@ -570,7 +576,7 @@ public class MainActivity extends AppCompatActivity {
                     boolean ready = sendable.compareTo(need) >= 0 && (!consolidated || unconf.signum() == 0);
                     if (!ready || busy) { waitThenRetry(buy, amount, price, token, need, startBlock, consolidated); return; }
                     final List<Order5> orders = new ArrayList<>(restingBook().values());
-                    final List<Pool> pools = new ArrayList<>(pools());
+                    final List<Pool> pools = new ArrayList<>(restingPools());
                     CompositeRouter.Plan again;
                     try { again = CompositeRouter.plan(orders, pools, buy, amount, price, chainBlock); } catch (RuntimeException e) { again = null; }
                     if (again == null || again.isEmpty()) { setStage(""); toast("The liquidity moved past your limit while the wallet settled — nothing was traded"); return; }
@@ -980,7 +986,7 @@ public class MainActivity extends AppCompatActivity {
         header.addView(verPill, vp);
         TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾", Design.SURFACE2(), Design.DIM());
         themePill.setMinWidth(Design.dp(this, 48)); themePill.setMinHeight(Design.dp(this, 48));
-        themePill.setOnClickListener(v -> { stopCcyGlow(); Design.toggle(this); if (trade != null) trade.close(); chromeRoot = buildChrome(); setContentView(chromeRoot); showPages(tab, tab2); });
+        themePill.setOnClickListener(v -> { if (poolsBusy()) { toast("Finish your pool transaction first, then switch theme."); return; } stopCcyGlow(); Design.toggle(this); if (trade != null) trade.close(); chromeRoot = buildChrome(); setContentView(chromeRoot); showPages(tab, tab2); });
         Design.pressable(themePill);
         header.addView(themePill);
         root.addView(header);
@@ -1036,7 +1042,7 @@ public class MainActivity extends AppCompatActivity {
         content = new LinearLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsTab = new PoolsTab(this); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); poolSwapTab = new PoolSwapTab(this, track(new com.eurobuddha.pandapools.SwapView(this))); poolsTab = new PoolsTab(this, track(new com.eurobuddha.pandapools.PoolsView(this))); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
         View[] tv = tabViews();
         panes = new ScrollView[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
@@ -1162,6 +1168,10 @@ public class MainActivity extends AppCompatActivity {
         View[] views = tabViews();
         for (int i = 0; i < views.length; i++) views[i].setVisibility(i == left || i == right ? View.VISIBLE : View.GONE);
         trade.setSolo(right < 0);
+        for (int t : new int[]{left, right}) {   // a ② page coming into view refreshes like a PandaPools tab
+            if (t == TAB_PSWAP) poolSwapTab.shown();
+            if (t == TAB_POOLS) poolsTab.shown();
+        }
         int r = roomOf(left);
         if (r >= 0) { room = r; roomLast[r] = left; }
         for (int i = 0; i < tabBtn.length; i++) {
@@ -1186,7 +1196,33 @@ public class MainActivity extends AppCompatActivity {
         if (tabBar != null && tab2 >= 0 && !com.eurobuddha.dexicon.ui.Wide.on(this)) selectTab(tab);
     }
 
-    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, poolsTab, marketTab, otcTab}; }
+    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, poolsTab, marketTab, otcTab, poolSwapTab}; }
+
+    /** A vendored PandaPools screen joins this Activity's pool-screen fan-out (new block, stop, destroy). */
+    private <V extends com.eurobuddha.pandapools.BaseView> V track(V v) { poolViews.add(v); return v; }
+
+    /** PandaPools' own tab numbers (the vendored screens ask for and jump to these), as Dexicon's ② pages. */
+    private static final int PP_SWAP = com.eurobuddha.pandapools.MainActivity.TAB_SWAP, PP_POOLS = com.eurobuddha.pandapools.MainActivity.TAB_POOLS,
+            PP_MYLP = com.eurobuddha.pandapools.MainActivity.TAB_MYLP, PP_ACTIVITY = com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY;
+
+    @Override public int currentTab() {
+        for (int t : new int[]{tab, tab2}) {
+            if (t == TAB_PSWAP) return PP_SWAP;
+            if (t == TAB_POOLS) return PP_POOLS;
+        }
+        return -1;
+    }
+
+    @Override public void goToTab(int index) {
+        if (index == PP_SWAP) selectTab(TAB_PSWAP);
+        else if (index == PP_POOLS) selectTab(TAB_POOLS);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        int page = intent == null ? -1 : intent.getIntExtra(EXTRA_POOLS_PAGE, -1);
+        if (page >= 0 && tabBar != null) goToTab(page);
+    }
 
     static boolean isShared(int t) { for (int s : SHARED) if (s == t) return true; return false; }
     static int roomOf(int t) { for (int r = 0; r < ROOM_PAGES.length; r++) for (int p : ROOM_PAGES[r]) if (p == t) return r; return -1; }
@@ -1238,6 +1274,7 @@ public class MainActivity extends AppCompatActivity {
             case TAB_ASSETS: assetsTab.render(); break;
             case TAB_DOORS: doorsTab.render(); break;
             case TAB_POOLS: poolsTab.render(); break;
+            case TAB_PSWAP: break;   // PandaPools' SwapView repaints itself
             case TAB_MARKET: marketTab.render(); break;
             case TAB_OTC: otcTab.render(); break;
             default: relaysTab.render();
@@ -1326,7 +1363,9 @@ public class MainActivity extends AppCompatActivity {
         new AlertDialog.Builder(this, Design.dialogTheme()).setTitle(title).setMessage(body).setPositiveButton("OK", null).show();
     }
 
-    @Override protected void onPause() { super.onPause(); FOREGROUND = false; stopCcyGlow(); }   // never animate a pill nobody sees
+    @Override protected void onPause() { super.onPause(); FOREGROUND = false; stopCcyGlow(); }
+
+    @Override protected void onStop() { super.onStop(); poolsStop(); }   // PandaPools: backgrounded → views cancel their polls   // never animate a pill nobody sees
 
     @Override protected void onDestroy() {
         closed = true;
@@ -1336,6 +1375,7 @@ public class MainActivity extends AppCompatActivity {
         if (nodeReceiver != null) try { unregisterReceiver(nodeReceiver); } catch (Exception ignored) {}
         if (trade != null) trade.close();
         if (restingRepo != null) restingRepo.close();
+        poolsClose();
         if (node != null) node.onDestroy();
         net.shutdownNow();
         quoteExec.shutdownNow();

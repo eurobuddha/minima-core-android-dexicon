@@ -496,14 +496,14 @@ public final class TradeView extends LinearLayout {
             if (act.isMine(o)) lv.mine = true;
             fastN++;
         }
-        long block = act.chainBlock();
+        long block = act.tip();
         for (Order5 o : act.restingBook().values()) {
             if (o.expired(block)) continue;
             Level lv = level(o.sell ? asks : bids, o.price(), tick, o.sell);
             lv.book = lv.book.add(o.minimaAmount());
             bookN++;
         }
-        List<Pool> pools = act.pools();
+        List<Pool> pools = act.restingPools();
         String key = depthKey(pools, tick);
         requestDepth(pools, tick, key);
         boolean poolsReady = pools.isEmpty() || key.equals(readyDepthKey);

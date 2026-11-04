@@ -51,7 +51,7 @@ public final class ActivityTab extends LinearLayout {
         if (hooks == null) hooks = new DoorsTab.Swaps(act, doors);
         List<SwapDb.Swap> swaps = doors.swaps();
         empty.setVisibility(list.isEmpty() && swaps.isEmpty() ? VISIBLE : GONE);
-        long cb = act.chainBlock(), now = System.currentTimeMillis();
+        long cb = act.tip(), now = System.currentTimeMillis();
         TimeZone tz = TimeZone.getDefault();
         List<Ledger.Item> items = new ArrayList<>();
         for (JSONObject a : list) items.add(Ledger.activity(a, cb, now, tz));
