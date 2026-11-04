@@ -1209,11 +1209,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         View[] views = tabViews();
         for (int i = 0; i < views.length; i++) views[i].setVisibility(i == left || i == right ? View.VISIBLE : View.GONE);
         trade.setSolo(right < 0);
-        for (int t : new int[]{left, right}) {   // a ② page coming into view refreshes like a PandaPools tab
-            if (t == TAB_PSWAP) poolSwapTab.shown();
-            if (t == TAB_POOLS) poolsTab.shown();
-            if (t == TAB_PMINE) myPoolsTab.shown();
-        }
+        for (int t : new int[]{left, right}) poolPageShown(t);   // a ② page coming into view refreshes like a PandaPools tab
         int r = roomOf(left);
         if (r >= 0) { room = r; roomLast[r] = left; }
         for (int i = 0; i < tabCell.length; i++) {
@@ -1335,8 +1331,17 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         getDelegate().setLocalNightMode(Design.isDark() ? androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES : androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO);
     }
 
+    private void poolPageShown(int t) {
+        if (t == TAB_PSWAP) poolSwapTab.shown();
+        if (t == TAB_POOLS) poolsTab.shown();
+        if (t == TAB_PMINE) myPoolsTab.shown();
+    }
+
     @Override protected void onResume() {
         super.onResume();
+        // PandaPools re-shows its visible tab on resume: onStop stopped the pool views, and coming back from the forced
+        // backup's file picker must restart My pools' fast "confirming" poll, not wait for a page switch.
+        if (chromeRoot != null) { poolPageShown(tab); if (tab2 >= 0) poolPageShown(tab2); }
         FOREGROUND = true;
         startCcyGlow();   // the pill survived the pause; re-arm exactly one animator on it
         if (node != null && !paired) node.reRegister();   // back from the node app's Apps screen: re-ask at once

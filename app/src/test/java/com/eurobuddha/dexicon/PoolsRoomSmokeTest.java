@@ -120,4 +120,22 @@ public class PoolsRoomSmokeTest {
         pill = containing(a.getWindow().getDecorView(), "☀"); if (pill == null) pill = containing(a.getWindow().getDecorView(), "☾");
         pill.performClick();   // leave the palette as found
     }
+
+    /** 0.1.99 (PandaPools re-shows its tab on resume): back from the backup file picker, My pools polls again. */
+    @Test public void resumingOnMyPoolsRestartsItsRefresh() throws Exception {
+        com.eurobuddha.pandapools.DexiconPools.custodyExecutorForTest(Runnable::run);
+        TradingGate.record(org.robolectric.RuntimeEnvironment.getApplication(), new org.json.JSONArray());
+        org.robolectric.android.controller.ActivityController<MainActivity> c = org.robolectric.Robolectric.buildActivity(MainActivity.class).setup();
+        MainActivity a = c.get();
+        a.showTab(MainActivity.TAB_PMINE);
+        java.lang.reflect.Field tabF = MainActivity.class.getDeclaredField("myPoolsTab"); tabF.setAccessible(true);
+        Object tab = tabF.get(a);
+        java.lang.reflect.Field mineF = tab.getClass().getDeclaredField("mine"); mineF.setAccessible(true);
+        Object lp = mineF.get(tab);
+        java.lang.reflect.Field stopped = lp.getClass().getDeclaredField("stopped"); stopped.setAccessible(true);
+        c.pause().stop();
+        assertTrue("backgrounded: the pool views stop", (boolean) stopped.get(lp));
+        c.restart().start().resume();
+        assertFalse("resumed on My pools: it runs again", (boolean) stopped.get(lp));
+    }
 }
