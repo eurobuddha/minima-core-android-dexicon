@@ -162,8 +162,12 @@ public final class Design {
     }
 
     /** Give a view a soft press animation (scale down on touch). Tasteful micro-motion. */
-    public static void pressable(final View v) {
+    public static void pressable(final View v) { pressable(v, null); }
+
+    /** As {@link #pressable(View)}, also handing every touch to {@code also} (a View has only one touch listener). */
+    public static void pressable(final View v, final View.OnTouchListener also) {
         v.setOnTouchListener((view, ev) -> {
+            if (also != null) also.onTouch(view, ev);
             switch (ev.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
                     view.animate().scaleX(0.96f).scaleY(0.96f).setDuration(90).start(); break;

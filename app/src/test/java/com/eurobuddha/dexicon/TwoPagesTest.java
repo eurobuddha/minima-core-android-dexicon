@@ -49,4 +49,21 @@ public class TwoPagesTest {
         assertTrue(DoorsTabSmokeTest.find(root, "Activity").isShown());
         assertNull("folded: the second page is closed", DoorsTabSmokeTest.find(root, "History"));
     }
+
+    @Test public void aRoomButtonPairsAsItsPage() {
+        android.app.Application app = RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        MainActivity a = DoorsTabSmokeTest.launch();
+        View root = a.getWindow().getDecorView();
+        View pools = DoorsTabSmokeTest.find(root, DoorsTabSmokeTest.room(1)), activity = DoorsTabSmokeTest.find(root, "ACTIVITY");
+        touch(pools, MotionEvent.ACTION_DOWN);              // hold ② (a one-page room: no button of its own in the row)…
+        touch(activity, MotionEvent.ACTION_DOWN);           // …and put a second finger on ACTIVITY
+        touch(activity, MotionEvent.ACTION_UP);
+        touch(pools, MotionEvent.ACTION_UP);
+        View poolsPage = DoorsTabSmokeTest.find(root, "WHAT A POOL IS  ▾");
+        if (poolsPage == null) poolsPage = DoorsTabSmokeTest.find(root, "WHAT A POOL IS  ▸");
+        assertTrue("left: ② POOLS", poolsPage.isShown());
+        assertTrue("right: ACTIVITY", DoorsTabSmokeTest.find(root, "Activity").isShown());
+    }
 }

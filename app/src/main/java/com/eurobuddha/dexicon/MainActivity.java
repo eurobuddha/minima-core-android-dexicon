@@ -1020,8 +1020,9 @@ public class MainActivity extends AppCompatActivity {
             b.setText(roomLabel(r)); b.setTextSize(10.5f); b.setTypeface(Design.sansBold()); b.setGravity(Gravity.CENTER);
             b.setMaxLines(2); b.setMinHeight(Design.dp(this, 48)); b.setPadding(Design.dp(this, 4), Design.dp(this, 6), Design.dp(this, 4), Design.dp(this, 6));
             androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(b, 7, 11, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
-            b.setOnClickListener(v -> selectTab(roomLast[rr]));
-            Design.pressable(b);
+            // two-finger side by side includes ① and ②: a room button pairs as its room's current page
+            b.setOnClickListener(v -> { if (!pairMade) selectTab(roomLast[rr]); });
+            Design.pressable(b, (v, e) -> pairTouch(e, roomLast[rr]));
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
             if (r > 0) rp.leftMargin = Design.dp(this, 6);
             rail.addView(b, rp);
@@ -1065,19 +1066,7 @@ public class MainActivity extends AppCompatActivity {
             t.setPadding(0, Design.dp(this, 11), 0, Design.dp(this, 11)); t.setMinHeight(Design.dp(this, 48));
             // Wide screen (owner 2026-10-26): one tap = that page alone; a second finger on another tab while one is held
             // (or both tapped together) = the two pages side by side, first touched on the left.
-            t.setOnTouchListener((v, e) -> {
-                int a = e.getActionMasked();
-                if (a == android.view.MotionEvent.ACTION_DOWN) {
-                    if (tabsDown == 0) pairMade = false;
-                    tabsDown++;
-                    if (heldTab >= 0 && heldTab != idx && com.eurobuddha.dexicon.ui.Wide.on(this)) { pairMade = true; showPages(heldTab, idx); }
-                    else if (heldTab < 0) heldTab = idx;
-                } else if (a == android.view.MotionEvent.ACTION_UP || a == android.view.MotionEvent.ACTION_CANCEL) {
-                    tabsDown = Math.max(0, tabsDown - 1);
-                    if (heldTab == idx || tabsDown == 0) heldTab = -1;
-                }
-                return false;
-            });
+            t.setOnTouchListener((v, e) -> pairTouch(e, idx));
             t.setOnClickListener(v -> { if (!pairMade) selectTab(idx); });
             // the room's own pages go in the row under the rail; the shared pages in the bottom bar
             (isShared(idx) ? tabBar : subBar).addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -1085,6 +1074,21 @@ public class MainActivity extends AppCompatActivity {
         root.addView(tabBar);
         paintCcy();
         return root;
+    }
+
+    /** Hold one page button and touch another: the two pages side by side (wide screens), first touched on the left. */
+    private boolean pairTouch(android.view.MotionEvent e, int idx) {
+        int a = e.getActionMasked();
+        if (a == android.view.MotionEvent.ACTION_DOWN) {
+            if (tabsDown == 0) pairMade = false;
+            tabsDown++;
+            if (heldTab >= 0 && heldTab != idx && com.eurobuddha.dexicon.ui.Wide.on(this)) { pairMade = true; showPages(heldTab, idx); }
+            else if (heldTab < 0) heldTab = idx;
+        } else if (a == android.view.MotionEvent.ACTION_UP || a == android.view.MotionEvent.ACTION_CANCEL) {
+            tabsDown = Math.max(0, tabsDown - 1);
+            if (heldTab == idx || tabsDown == 0) heldTab = -1;
+        }
+        return false;
     }
 
     // ---- the one active AtomiX market (⇄ pill) ----

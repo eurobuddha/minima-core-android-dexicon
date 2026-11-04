@@ -58,7 +58,7 @@ public class RelayClientTest {
         Map<String, JSONObject> served = new HashMap<>();
         served.put("https://r1", TestIds.obj("cursor", 5, "reset", true, "orders", TestIds.arr(A1, B1)));
         served.put("https://r2", TestIds.obj("cursor", 9, "reset", true, "orders", TestIds.arr(A2, C1)));
-        List<String> requests = new ArrayList<>(), posts = new ArrayList<>();
+        List<String> requests = new ArrayList<>(), posts = java.util.Collections.synchronizedList(new ArrayList<>());   // publish fans out on parallel threads
         RelayClient.Transport t = new RelayClient.Transport() {
             public String get(String url) throws IOException {
                 requests.add(url);
