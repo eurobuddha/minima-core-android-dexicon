@@ -90,6 +90,7 @@ public final class HistoryTab extends LinearLayout {
             // AtomiX My swaps keeps hidden swaps: one hidden while still open stays reachable here, live (Check now, Refund now)
             else if (hidden.contains(s.hash)) items.add(hooks.item(s));
         }
-        LedgerView.sync(act, rows, Ledger.arrange(items, false, System.currentTimeMillis(), tz), "hist", hooks);
+        // live first: a swap hidden while still open (the only live rows here) leads, never buried among settled days
+        LedgerView.sync(act, rows, Ledger.arrange(items, true, System.currentTimeMillis(), tz), "hist", hooks);
     }
 }
