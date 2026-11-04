@@ -104,4 +104,20 @@ public class PoolsRoomSmokeTest {
         assertNotNull("the full address", containing(root, pool));
         CustodyFake.rows = new String[0][];
     }
+
+    /** 0.1.98 (PandaPools MainActivity.onCreate): pool dialogs follow Dexicon's ☀/☾, not the phone's day/night. */
+    @Test public void dialogChromeFollowsTheThemeToggle() {
+        MainActivity a = DoorsTabSmokeTest.launch();
+        int want = Design.isDark() ? androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES : androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO;
+        assertEquals(want, a.getDelegate().getLocalNightMode());
+        View pill = containing(a.getWindow().getDecorView(), Design.isDark() ? "☀" : "☾");
+        if (pill == null) pill = containing(a.getWindow().getDecorView(), "☀");
+        assertNotNull("the theme pill", pill);
+        pill.performClick();
+        int now = Design.isDark() ? androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES : androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO;
+        assertNotEquals(want, now);
+        assertEquals("the toggle moves the dialogs with it", now, a.getDelegate().getLocalNightMode());
+        pill = containing(a.getWindow().getDecorView(), "☀"); if (pill == null) pill = containing(a.getWindow().getDecorView(), "☾");
+        pill.performClick();   // leave the palette as found
+    }
 }

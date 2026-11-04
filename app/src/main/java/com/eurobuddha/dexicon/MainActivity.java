@@ -178,6 +178,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Design.load(this);
+        nightModeFollowsDesign();
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         db = new DexDb(this);
         relay = new RelayClient(new HttpTransport());
@@ -1003,7 +1004,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         header.addView(verPill, vp);
         TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾", Design.SURFACE2(), Design.DIM());
         themePill.setMinWidth(Design.dp(this, 48)); themePill.setMinHeight(Design.dp(this, 48));
-        themePill.setOnClickListener(v -> { if (poolsBusy()) { toast("Finish your pool transaction first, then switch theme."); return; } stopCcyGlow(); Design.toggle(this); if (trade != null) trade.close(); chromeRoot = buildChrome(); setContentView(chromeRoot); showPages(tab, tab2); });
+        themePill.setOnClickListener(v -> { if (poolsBusy()) { toast("Finish your pool transaction first, then switch theme."); return; } stopCcyGlow(); Design.toggle(this); nightModeFollowsDesign(); if (trade != null) trade.close(); chromeRoot = buildChrome(); setContentView(chromeRoot); showPages(tab, tab2); });
         Design.pressable(themePill);
         header.addView(themePill);
         root.addView(header);
@@ -1325,6 +1326,13 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             case TAB_OTC: otcTab.render(); break;
             default: relaysTab.render();
         }
+    }
+
+    /** PandaPools MainActivity.onCreate: AlertDialog chrome follows the SYSTEM day/night unless the Activity's local night
+     *  mode is bound to the palette — on a light phone with Dexicon dark, the vendored pool dialogs (create, add,
+     *  migrate, backup password) painted white with white text. Dexicon handles uiMode itself (manifest), so no recreate. */
+    private void nightModeFollowsDesign() {
+        getDelegate().setLocalNightMode(Design.isDark() ? androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES : androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO);
     }
 
     @Override protected void onResume() {
