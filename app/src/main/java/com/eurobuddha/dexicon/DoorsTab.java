@@ -502,9 +502,11 @@ public final class DoorsTab extends LinearLayout {
             String have = host.coinBalance(m);
             if (have == null) return "Cannot read your " + c + " balance right now.";
             if (p.filledMinima > Double.parseDouble(have) + 1e-9) return "You only have " + held + " " + c + " available to sell.";
-            BigInteger g = host.gasReserve(EthHtlc.GAS_WITHDRAW.add(dest.isEmpty() ? BigInteger.ZERO : EthSend.GAS_ERC20));
+            // every part is its own Ethereum HTLC: one withdraw each, and one forward each when an address is named
+            int n = p.legs.size();
+            BigInteger g = host.gasReserve(EthHtlc.GAS_WITHDRAW.add(dest.isEmpty() ? BigInteger.ZERO : EthSend.GAS_ERC20).multiply(BigInteger.valueOf(n)));
             if (g == null) return "Cannot read the Ethereum gas price right now.";
-            if (g.compareTo(host.ethWei) > 0) return "Not enough ETH in your Ethereum wallet for the withdraw" + (dest.isEmpty() ? "" : " + send") + " gas — send a little ETH there first.";
+            if (g.compareTo(host.ethWei) > 0) return "Not enough ETH in your Ethereum wallet for " + n + " withdraw" + (dest.isEmpty() ? "" : " + send") + (n == 1 ? "" : "s") + " — send a little ETH there first.";
         } else {
             if (host.usdtRaw == null) return "Cannot read your USDT balance right now.";
             if (EthSend.parseUnits(trim6(p.totalUsdt), 6).compareTo(host.usdtRaw) > 0)
@@ -562,7 +564,9 @@ public final class DoorsTab extends LinearLayout {
         String gas;
         if (s) {
             BigInteger wd = host.gasReserve(EthHtlc.GAS_WITHDRAW), fw = host.gasReserve(EthSend.GAS_ERC20);
-            gas = "ETH gas from your Ethereum wallet: withdraw ≈ " + eth(wd) + " ETH" + (dest.isEmpty() ? "" : " + send ≈ " + eth(fw) + " ETH");
+            int n = plan.legs.size();
+            gas = "ETH gas from your Ethereum wallet: withdraw ≈ " + eth(wd) + " ETH" + (dest.isEmpty() ? "" : " + send ≈ " + eth(fw) + " ETH")
+                    + (n == 1 ? "" : " per part, × " + n + " parts");
         } else {
             gas = "Each part is a separate Ethereum transaction — you pay ETH gas " + plan.legs.size() + (plan.legs.size() == 1 ? " time" : " times")
                     + " (≈ " + eth(host.gasReserve(EthHtlc.GAS_LOCK)) + " ETH each, + a one-time USDT approval on first use).";
