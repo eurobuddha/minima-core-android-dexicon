@@ -172,13 +172,20 @@ public final class AssetsTab extends LinearLayout {
         box.addView(Ui.para(act, "Derived with HKDF context \"" + DexIdentity.CONTEXT + "\" from the node seed."), Ui.wide(act, 4, 0));
     }
 
+    /** MINIMA at most 12 decimals, MxUSD at 6 — both cut, never rounded (owner, 4 Nov: "12 decimal places, no rounding"). */
+    private static String bal(String name, BigDecimal v) {
+        if (v == null) return "0";
+        String r = v.setScale("MINIMA".equals(name) ? 12 : 6, java.math.RoundingMode.DOWN).stripTrailingZeros().toPlainString();
+        return r.isEmpty() || r.equals("-0") ? "0" : r;
+    }
+
     private void assetCard(String name, String tokenid, int coins, BigDecimal sendable, BigDecimal confirmed, BigDecimal inOrders, BigDecimal settling) {
         LinearLayout c = card();
         LinearLayout head = new LinearLayout(act); head.setGravity(Gravity.CENTER_VERTICAL);
         head.setMinimumHeight(Design.dp(act, 44));
         head.addView(t(name, Design.TEXT(), 13f, Design.sansBold()), new LayoutParams(Design.dp(act, 72), LayoutParams.WRAP_CONTENT));
         boolean known = act.balanceAtMs() > 0;
-        head.addView(t(known ? Util.fmtBal(sendable) : "—", Design.TEXT(), 16f, Design.monoBold()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        head.addView(t(known ? bal(name, sendable) : "—", Design.TEXT(), 16f, Design.monoBold()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         c.addView(head);
         if (!known) {
             c.addView(Ui.para(act, act.paired() ? "Waiting for wallet balances from Minima Core." : "Pair with Minima Core (Apps → enable Dexicon)."));
@@ -189,8 +196,8 @@ public final class AssetsTab extends LinearLayout {
         LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
         c.addView(box);
         Ui.fold(head, box, chev, "available to trade", "fold_assets_" + name);
-        box.addView(t("confirmed " + Util.fmtBal(confirmed) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 6, 0));
-        box.addView(t("in orders " + Util.fmtBal(inOrders) + "  ·  settling +" + Util.fmtBal(settling), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 4, 0));
+        box.addView(t("confirmed " + bal(name, confirmed) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 6, 0));
+        box.addView(t("in orders " + bal(name, inOrders) + "  ·  settling +" + bal(name, settling), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 4, 0));
         box.addView(Ui.para(act, coins + (coins == 1 ? " coin" : " coins") + " · orders are backed by wallet coins that stay spendable; the same coin cannot back two orders."), Ui.wide(act, 6, 0));
         // the family's wallet tools (PandaPools consolidate, PandaDEX split) — no trip to another app
         LinearLayout tools = new LinearLayout(getContext());
