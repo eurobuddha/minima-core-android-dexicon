@@ -65,8 +65,8 @@ public final class AssetsTab extends LinearLayout {
     public void render() {
         body.removeAllViews();
         Funds f = Funds.of(act);   // the same numbers the TRADE funds panel shows
-        assetCard("MINIMA", Tokens.MINIMA, act.minimaCoins, f.minimaAvailable, act.minimaConfirmed(), f.minimaInOrders, f.minimaSettling);
-        assetCard("MxUSD", Tokens.MXUSD(), act.mxusdCoins, f.mxusdAvailable, act.mxusdConfirmed(), f.mxusdInOrders, f.mxusdSettling);
+        assetCard("MINIMA", Tokens.MINIMA, act.minimaCoins, f.minimaAvailable, act.minimaConfirmed(), act.minimaUnconfirmed(), f.minimaInOrders, f.minimaSettling);
+        assetCard("MxUSD", Tokens.MXUSD(), act.mxusdCoins, f.mxusdAvailable, act.mxusdConfirmed(), act.mxusdUnconfirmed(), f.mxusdInOrders, f.mxusdSettling);
 
         ethCard();   // AtomiX's Wallet order: the coins, then Ethereum (address, ETH, USDT, its actions), then every token
         TextView all = Ui.label(act, "WALLET · ALL TOKENS");
@@ -179,7 +179,18 @@ public final class AssetsTab extends LinearLayout {
         return r.isEmpty() || r.equals("-0") ? "0" : r;
     }
 
-    private void assetCard(String name, String tokenid, int coins, BigDecimal sendable, BigDecimal confirmed, BigDecimal inOrders, BigDecimal settling) {
+    /** What AtomiX swaps are bringing in for this coin right now: the counterparty has locked and the collection is
+     *  under way (LOCKED / CLAIMING), until the swap completes. */
+    static BigDecimal atomixIncoming(java.util.List<com.eurobuddha.atomix.swap.SwapDb.Swap> swaps, String coin) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (com.eurobuddha.atomix.swap.SwapDb.Swap s : swaps) {
+            boolean coming = com.eurobuddha.atomix.swap.SwapDb.ST_LOCKED.equals(s.status) || com.eurobuddha.atomix.swap.SwapDb.ST_CLAIMING.equals(s.status);
+            if (coming && coin.equals(com.eurobuddha.dexicon.doors.DoorForwards.label(s.buyToken))) sum = sum.add(Util.dec(s.buyAmount));
+        }
+        return sum;
+    }
+
+    private void assetCard(String name, String tokenid, int coins, BigDecimal sendable, BigDecimal confirmed, BigDecimal unconfirmed, BigDecimal inOrders, BigDecimal settling) {
         LinearLayout c = card();
         LinearLayout head = new LinearLayout(act); head.setGravity(Gravity.CENTER_VERTICAL);
         head.setMinimumHeight(Design.dp(act, 44));
@@ -193,11 +204,22 @@ public final class AssetsTab extends LinearLayout {
         }
         TextView chev = t("", Design.DIM2(), 11.5f, Design.sans());
         head.addView(chev);
+        // A wallet shows what is arriving (owner, 4 Nov) — outside the fold, whenever there is something:
+        // unconfirmed = the node's received-but-unconfirmed coins; settling = AtomiX collections under way + trades confirming
+        BigDecimal unc = unconfirmed == null ? BigDecimal.ZERO : unconfirmed;
+        BigDecimal swapIn = atomixIncoming(com.eurobuddha.dexicon.doors.DoorHost.get(act).swaps(), name);
+        BigDecimal trades = settling == null ? BigDecimal.ZERO : settling;
+        if (unc.signum() > 0)
+            c.addView(t("unconfirmed +" + bal(name, unc) + "  ·  received, waiting for confirmations", 0xFFE6A23C, 12f, Design.mono()), Ui.wide(act, 2, 0));
+        if (swapIn.signum() > 0 || trades.signum() > 0)
+            c.addView(t("settling +" + bal(name, swapIn.add(trades)) + "  ·  " + (swapIn.signum() > 0 ? "AtomiX swap collecting +" + bal(name, swapIn) : "")
+                    + (swapIn.signum() > 0 && trades.signum() > 0 ? "  ·  " : "") + (trades.signum() > 0 ? "trades confirming +" + bal(name, trades) : ""),
+                    0xFFE6A23C, 12f, Design.mono()), Ui.wide(act, 2, 0));
         LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
         c.addView(box);
         Ui.fold(head, box, chev, "available to trade", "fold_assets_" + name);
-        box.addView(t("confirmed " + bal(name, confirmed) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 6, 0));
-        box.addView(t("in orders " + bal(name, inOrders) + "  ·  settling +" + bal(name, settling), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 4, 0));
+        box.addView(t("confirmed " + bal(name, confirmed) + "  ·  unconfirmed +" + bal(name, unc) + "  ·  updated " + Util.ago(System.currentTimeMillis() - act.balanceAtMs()), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 6, 0));
+        box.addView(t("in orders " + bal(name, inOrders) + "  ·  settling +" + bal(name, swapIn.add(trades)), Design.DIM(), 11.5f, Design.mono()), Ui.wide(act, 4, 0));
         box.addView(Ui.para(act, coins + (coins == 1 ? " coin" : " coins") + " · orders are backed by wallet coins that stay spendable; the same coin cannot back two orders."), Ui.wide(act, 6, 0));
         // the family's wallet tools (PandaPools consolidate, PandaDEX split) — no trip to another app
         LinearLayout tools = new LinearLayout(getContext());

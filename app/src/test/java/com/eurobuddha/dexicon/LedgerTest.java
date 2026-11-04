@@ -355,4 +355,13 @@ public class LedgerTest {
         Ledger.Item c = Ledger.asHistory(Ledger.swap(s, new java.util.ArrayList<>(), null, 0, 0, null, null, tz), s, tz);
         assertTrue(c.sub, c.sub.startsWith("AtomiX · your market · "));
     }
+
+    /** 0.2.18: Assets' "settling" counts an AtomiX swap being collected (the counterparty locked) until it completes. */
+    @Test public void atomixCollectionsCountAsSettling() {
+        java.util.List<com.eurobuddha.atomix.swap.SwapDb.Swap> l = new java.util.ArrayList<>();
+        String[][] rows = {{"LOCKED", "MxUSD", "29.236826"}, {"CLAIMING", "MxUSD", "1"}, {"STARTED", "MxUSD", "5"}, {"COMPLETE", "MxUSD", "7"}, {"LOCKED", "USDT", "3"}, {"LOCKED", "MINIMA", "100"}};
+        for (String[] r : rows) { com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap(); s.status = r[0]; s.buyToken = r[1]; s.buyAmount = r[2]; l.add(s); }
+        assertEquals(0, new java.math.BigDecimal("30.236826").compareTo(AssetsTab.atomixIncoming(l, "MxUSD")));
+        assertEquals(0, new java.math.BigDecimal("100").compareTo(AssetsTab.atomixIncoming(l, "MINIMA")));
+    }
 }

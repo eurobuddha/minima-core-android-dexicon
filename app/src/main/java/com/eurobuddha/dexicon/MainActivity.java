@@ -102,6 +102,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private long chainBlock;
     private String receiveAddr = "", receiveMx = "";   // hex = the resting-layer payout; Mx = what the user sees and shares (PandaDEX: miniaddress, falling back to hex)
     private BigDecimal minimaSendable = BigDecimal.ZERO, mxusdSendable = BigDecimal.ZERO, minimaConfirmed = BigDecimal.ZERO, mxusdConfirmed = BigDecimal.ZERO;
+    /** The node's own "unconfirmed" (received, not yet confirmed) per coin — what a wallet shows as arriving. */
+    private BigDecimal minimaUnconfirmed = BigDecimal.ZERO, mxusdUnconfirmed = BigDecimal.ZERO;
     private long balanceAtMs;
     private String stage = "";
     /** The ACTIVITY row the TRADE stage line follows live (null = plain stage text only). */
@@ -309,8 +311,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             public void onResult(JSONObject j) {
                 for (JSONObject b : NodeApi.rows(j)) {
                     String tok = b.optString("tokenid", "");
-                    if (Tokens.isMinima(tok)) { minimaSendable = Util.dec(b.optString("sendable", "0")); minimaConfirmed = Util.dec(b.optString("confirmed", "0")); minimaCoins = b.optInt("coins", 0); }
-                    else if (Tokens.isMxUsd(tok)) { mxusdSendable = Util.dec(b.optString("sendable", "0")); mxusdConfirmed = Util.dec(b.optString("confirmed", "0")); mxusdCoins = b.optInt("coins", 0); }
+                    if (Tokens.isMinima(tok)) { minimaSendable = Util.dec(b.optString("sendable", "0")); minimaConfirmed = Util.dec(b.optString("confirmed", "0")); minimaUnconfirmed = Util.dec(b.optString("unconfirmed", "0")); minimaCoins = b.optInt("coins", 0); }
+                    else if (Tokens.isMxUsd(tok)) { mxusdSendable = Util.dec(b.optString("sendable", "0")); mxusdConfirmed = Util.dec(b.optString("confirmed", "0")); mxusdUnconfirmed = Util.dec(b.optString("unconfirmed", "0")); mxusdCoins = b.optInt("coins", 0); }
                 }
                 balanceAtMs = System.currentTimeMillis();
                 repaint();
@@ -348,6 +350,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     BigDecimal minimaSendable() { return minimaSendable; }
     BigDecimal mxusdSendable() { return mxusdSendable; }
     BigDecimal minimaConfirmed() { return minimaConfirmed; }
+    BigDecimal minimaUnconfirmed() { return minimaUnconfirmed; }
+    BigDecimal mxusdUnconfirmed() { return mxusdUnconfirmed; }
     BigDecimal mxusdConfirmed() { return mxusdConfirmed; }
     long balanceAtMs() { return balanceAtMs; }
     List<Envelope> book() { return relay.orders(null); }
