@@ -171,6 +171,59 @@ public final class DexiconPools {
         });
     }
 
+    /**
+     * After a hand-over: PandaPools' own "Confirm current wallet signing state" (MyLpView.confirmSigningState), for the owner
+     * keys of exactly the handed-over pools. Restored pools carry signing paused; until the user attests, keep-fresh will
+     * not sign for them (the stranding alarm says so). Nothing is confirmed without that explicit tap.
+     */
+    public static void offerSigningConfirmation(MainActivity act, List<String> handed, Runnable done) {
+        Set<String> want = new HashSet<>();
+        for (String a : handed) want.add(low(a));
+        List<String> keys = new ArrayList<>();
+        StringBuilder pools = new StringBuilder();
+        for (Pool p : OwnPoolStore.all(act)) {
+            if (p.address == null || !want.contains(low(p.address))) continue;
+            if (!(p.signingStateUnverified || OwnPoolStore.confirmationFailed(p.opk))) continue;
+            if (p.opk != null && !keys.contains(p.opk)) keys.add(p.opk);
+            pools.append("\nPool: ").append(p.address);
+        }
+        if (keys.isEmpty() || act.node() == null || BuildConfig.VERSION_NAME.endsWith("-diagnostic")) { done.run(); return; }
+        new android.app.AlertDialog.Builder(act).setTitle("Dexicon keeps your pools now")
+                .setMessage("PandaPools has stopped keeping them. Restored pools start with owner signing paused, so Dexicon cannot renew "
+                        + "their reserves until you confirm this wallet's signing state.\n\nOnly continue if this node holds the latest complete "
+                        + "wallet signing state and every other copy of this wallet has stopped signing (PandaPools has: it handed these over). "
+                        + "A seed, old backup, or counter above the recipe's recorded count cannot prove this.\n\nConfirming enables owner "
+                        + "actions and automatic pool refresh for:\n" + String.join("\n", keys) + "\n" + pools)
+                .setNegativeButton("Keep signing paused", (d, w) -> {
+                    new android.app.AlertDialog.Builder(act).setTitle("Signing remains paused")
+                            .setMessage("Confirm later on ② My pools → Back up / restore pools → Confirm wallet signing state. Until then "
+                                    + "nothing renews these pools.").setPositiveButton("OK", null).show();
+                    done.run();
+                })
+                .setPositiveButton("I have verified this", (d, w) -> confirmKeys(act, keys, 0, new StringBuilder(), done))
+                .setCancelable(false).show();
+    }
+
+    private static void confirmKeys(MainActivity act, List<String> keys, int i, StringBuilder failed, Runnable done) {
+        if (i >= keys.size()) {
+            if (failed.length() > 0) new android.app.AlertDialog.Builder(act).setTitle("Signing remains paused")
+                    .setMessage("The owner key is missing, exhausted, below a recorded count, or the confirmation could not be saved:\n" + failed)
+                    .setPositiveButton("OK", null).show();
+            if (act.pools() != null) act.pools().refresh();
+            done.run();
+            return;
+        }
+        final String key = keys.get(i);
+        act.node().cmd("keys action:list publickey:" + key, new NodeApi.Cb() {
+            public void onResult(org.json.JSONObject j) {
+                Integer uses = KeyUses.extractUses(j, key);
+                if (uses == null || !OwnPoolStore.acknowledgeSigningState(act, key, uses)) failed.append(key).append('\n');
+                confirmKeys(act, keys, i + 1, failed, done);
+            }
+            public void onError(String m) { failed.append(key).append('\n'); confirmKeys(act, keys, i + 1, failed, done); }
+        });
+    }
+
     // ---- ② My pools / ASSETS helpers ----
 
     /** A PandaPools fund write lost its reply: pool signing is paused until the user resolves it. */

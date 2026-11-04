@@ -1332,7 +1332,10 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         long now = System.currentTimeMillis();
         if (handoverPkg != null && now - handoverAt < 60_000) return;   // a double tap opens it once
         handoverPkg = pkg; handoverName = name; handoverRemove = remove; handoverAt = now;
-        try { handover.launch(new Intent(TradingGate.ACTION_HANDOVER).setPackage(pkg)); }
+        Intent ask = new Intent(TradingGate.ACTION_HANDOVER).setPackage(pkg);
+        // PandaPools hands a live pool over only once Dexicon holds its recipe: name every covenant address held here, in full.
+        if (TradingGate.PANDAPOOLS.equals(pkg)) ask.putExtra(com.eurobuddha.pandapools.DexiconPools.EXTRA_DEXICON_POOLS, com.eurobuddha.pandapools.DexiconPools.heldAddresses(this));
+        try { handover.launch(ask); }
         catch (android.content.ActivityNotFoundException e) {
             handoverPkg = null;
             explain(name + " needs an update", "This version of " + name + " has no \"Hand over to Dexicon\" step yet. Update " + name + " from the store, then try again.");
@@ -1349,14 +1352,49 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         long ver = TradingGate.versionOf(this, pkg);
         if (TradingGate.validHandover(code == RESULT_OK, d, pkg, ver)) {
             TradingGate.noteAnswer(this, pkg, ver);
+            if (TradingGate.PANDAPOOLS.equals(pkg)) poolsHandedOver(d.getStringArrayExtra(com.eurobuddha.pandapools.DexiconPools.EXTRA_POOLS));
             if (remove) startActivity(new Intent(Intent.ACTION_DELETE, android.net.Uri.parse("package:" + pkg)));
             else toast(name + " handed over. You can remove it now.");
         } else {
             TradingGate.noteAnswer(this, pkg, -2);   // the card follows the LAST answer
             String why = d == null ? null : d.getStringExtra("reason");
-            explain(name + " is not ready to remove", why == null || why.isEmpty() ? name + " did not confirm the hand-over, so nothing changed." : why);
+            why = why == null || why.isEmpty() ? name + " did not confirm the hand-over, so nothing changed." : why;
+            if (TradingGate.PANDAPOOLS.equals(pkg) && d != null) {
+                // Only an explicit "kept_by_dexicon" list moves a pool back (a refusal alone can leave PandaPools' keeper stopped).
+                List<String> back = com.eurobuddha.pandapools.DexiconPools.onHandoverRefused(this, d.getStringArrayExtra(com.eurobuddha.pandapools.DexiconPools.EXTRA_KEPT));
+                if (!back.isEmpty()) why += "\n\nPandaPools keeps " + (back.size() == 1 ? "this pool" : "these pools") + " again, so Dexicon has stopped keeping "
+                        + (back.size() == 1 ? "it" : "them") + " (AWAITING HAND-OVER):\n" + String.join("\n", back);
+            }
+            explain(name + " is not ready to remove", why);
         }
         applyGate();
+    }
+
+    // ---- ② moving a live pool from standalone PandaPools ----
+
+    /** The gate's PandaPools card: last restore result (full addresses, selectable). */
+    String poolRestoreStatus = "";
+
+    /** "Restore your PandaPools backup here": PandaPools' own verify + restore; every pool restored waits (AWAITING). */
+    void restorePandaPoolsBackup() {
+        pickOpenFile(uri -> {
+            if (uri == null) return;
+            com.eurobuddha.pandapools.DexiconPools.restoreBackup(this, uri, line -> { poolRestoreStatus = line; if (gate != null) gate.render(); },
+                    (restored, total, addresses, report) -> {
+                        poolRestoreStatus = total == 0 ? report : restored + " of " + total + " pool(s) restored with verified reserves. They are AWAITING HAND-OVER: "
+                                + "PandaPools keeps them until you hand over.\n\n" + report;
+                        if (gate != null) gate.render();
+                        repaint();
+                    });
+        });
+    }
+
+    /** PandaPools said OK and stopped keeping {@code pools}: Dexicon keeps exactly those now. Restored pools come back with
+     *  signing paused (PandaPools' rule); the user attests the wallet's signing state once, here, so keep-fresh can sign. */
+    private void poolsHandedOver(String[] pools) {
+        if (pools == null || pools.length == 0) return;
+        if (!com.eurobuddha.pandapools.DexiconPools.onHandoverOk(this, pools)) { explain("Hand-over not saved", "Dexicon could not save which pools it keeps now. Hand over again."); return; }
+        com.eurobuddha.pandapools.DexiconPools.offerSigningConfirmation(this, java.util.Arrays.asList(pools), this::repaint);
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {

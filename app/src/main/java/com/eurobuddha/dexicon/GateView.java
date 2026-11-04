@@ -60,7 +60,7 @@ final class GateView extends ScrollView {
         body.addView(Ui.text(act, "Move to Dexicon. Each remove button unlocks only when nothing you own could be lost.", 12.5f, Design.DIM(), Design.sans()), Ui.wide(act, 4, 12));
 
         if (ax) appCard("AtomiX", TradingGate.ATOMIX, "finish or refund every swap and withdraw your market");
-        if (pp) appCard("PandaPools", TradingGate.PANDAPOOLS, "make sure no pool or withdrawal of yours is still live");
+        if (pp) appCard("PandaPools", TradingGate.PANDAPOOLS, "make sure no withdrawal or payout of yours is still pending. A live pool moves with you: restore its backup here first");
         for (String d : dapps) dappCard(d);
 
         TextView again = Ui.button(act, "Check again");
@@ -110,13 +110,37 @@ final class GateView extends ScrollView {
         c.addView(head, Ui.wide(act, 0, 8));
         c.addView(check(ok, ok ? name + " last said nothing of yours is left in it. Remove asks it once more, then uninstalls."
                 : "Step 1: in " + name + ", " + what + ". Its \"Hand over to Dexicon\" step checks this for you."));
-        TextView hand = Ui.button(act, "1 · Hand over in " + name);
+        boolean pools = TradingGate.PANDAPOOLS.equals(pkg);
+        if (pools) poolSteps(c);
+        TextView hand = Ui.button(act, (pools ? "2" : "1") + " · Hand over in " + name);
         hand.setOnClickListener(v -> act.startHandover(pkg, name, false));
         c.addView(hand, Ui.wide(act, 6, 6));
-        TextView rm = Ui.button(act, "2 · Remove " + name);
+        TextView rm = Ui.button(act, (pools ? "3" : "2") + " · Remove " + name);
         rm.setEnabled(ok); rm.setAlpha(ok ? 1f : 0.4f);
         rm.setOnClickListener(v -> act.startHandover(pkg, name, true));   // a FRESH answer, never a stored one
         c.addView(rm, Ui.wide(act, 0, 0));
+    }
+
+    /** PandaPools only: a live pool moves to Dexicon through PandaPools' own verified backup. Restored pools wait (AWAITING
+     *  HAND-OVER) — Dexicon does not keep them — until PandaPools hands them over and stops keeping them itself. */
+    private void poolSteps(LinearLayout c) {
+        c.addView(para("Host a pool? Restore your PandaPools backup here first. Dexicon records your pools but leaves them to PandaPools "
+                + "until PandaPools hands them over: two keepers would fight over the same reserves. Then hand over; PandaPools stops keeping "
+                + "exactly the pools Dexicon now holds, and Dexicon starts."));
+        TextView restore = Ui.button(act, "1 · Restore your PandaPools backup here");
+        restore.setOnClickListener(v -> act.restorePandaPoolsBackup());
+        c.addView(restore, Ui.wide(act, 4, 4));
+        if (!act.poolRestoreStatus.isEmpty()) {
+            TextView st = Ui.para(act, act.poolRestoreStatus);
+            st.setTextIsSelectable(true);
+            c.addView(st, Ui.wide(act, 0, 6));
+        }
+        java.util.List<String> waiting = com.eurobuddha.pandapools.DexiconPools.awaitingNow(act);
+        if (!waiting.isEmpty()) {
+            c.addView(Ui.text(act, "AWAITING HAND-OVER · PandaPools still keeps " + (waiting.size() == 1 ? "this pool" : "these " + waiting.size() + " pools"),
+                    12f, Design.ACCENT(), Design.sansBold()), Ui.wide(act, 4, 2));
+            for (String a : waiting) c.addView(Ui.evidence(act, "Pool", a));
+        }
     }
 
     private void dappCard(String row) {
