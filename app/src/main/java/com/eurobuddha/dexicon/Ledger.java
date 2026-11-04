@@ -370,11 +370,12 @@ public final class Ledger {
     /** A finished swap as a HISTORY line: "Swapped X → Y" (or a muted "Refunded X"), with facts. */
     public static Item asHistory(Item it, SwapDb.Swap s, TimeZone tz) {
         String sell = DoorForwards.label(s.sellToken), buy = DoorForwards.label(s.buyToken), st = s.status == null ? "" : s.status;
-        String door = "ERC20_TO_MINIMA".equals(s.direction) ? "AtomiX entry" : "AtomiX exit";
+        boolean maker = "RESPONDER".equals(s.role);   // a fill of MY market: worded from the maker's chair (0.2.12)
+        String door = maker ? "AtomiX · your market" : "ERC20_TO_MINIMA".equals(s.direction) ? "AtomiX entry" : "AtomiX exit";
         it.time = hm(s.created, tz);
         if (SwapDb.ST_REFUNDED.equals(st)) {
             it.icon = "↺"; it.tone = Tone.DIM; it.title = "Refunded"; it.amount = s.sellAmount + " " + sell;
-            it.sub = door + " · the maker didn't lock";
+            it.sub = door + (maker ? " · the taker never claimed" : " · the maker didn't lock");
             it.fact("Nothing traded", "your " + s.sellAmount + " " + sell + " came back");
         } else if (SwapDb.ST_ERROR.equals(st)) {
             it.icon = "!"; it.tone = Tone.BAD; it.title = "Swap failed"; it.sub = door;
@@ -382,7 +383,7 @@ public final class Ledger {
             it.icon = "⇄"; it.tone = Tone.OK; it.title = "Swapped";
             it.sub = door + " · " + it.sub.substring(it.sub.indexOf(" · ") + 3);
             it.fact("You paid", s.sellAmount + " " + sell + ("USDT".equals(sell) ? " (Ethereum)" : ""));
-            it.fact("You got", s.buyAmount + " " + buy + ("USDT".equals(buy) ? "" : ", less the " + DoorForwards.NOTIFY_AMOUNT + " notify output"));
+            it.fact("You got", s.buyAmount + " " + buy + ("USDT".equals(buy) || maker ? "" : ", less the " + DoorForwards.NOTIFY_AMOUNT + " notify output"));
             it.fact("Finished", fmt("dd MMM yyyy HH:mm:ss", s.updated, tz));
         }
         if ("DONE".equals(it.chip)) it.chip = "";   // a settled ledger line needs no chip; anything else keeps it

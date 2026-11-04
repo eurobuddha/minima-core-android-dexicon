@@ -341,4 +341,18 @@ public class LedgerTest {
             assertEquals(c[0], Boolean.parseBoolean(c[1]), it.checkable);
         }
     }
+
+    /** 0.2.12: History words a fill of MY market from the maker's chair — never "the maker didn't lock". */
+    @Test public void historyWordsAMakerFillAsTheMaker() {
+        com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap();
+        s.hash = "ab".repeat(32); s.role = "RESPONDER"; s.direction = "MINIMA_TO_ERC20";
+        s.sellToken = "MxUSD"; s.sellAmount = "5"; s.buyToken = "USDT"; s.buyAmount = "5"; s.created = 1_700_000_000_000L; s.updated = s.created;
+        java.util.TimeZone tz = java.util.TimeZone.getTimeZone("UTC");
+        s.status = "REFUNDED";
+        Ledger.Item r = Ledger.asHistory(Ledger.swap(s, new java.util.ArrayList<>(), null, 0, 0, null, null, tz), s, tz);
+        assertEquals("AtomiX · your market · the taker never claimed", r.sub);
+        s.status = "COMPLETE";
+        Ledger.Item c = Ledger.asHistory(Ledger.swap(s, new java.util.ArrayList<>(), null, 0, 0, null, null, tz), s, tz);
+        assertTrue(c.sub, c.sub.startsWith("AtomiX · your market · "));
+    }
 }
