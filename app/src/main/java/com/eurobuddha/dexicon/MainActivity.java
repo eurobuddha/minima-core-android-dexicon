@@ -70,14 +70,14 @@ public class MainActivity extends AppCompatActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8;
+    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9;
     /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange. Each room's own pages
      *  sit in the row under the rail; ACTIVITY / ASSETS / SETTINGS are shared by all three at the bottom. */
     static final String[] ROOMS = {"① DOLLARS IN", "② POOLS", "③ EXCHANGE"};
     static final String[] ROOM_SUBS = {"AtomiX · USDT ⇄ ", "optional", "MINIMA / MxUSD"};   // ① ends with the active market
-    static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET}, {TAB_POOLS}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
+    static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_POOLS}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
     private static final int[] SHARED = {TAB_ACTIVITY, TAB_ASSETS, TAB_RELAYS};
-    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS", "MARKET"};
+    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS", "MARKET", "OTC"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
@@ -122,6 +122,7 @@ public class MainActivity extends AppCompatActivity {
     private DoorsTab doorsTab;
     private PoolsTab poolsTab;
     private MarketTab marketTab;
+    private OtcTab otcTab;
     private LinearLayout content;          // the visible page(s): one, or two side by side on a wide screen
     private ScrollView[] panes;
     private LinearLayout tabBar, rail, subBar;
@@ -994,7 +995,7 @@ public class MainActivity extends AppCompatActivity {
         content = new LinearLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsTab = new PoolsTab(this); marketTab = new MarketTab(this);
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsTab = new PoolsTab(this); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
         View[] tv = tabViews();
         panes = new ScrollView[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
@@ -1137,7 +1138,7 @@ public class MainActivity extends AppCompatActivity {
         if (tabBar != null && tab2 >= 0 && !com.eurobuddha.dexicon.ui.Wide.on(this)) selectTab(tab);
     }
 
-    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, poolsTab, marketTab}; }
+    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, poolsTab, marketTab, otcTab}; }
 
     static boolean isShared(int t) { for (int s : SHARED) if (s == t) return true; return false; }
     static int roomOf(int t) { for (int r = 0; r < ROOM_PAGES.length; r++) for (int p : ROOM_PAGES[r]) if (p == t) return r; return -1; }
@@ -1190,6 +1191,7 @@ public class MainActivity extends AppCompatActivity {
             case TAB_DOORS: doorsTab.render(); break;
             case TAB_POOLS: poolsTab.render(); break;
             case TAB_MARKET: marketTab.render(); break;
+            case TAB_OTC: otcTab.render(); break;
             default: relaysTab.render();
         }
     }

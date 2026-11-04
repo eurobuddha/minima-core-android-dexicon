@@ -657,6 +657,84 @@ public final class DoorHost {
         pushOrderEdit(o, st);
     }
 
+    // ------------------------------------------------------------------ ① OTC's own actions (AtomiX MainActivity)
+
+    private Map<String, OtcOffer> otcBoard = Collections.emptyMap();
+    public Map<String, OtcOffer> otcBoard() { return otcBoard; }
+    public OtcController otc() { return otc; }
+    public List<OtcDb.Deal> otcDeals() { return otcDb.allDeals(); }
+
+    /** The active market's OTC availability board, my own offer left out (AtomiX scanOtc). Also drives the receiver. */
+    public void scanOtcBoard(Runnable done) {
+        if (!ready() || !makerReady()) { if (done != null) done.run(); return; }
+        final TradingContext m = market;
+        final String me = "0x" + Hex.to(ids.get(m).signPk);
+        OtcBook.scan(node, ls(), book -> {
+            if (m == market) { book.remove(me); otcBoard = new LinkedHashMap<>(book); }
+            if (done != null) done.run();
+        }, err -> { if (done != null) done.run(); });
+        scanOtc();
+    }
+
+    /** AtomiX publishOtcOffer: go live (or update) for OTC with these sizes; the background keeps it on the board. */
+    public void publishOtcOffer(double sell, double buy, Status st) {
+        if (!Double.isFinite(sell) || !Double.isFinite(buy) || sell < 0 || buy < 0 || (sell <= 0 && buy <= 0)) { st.say("Enter a sell and/or buy size"); return; }
+        String no = makerBlock();
+        if (no != null) { st.say(no); return; }
+        PublishGate.bumpGen();   // new OTC terms invalidate queued publications
+        prefs.edit().putString("otc_sell_size", sell > 0 ? plain(sell) : "").putString("otc_buy_size", buy > 0 ? plain(buy) : "")
+                .putBoolean("otc_enable", true).putBoolean("otc_auto", true).apply();
+        if (!PublishGate.tryAcquire(PublishGate.OTC)) {
+            // a keep-alive (old sizes) is in flight: zero the stamp so the next pass republishes the NEW sizes
+            prefs.edit().putLong("otc_last_publish_ok", 0).apply();
+            st.say("Publishing busy — your sizes go live shortly");
+            return;
+        }
+        final long gen = PublishGate.gen();
+        OtcBook.publish(node, ls(), ids.get(market), otcOffer(true, sell, buy), new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) {
+                PublishGate.release(PublishGate.OTC);
+                if (gen != PublishGate.gen()) return;
+                prefs.edit().putLong("otc_last_publish_ok", System.currentTimeMillis()).apply();
+                st.say("✓ You're live for OTC");
+                changed();
+            }
+            @Override public void onFailed(String message) { PublishGate.release(PublishGate.OTC); st.say("OTC publish failed: " + mx(message)); }
+        });
+    }
+
+    /** AtomiX withdrawOtcOffer: off at once, then an empty offer on the board. Allowed even while gated. */
+    public void withdrawOtcOffer(Status st) {
+        PublishGate.bumpGen();
+        prefs.edit().putBoolean("otc_enable", false).putBoolean("otc_auto", false).apply();
+        if (!makerReady()) { st.say("OTC switched off."); return; }
+        OtcBook.publish(node, ls(), ids.get(market), otcOffer(false, 0, 0), new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) { st.say("✓ OTC offer withdrawn"); changed(); }
+            @Override public void onFailed(String message) { st.say("OTC switched off; the withdrawal did not post (" + mx(message) + ") — it ages off the board."); }
+        });
+    }
+
+    /** AtomiX otcCheckFunds: can I fund the leg I would lock (my role + the deal's side)? null = OK or unknown. */
+    public String otcCheckFunds(String role, String side, String amount, String price) {
+        if (!OtcController.validTerms(amount, price)) return "Enter amount + price";
+        double amt = num(amount), pr = num(price);
+        boolean iLockCoin = (OtcDb.ROLE_INSTIGATOR.equals(role) && OtcOffer.LP_BUYS_MINIMA.equals(side)) || (OtcDb.ROLE_LP.equals(role) && OtcOffer.LP_SELLS_MINIMA.equals(side));
+        if (iLockCoin) {
+            String have = coinBal.get(market);
+            if (have == null) return null;   // unknown → the on-chain lock is the gate
+            if (amt > num(have) + 1e-9) return "Not enough " + DoorPlan.coin(market) + " — need " + plain(amt) + ", have " + have;
+        } else {
+            if (usdtRaw == null) return null;
+            double have = new BigDecimal(usdtRaw, 6).doubleValue(), need = amt * pr;
+            if (need > have + 1e-9) return "Not enough USDT — need " + plain(need) + ", have " + plain(have);
+        }
+        return null;
+    }
+
+    /** Plain decimals for OTC sizes/terms (AtomiX trim / trimSig). */
+    public static String plain(double v) { return BigDecimal.valueOf(v).stripTrailingZeros().toPlainString(); }
+    public static String sig(double v) { return Double.isFinite(v) ? new BigDecimal(v, new java.math.MathContext(10)).stripTrailingZeros().toPlainString() : ""; }
+
     /** SwapService.maybeRepublishOtc: the OTC offer ages off the board (~1 h) exactly like the order. */
     private void maybeRepublishOtc() {
         if (IdentityWatch.halted() || gated() || !makerReady()) return;
