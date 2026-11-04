@@ -38,7 +38,7 @@ public final class DoorPlan {
     // ------------------------------------------------------------------ amount math (AtomiX MainActivity)
 
     static String tidy(BigDecimal v) { return v.stripTrailingZeros().toPlainString(); }
-    static double parseD(String s, double def) { try { return Double.parseDouble(s.trim()); } catch (Exception e) { return def; } }
+    public static double parseD(String s, double def) { try { return Double.parseDouble(s.trim()); } catch (Exception e) { return def; } }
 
     /** A positive amount that survives the 6dp trade grain. */
     public static boolean positiveSwapAmount(String raw) {

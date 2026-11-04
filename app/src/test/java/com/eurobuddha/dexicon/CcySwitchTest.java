@@ -52,8 +52,9 @@ public class CcySwitchTest {
         assertEquals("AtomiX's own key persists the choice", "minima", host.prefs().getString(TradingContext.PREF_KEY, ""));
         assertNotNull(DoorsTabSmokeTest.find(root, "⇄  MINIMA"));
         assertNotNull(DoorsTabSmokeTest.find(root, "① DOLLARS IN\nAtomiX · USDT ⇄ MINIMA"));
-        assertNotNull("① now quotes MINIMA only", DoorsTabSmokeTest.find(root, "● USDT → MINIMA"));
-        assertNull(DoorsTabSmokeTest.find(root, "● USDT → MxUSD"));
+        assertNotNull("① now quotes MINIMA only", DoorsTabSmokeTest.find(root, "Swap MINIMA ⇄ USDT"));
+        assertNotNull(DoorsTabSmokeTest.find(root, "Buy MINIMA"));
+        assertNull(DoorsTabSmokeTest.find(root, "Buy MxUSD"));
         assertTrue("long-press cycles the glow", DoorsTabSmokeTest.find(root, "⇄  MINIMA").performLongClick());
     }
 

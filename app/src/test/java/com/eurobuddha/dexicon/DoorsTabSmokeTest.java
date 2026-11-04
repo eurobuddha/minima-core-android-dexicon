@@ -44,12 +44,17 @@ public class DoorsTabSmokeTest {
         find(root, "Skip — go to the exchange →").performClick();
         assertTrue("Skip lands on ③", find(root, "TRADE").isShown());
         find(root, room(0)).performClick();
-        assertNotNull("ENTRY pane title", find(root, "ENTRY — USDT → MxUSD"));
-        assertNotNull("the active market's route card", find(root, "● USDT → MxUSD"));
-        assertNull("one market at a time — never both side by side", find(root, "○ USDT → MINIMA"));
-        find(root, "EXIT").performClick();
-        assertNotNull(find(root, "● MxUSD → USDT"));
-        assertNotNull(find(root, "AMOUNT · MxUSD"));
+        // 0.1.93: AtomiX's own Swap tab — header, Sell / Buy toggle, both shown; one market at a time
+        assertTrue("AtomiX's header", find(root, "Swap MxUSD ⇄ USDT").isShown());
+        assertTrue("Buy is there", find(root, "Buy MxUSD").isShown());
+        assertTrue("and so is the way back to USDT", find(root, "Sell MxUSD").isShown());
+        assertNull("never both markets", find(root, "Buy MINIMA"));
+        TextView setup = find(root, "Node not connected") != null ? find(root, "Node not connected") : find(root, "Setting up AtomiX…");
+        assertNotNull("before AtomiX is ready it says so — never \"no maker selling\"", setup);
+        assertTrue(setup.isShown());
+        find(root, "Sell MxUSD").performClick();
+        assertTrue(find(root, "Sell MxUSD").isShown());
+        assertNull("the old door panes are gone", find(root, "EXIT"));
         find(root, "ACTIVITY").performClick();
     }
 
@@ -92,7 +97,7 @@ public class DoorsTabSmokeTest {
 
         find(root, room(0)).performClick();
         assertNotNull(find(root, "YOUR ETHEREUM WALLET"));
-        assertNotNull(find(root, "How this works ▸"));
+        assertNotNull(find(root, "Swap MxUSD ⇄ USDT"));
     }
 
     /** 0.1.92: MINIMA shows at most 12 decimals, cut and never rounded. */
@@ -101,5 +106,19 @@ public class DoorsTabSmokeTest {
         assertEquals("0.999999999999", DoorsTab.minima12("0.9999999999999999"));
         assertEquals("5", DoorsTab.minima12("5"));
         assertEquals("—", DoorsTab.minima12(null));
+    }
+
+    /** 0.1.93: AtomiX's buy slippage — default 4.2 %, its own pref, bounded 0.1–50 %. */
+    @Test public void buySlippageIsAtomixs() {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        MainActivity a = DoorsTabSmokeTest.launch();
+        DoorsTab d = new DoorsTab(a);
+        assertEquals(0.042, d.slippage(), 1e-9);
+        a.getSharedPreferences("atomix_swap_ui", android.content.Context.MODE_PRIVATE).edit().putFloat("buy_slippage_pct", 2f).apply();
+        assertEquals(0.02, d.slippage(), 1e-9);
+        a.getSharedPreferences("atomix_swap_ui", android.content.Context.MODE_PRIVATE).edit().putFloat("buy_slippage_pct", 99f).apply();
+        assertEquals("out of range falls back to AtomiX's default", 0.042, d.slippage(), 1e-9);
     }
 }

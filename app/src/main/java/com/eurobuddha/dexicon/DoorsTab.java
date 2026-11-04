@@ -2,6 +2,8 @@ package com.eurobuddha.dexicon;
 
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -16,7 +18,9 @@ import com.eurobuddha.atomix.TradingContext;
 import com.eurobuddha.atomix.eth.EthHtlc;
 import com.eurobuddha.atomix.eth.EthSend;
 import com.eurobuddha.atomix.eth.EthWallet;
+import com.eurobuddha.atomix.swap.Order;
 import com.eurobuddha.atomix.swap.SwapDb;
+import com.eurobuddha.atomix.swap.SwapVisibility;
 import com.eurobuddha.dexicon.doors.DoorForwards;
 import com.eurobuddha.dexicon.doors.DoorHost;
 import com.eurobuddha.dexicon.doors.DoorPlan;
@@ -30,34 +34,68 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
- * DOORS tab — how ERC20 USDT users enter and leave Dexicon through the vendored AtomiX TAKER engine ({@link DoorHost}).
- * The same three panes as the MiniDapp (mds/dexicon ui/doors.js): ENTER (USDT in), EXIT (out to USDT, forwarded to a
- * typed Ethereum address), SWAP (either direction, delivered where the user says). Every pane quotes the ONE active
- * AtomiX market — USDT ⇄ MxUSD or USDT ⇄ MINIMA, picked with the ⇄ pill in the header (DoorHost.market). Settlement runs in the
- * background (MakerService → DoorHost.poll). The ETH deposit address and every id are shown in full, tap to copy.
+ * ① DOLLARS IN › SWAP — AtomiX's own Swap tab (apks/atomix MainActivity.renderSwapTab), on the vendored AtomiX engine
+ * ({@link DoorHost}). Owner, 4 Nov: the AtomiX people already know, with every function: Sell / Buy {coin} toggle, a
+ * "You send ⇅ You receive" card where either side can be typed, the best-price line, buy slippage 2% / 4.2% / Custom
+ * (AtomiX's pref and default), a review that lists every part with its maker key in full, and the YOUR SWAP stages.
+ * Dexicon keeps what it adds on top: multi-maker sweeps for both sides, the funds/gas checks inline, an optional
+ * forward address, and the IN PROGRESS lines with Refund now. Everything quotes the ONE active AtomiX market (⇄ pill).
  */
 @SuppressLint("ViewConstructor")
 public final class DoorsTab extends LinearLayout {
 
     private static final long REFRESH_MS = 60_000;
+    private static final long PANEL_GRACE_MS = 30_000;   // AtomiX SWAP_PANEL_GRACE_MS: a finished swap stays this long
+    private static final int USDT_TEAL = 0xFF26A69A, WARN = 0xFFE6A23C;   // AtomiX's USDT chip and stage-warning colours
+    private static final int STG_PENDING = 0, STG_ACTIVE = 1, STG_DONE = 2, STG_WARN = 3;
     private final MainActivity act;
     private final DoorHost host;
-    private final TextView halt, launch, ethAddr, bals, title, desc, details, review, amtLabel, toLabel, dirIn, dirOut;
-    private final TextView[] paneBtn = new TextView[3];
-    private final LinearLayout dirRow, routes, list;
+    private final SharedPreferences prefs;
+    private final TextView halt, launch, ethAddr, bals, head, sellTab, buyTab, bestLine, planLine, toLabel, review;
+    private final TextView setupTitle, setupBody, emptyTitle;
+    private final LinearLayout swapCard, setupCard, emptyCard, slipRow, stages, list;
+    private final Chip sendChip, recvChip;
     private final TextView progressLabel, finished;
     private final Swaps hooks;
-    private final EditText amt, to;
-    private String pane = "enter";
-    private boolean inward = true;
+    private final EditText send, recv, to;
+    private boolean sell = false;   // ① is "Dollars in": it opens on Buy
+    private boolean syncing;
+    private String stagesSig = "";
     private long lastRefresh;
+
+    /** AtomiX's token chip: coloured coin mark, ticker, "avail" balance. */
+    private final class Chip {
+        final LinearLayout root; final TextView mark, ticker, avail;
+        Chip() {
+            Context c = getContext();
+            root = new LinearLayout(c); root.setGravity(Gravity.CENTER_VERTICAL);
+            mark = t("", 0xFFFFFFFF, 15f, Design.sansBold()); mark.setGravity(Gravity.CENTER);
+            LayoutParams ml = new LayoutParams(Design.dp(c, 34), Design.dp(c, 34)); ml.rightMargin = Design.dp(c, 10);
+            root.addView(mark, ml);
+            LinearLayout col = new LinearLayout(c); col.setOrientation(VERTICAL);
+            ticker = t("", Design.TEXT(), 15f, Design.sansBold()); avail = t("", Design.DIM(), 11f, Design.sans());
+            col.addView(ticker); col.addView(avail);
+            root.addView(col);
+        }
+        void set(boolean coinSide) {
+            android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+            g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+            g.setColor(coinSide ? acc(route()) : USDT_TEAL);
+            mark.setBackground(g);
+            mark.setText(coinSide ? "M" : "$"); mark.setTextColor(coinSide ? ink(route()) : 0xFFFFFFFF);
+            ticker.setText(coinSide ? coin() : "USDT");
+            avail.setText("avail " + (coinSide ? coinHeld() : host.usdtRaw == null ? "—" : EthWallet.format(host.usdtRaw, 6, 6)));
+        }
+    }
 
     public DoorsTab(MainActivity act) {
         super(act);
         this.act = act;
         this.host = DoorHost.get(act);
+        this.prefs = act.getSharedPreferences("atomix_swap_ui", Context.MODE_PRIVATE);
         setOrientation(VERTICAL);
         int pad = Design.dp(act, 12);
         setPadding(pad, pad, pad, pad);
@@ -71,9 +109,9 @@ public final class DoorsTab extends LinearLayout {
         addView(launch, ll);
 
         Ui.why(this, "WHY THIS STEP", "Dexicon's exchange (③) trades MINIMA against MxUSD, Minima's own dollar. If your dollars are USDT on "
-                + "Ethereum, swap them for MxUSD here first. Both sides lock their funds in a time-locked contract; if anything stalls, "
-                + "you are refunded automatically. Already hold MxUSD? Go straight to ③. Just swapping? You can stop here: your MxUSD "
-                + "stays in your Minima wallet.");
+                + "Ethereum, buy MxUSD with them here first; sell MxUSD here to turn it back into USDT. Both sides lock their funds in a "
+                + "time-locked contract; if anything stalls, you are refunded automatically. Already hold MxUSD? Go straight to ③. "
+                + "Just swapping? You can stop here.");
 
         LinearLayout dep = card(this);
         dep.addView(Ui.copyRow(act, "YOUR ETHEREUM WALLET", "ETH deposit address", host::ethAddress));
@@ -86,45 +124,89 @@ public final class DoorsTab extends LinearLayout {
         dep.addView(balRow, Ui.wide(act, 4, 0));
         Ui.info(balRow, dep, "info_doors_deposit", "Send ERC20 USDT here, plus a little ETH for gas. This address is derived from this node’s seed by AtomiX’s rule (seedrandom:ethbridge) and never stored — it is the same address the AtomiX app on this node uses. Tap the address or Copy to copy it in full.");
 
+        // ---- AtomiX header + Sell / Buy toggle ----
+        head = t("", Design.TEXT(), 18f, Design.sansBold()); head.setPadding(0, Design.dp(act, 4), 0, Design.dp(act, 2));
+        addView(head);
+        TextView sh = t("Enter an amount — see exactly what you'll get at the best price.", Design.DIM(), 12.5f, Design.sans());
+        sh.setPadding(0, 0, 0, Design.dp(act, 12));
+        addView(sh);
         LinearLayout seg = new LinearLayout(act);
-        String[] names = {"ENTRY", "EXIT", "SWAP"}, keys = {"enter", "exit", "swap"};
-        for (int i = 0; i < 3; i++) {
-            final String k = keys[i];
-            paneBtn[i] = segBtn(names[i], () -> { pane = k; render(); });
-            seg.addView(paneBtn[i], new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        }
-        LayoutParams sl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); sl.bottomMargin = Design.dp(act, 10);
-        addView(seg, sl);
+        sellTab = segBtn("", () -> setSide(true));
+        buyTab = segBtn("", () -> setSide(false));
+        LayoutParams s1 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f); s1.rightMargin = Design.dp(act, 5);
+        LayoutParams s2 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f); s2.leftMargin = Design.dp(act, 5);
+        seg.addView(sellTab, s1); seg.addView(buyTab, s2);
+        addView(seg);
 
-        LinearLayout p = card(this);
-        title = t("", Design.TEXT(), 12f, Design.sansBold()); p.addView(title);
-        desc = Ui.para(act, "");
-        dirRow = new LinearLayout(act);
-        dirIn = segBtn("", () -> { inward = true; render(); });
-        dirOut = segBtn("", () -> { inward = false; render(); });
-        dirRow.addView(dirIn, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        dirRow.addView(dirOut, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        p.addView(dirRow);
-        amtLabel = t("", Design.DIM(), 9.5f, Design.mono()); p.addView(amtLabel);
-        amt = input("0.00", true); p.addView(amt);
-        toLabel = t("", Design.DIM(), 9.5f, Design.mono()); p.addView(toLabel);
-        to = input("", false); p.addView(to);
-        routes = new LinearLayout(act);
-        LayoutParams rl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); rl.topMargin = Design.dp(act, 10);
-        p.addView(routes, rl);
-        details = t("", Design.DIM(), 9.5f, Design.mono());
-        details.setPadding(0, Design.dp(act, 8), 0, Design.dp(act, 8));
-        details.setTextIsSelectable(true);
-        p.addView(details);
-        review = t("REVIEW", Design.ON_ACCENT(), 11f, Design.sansBold());
-        review.setGravity(Gravity.CENTER); int bp = Design.dp(act, 12); review.setPadding(0, bp, 0, bp);
-        review.setBackground(Design.gradientCta(act)); Design.pressable(review);
+        // ---- "Setting up AtomiX…" (first start) and "No one is quoting" (AtomiX's empty card) ----
+        setupCard = bigCard(this);
+        setupTitle = t("Setting up AtomiX…", Design.TEXT(), 14.5f, Design.sansBold()); setupCard.addView(setupTitle);
+        setupBody = t("", Design.DIM(), 12.5f, Design.sans()); setupBody.setPadding(0, Design.dp(act, 6), 0, 0);
+        setupCard.addView(setupBody);
+        emptyCard = bigCard(this);
+        emptyTitle = t("", Design.TEXT(), 14.5f, Design.sansBold()); emptyCard.addView(emptyTitle);
+        TextView emptySub = t("Check back soon, or open Market to place your own order and wait for a match.", Design.DIM(), 12.5f, Design.sans());
+        emptySub.setPadding(0, Design.dp(act, 6), 0, Design.dp(act, 2)); emptyCard.addView(emptySub);
+        TextView go = Design.pill(act, "Open Market", Design.SURFACE2(), Design.TEXT());
+        go.setOnClickListener(v -> act.showTab(MainActivity.TAB_MARKET)); Design.pressable(go);
+        LayoutParams gl = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT); gl.topMargin = Design.dp(act, 12);
+        emptyCard.addView(go, gl);
+
+        // ---- the dual-amount card: YOU SEND / ⇅ / YOU RECEIVE ----
+        swapCard = bigCard(this);
+        swapCard.addView(fieldLabel("YOU SEND"));
+        LinearLayout sendRow = new LinearLayout(act); sendRow.setGravity(Gravity.CENTER_VERTICAL);
+        sendRow.setPadding(0, Design.dp(act, 6), 0, Design.dp(act, 4));
+        sendChip = new Chip(); sendRow.addView(sendChip.root);
+        send = bigInput(Design.TEXT());
+        sendRow.addView(send, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        swapCard.addView(sendRow);
+
+        LinearLayout flipRow = new LinearLayout(act); flipRow.setGravity(Gravity.CENTER_VERTICAL);
+        flipRow.setPadding(0, Design.dp(act, 10), 0, Design.dp(act, 10));
+        View l1 = new View(act); l1.setBackgroundColor(Design.BORDER());
+        View l2 = new View(act); l2.setBackgroundColor(Design.BORDER());
+        TextView flip = t("⇅", Design.ACCENT(), 16f, Design.sansBold()); flip.setGravity(Gravity.CENTER);
+        flip.setBackground(Design.stroked(act, Design.SURFACE2(), 19));
+        flip.setContentDescription("Flip: swap the other way");
+        flip.setOnClickListener(v -> setSide(!sell)); Design.pressable(flip);
+        int fs = Design.dp(act, 38);
+        LayoutParams fl = new LayoutParams(fs, fs); fl.leftMargin = Design.dp(act, 12); fl.rightMargin = Design.dp(act, 12);
+        flipRow.addView(l1, new LayoutParams(0, Design.dp(act, 1), 1f)); flipRow.addView(flip, fl); flipRow.addView(l2, new LayoutParams(0, Design.dp(act, 1), 1f));
+        swapCard.addView(flipRow);
+
+        swapCard.addView(fieldLabel("YOU RECEIVE (estimate)"));
+        LinearLayout recvRow = new LinearLayout(act); recvRow.setGravity(Gravity.CENTER_VERTICAL);
+        recvRow.setPadding(0, Design.dp(act, 6), 0, Design.dp(act, 2));
+        recvChip = new Chip(); recvRow.addView(recvChip.root);
+        recv = bigInput(Design.ACCENT());
+        recvRow.addView(recv, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        swapCard.addView(recvRow);
+
+        bestLine = t("", Design.DIM2(), 11.5f, Design.sans()); bestLine.setPadding(0, Design.dp(act, 12), 0, 0);
+        swapCard.addView(bestLine);
+        slipRow = new LinearLayout(act); slipRow.setGravity(Gravity.CENTER_VERTICAL);
+        LayoutParams sr = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); sr.topMargin = Design.dp(act, 10);
+        swapCard.addView(slipRow, sr);
+        planLine = t("", Design.DIM(), 10.5f, Design.mono()); planLine.setPadding(0, Design.dp(act, 10), 0, 0);
+        planLine.setTextIsSelectable(true);
+        swapCard.addView(planLine);
+        toLabel = t("", Design.DIM(), 9.5f, Design.mono()); toLabel.setPadding(0, Design.dp(act, 12), 0, Design.dp(act, 4));
+        swapCard.addView(toLabel);
+        to = input("", false); swapCard.addView(to);
+        review = t("Review swap", Design.ON_ACCENT(), 13f, Design.sansBold());
+        review.setGravity(Gravity.CENTER); int bp = Design.dp(act, 13); review.setPadding(0, bp, 0, bp);
+        Design.pressable(review);
         review.setOnClickListener(v -> openReview());
-        p.addView(review);
-        Ui.foldText(p, "How this works", "fold_doors_how", desc);
+        LayoutParams rv = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); rv.topMargin = Design.dp(act, 16);
+        swapCard.addView(review, rv);
+
+        stages = new LinearLayout(act); stages.setOrientation(VERTICAL);
+        LayoutParams stl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); stl.topMargin = Design.dp(act, 18);
+        addView(stages, stl);
 
         progressLabel = Ui.label(act, "IN PROGRESS");
-        progressLabel.setPadding(Design.dp(act, 4), Design.dp(act, 8), 0, Design.dp(act, 6));
+        progressLabel.setPadding(Design.dp(act, 4), Design.dp(act, 14), 0, Design.dp(act, 6));
         addView(progressLabel);
         list = new LinearLayout(act); list.setOrientation(VERTICAL);
         addView(list);
@@ -135,12 +217,10 @@ public final class DoorsTab extends LinearLayout {
         finished.setOnClickListener(v -> { if (!host.swaps().isEmpty()) act.showTab(MainActivity.TAB_HISTORY); });
         addView(finished);
 
-        TextWatcher w = new TextWatcher() {
-            public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
-            public void onTextChanged(CharSequence s, int a, int b, int c) {}
-            public void afterTextChanged(Editable e) { quote(); }
-        };
-        amt.addTextChangedListener(w); to.addTextChangedListener(w);
+        // Either side can be typed (AtomiX): the other follows at the best price. The plan below re-quotes on every key.
+        send.addTextChangedListener(watcher(() -> { if (!syncing) mirror(true); quote(); }));
+        recv.addTextChangedListener(watcher(() -> { if (!syncing) mirror(false); quote(); }));
+        to.addTextChangedListener(watcher(this::quote));
     }
 
     // ------------------------------------------------------------------ view helpers
@@ -161,19 +241,33 @@ public final class DoorsTab extends LinearLayout {
     private TextView t(String s, int color, float size, android.graphics.Typeface tf) {
         TextView v = new TextView(getContext()); v.setText(s); v.setTextColor(color); v.setTextSize(size); v.setTypeface(tf); return v;
     }
+    private TextView fieldLabel(String s) { TextView v = t(s, Design.DIM(), 11f, Design.sans()); v.setLetterSpacing(0.06f); return v; }
     private TextView segBtn(String s, Runnable on) {
-        TextView b = t(s, Design.DIM(), 10.5f, Design.sansBold());
-        b.setGravity(Gravity.CENTER); int p = Design.dp(getContext(), 10); b.setPadding(0, p, 0, p); b.setMinHeight(Design.dp(getContext(), 44));
-        b.setOnClickListener(v -> on.run());
+        TextView b = t(s, Design.DIM(), 13f, Design.sansBold());
+        b.setGravity(Gravity.CENTER); int p = Design.dp(getContext(), 11); b.setPadding(0, p, 0, p); b.setMinHeight(Design.dp(getContext(), 46));
+        b.setOnClickListener(v -> on.run()); Design.pressable(b);
         return b;
     }
-    private void mark(TextView b, boolean on) { b.setTextColor(on ? ink(route()) : Design.DIM()); b.setBackground(on ? Design.roundBg(getContext(), acc(route()), 10) : null); }
+    private void mark(TextView b, boolean on) {
+        b.setTextColor(on ? ink(route()) : Design.DIM());
+        b.setBackground(on ? Design.roundBg(getContext(), acc(route()), 12) : Design.stroked(getContext(), Design.SURFACE2(), 12));
+    }
     private EditText input(String hint, boolean decimal) {
         EditText e = new EditText(getContext());
         e.setHint(hint); e.setTextColor(Design.TEXT()); e.setHintTextColor(Design.DIM2()); e.setTypeface(Design.mono()); e.setTextSize(12f);
         e.setInputType(decimal ? InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         e.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 8));
         int p = Design.dp(getContext(), 9); e.setPadding(p, p, p, p);
+        return e;
+    }
+    /** AtomiX's big amount field: 26sp mono, right-aligned, no box. */
+    private EditText bigInput(int color) {
+        EditText e = new EditText(getContext());
+        e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        e.setHint("0.00"); e.setHintTextColor(Design.DIM2());
+        e.setTextColor(color); e.setTextSize(26f); e.setTypeface(Design.monoBold());
+        e.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        e.setBackground(null); e.setPadding(Design.dp(getContext(), 8), 0, 0, 0);
         return e;
     }
     private LinearLayout card(LinearLayout parent) {
@@ -185,16 +279,72 @@ public final class DoorsTab extends LinearLayout {
         parent.addView(c, lp);
         return c;
     }
+    private LinearLayout bigCard(LinearLayout parent) {
+        LinearLayout c = new LinearLayout(getContext());
+        c.setOrientation(VERTICAL);
+        c.setBackground(Design.card(getContext(), 18));
+        c.setPadding(Design.dp(getContext(), 16), Design.dp(getContext(), 14), Design.dp(getContext(), 16), Design.dp(getContext(), 16));
+        LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); lp.topMargin = Design.dp(getContext(), 14);
+        parent.addView(c, lp);
+        return c;
+    }
+    private static TextWatcher watcher(Runnable r) {
+        return new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            public void afterTextChanged(Editable e) { r.run(); }
+        };
+    }
 
     // ------------------------------------------------------------------ state
 
     private TradingContext route() { return host.market(); }
-    private boolean sell() { return "exit".equals(pane) || ("swap".equals(pane) && !inward); }
-    private boolean needTo() { return sell(); }
     private String coin() { return DoorPlan.coin(route()); }
+    private Map<String, Order> book() { return host.book(route()); }
+    private String me() { return host.myPublicId(route()); }
+    private String coinHeld() { String h = host.coinBalance(route()); return route() == TradingContext.MINIMA ? minima12(h) : nz(h); }
     private static String trim6(double v) { return Double.isFinite(v) ? BigDecimal.valueOf(v).setScale(6, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() : "0"; }
     private static String px(double v) { return Double.isFinite(v) && v > 0 ? new BigDecimal(v).round(new java.math.MathContext(6)).stripTrailingZeros().toPlainString() : "0"; }
     private static String eth(BigInteger wei) { return wei == null ? "?" : EthWallet.format(wei, 18, 6); }
+
+    /** AtomiX's buy slippage (pref buy_slippage_pct, 0.1–50 %, default 4.2 %) as a fraction. */
+    double slippage() {
+        float pct = prefs.getFloat("buy_slippage_pct", 4.2f);
+        // via the float's own decimal string: 4.2f is 4.19999980926…, and the plan must use exactly 4.2 %
+        return Float.isFinite(pct) && pct >= 0.1f && pct <= 50 ? Double.parseDouble(Float.toString(pct)) / 100.0 : 0.042;
+    }
+    private void setSlippage(double pct) {
+        if (!Double.isFinite(pct)) return;
+        prefs.edit().putFloat("buy_slippage_pct", (float) Math.max(0.1, Math.min(50, pct))).apply();
+        render();
+    }
+    private static String pct(double v) { return BigDecimal.valueOf(v).setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString(); }
+
+    /** Sell / Buy (or ⇅): the amounts clear, as in AtomiX, so a number typed for one direction is never sent the other. */
+    private void setSide(boolean s) {
+        if (sell != s) { sell = s; syncing = true; send.setText(""); recv.setText(""); syncing = false; }
+        render();
+    }
+
+    /** The coin amount the swap is sized by (AtomiX: always the {coin} side — sent when selling, received when buying). */
+    String coinAmount() { return (sell ? send : recv).getText().toString().trim(); }
+
+    /** Type either side; the other follows at the best price (AtomiX computeUsdt / computeMinima). */
+    private void mirror(boolean fromSend) {
+        double best = best();
+        String in = (fromSend ? send : recv).getText().toString().trim(), out;
+        boolean inIsCoin = fromSend == sell;   // selling: send is the coin; buying: receive is the coin
+        if (in.isEmpty() || !(best > 0)) out = "";
+        else out = inIsCoin ? DoorPlan.computeUsdt(in, best) : DoorPlan.computeMinima(in, best);
+        syncing = true;
+        (fromSend ? recv : send).setText(out == null ? "" : out);
+        syncing = false;
+    }
+
+    private double best() {
+        DoorPlan.Best q = DoorPlan.bestMakers(book(), me());
+        return sell ? q.bestBid : q.bestAsk;
+    }
 
     /** Re-read books, balances and settlement at most once a minute while the tab is open. */
     private void refresh(boolean force) {
@@ -203,39 +353,72 @@ public final class DoorsTab extends LinearLayout {
         lastRefresh = now;
         host.poll();
         host.readBalances(this::paintTop);
-        host.scanBooks(this::quote);
+        host.scanBooks(this::render);
     }
 
     public void render() {
         refresh(false);
         paintTop();
-        review.setBackground(cta(route())); review.setTextColor(ink(route()));
-        String[] keys = {"enter", "exit", "swap"};
-        for (int i = 0; i < 3; i++) mark(paneBtn[i], keys[i].equals(pane));
         String c = coin();
-        dirRow.setVisibility("swap".equals(pane) ? VISIBLE : GONE);
-        dirIn.setText("USDT → " + c); dirOut.setText(c + " → USDT"); mark(dirIn, inward); mark(dirOut, !inward);
-        switch (pane) {
-            case "enter":
-                title.setText("ENTRY — USDT → " + c);
-                desc.setText("For ERC20 USDT holders, on the active AtomiX market (the ⇄ pill above switches MxUSD / MINIMA). Your USDT locks on Ethereum first (2 h refund window); the maker locks the coin; this node claims it into its wallet automatically.");
-                break;
-            case "exit":
-                title.setText("EXIT — " + c + " → USDT");
-                desc.setText("The active AtomiX market, quoted for the amount typed in " + c + ". Your coin locks on Minima (144-block refund window); the maker locks USDT; this node withdraws it and forwards it by one ERC20 transfer to the address you name (both gas fees are shown when you review).");
-                break;
-            default:
-                title.setText("SWAP — the pure lane");
-                desc.setText("USDT ⇄ " + c + " through AtomiX, delivered where you say: the coin to this node’s wallet or forwarded by one send to any Minima address (claimed amount less the 0.0001 notify output); USDT to any Ethereum address.");
+        head.setText("Swap " + c + " ⇄ USDT");
+        sellTab.setText("Sell " + c); buyTab.setText("Buy " + c);
+        mark(sellTab, sell); mark(buyTab, !sell);
+        review.setBackground(cta(route())); review.setTextColor(ink(route()));
+        sendChip.set(sell); recvChip.set(!sell);
+        toLabel.setText(sell ? "SEND THE USDT TO · optional — leave empty to keep it in your Ethereum wallet above"
+                             : "SEND THE " + c + " TO · optional — leave empty to keep it in this node’s wallet");
+        to.setHint(sell ? "0x… Ethereum address" : "Mx… Minima address");
+
+        boolean ready = act.paired() && host.ready();
+        double best = best();
+        setupCard.setVisibility(ready ? GONE : VISIBLE);
+        emptyCard.setVisibility(ready && !(best > 0) ? VISIBLE : GONE);
+        swapCard.setVisibility(ready && best > 0 ? VISIBLE : GONE);
+        if (!act.paired()) {
+            setupTitle.setText("Node not connected");
+            setupBody.setText("Pair Dexicon with your node to see AtomiX's makers and swap.");
+        } else if (!ready) {
+            setupTitle.setText("Setting up AtomiX…");
+            String note = host.bootNote();
+            setupBody.setText("Preparing your Ethereum wallet and swap keys on this node, then reading the market. The first start takes a minute or two."
+                    + (note.isEmpty() || note.startsWith("Waiting") ? "" : "\n\n" + note));
         }
-        amtLabel.setText("AMOUNT · " + (sell() ? c : "USDT (ERC20)"));
-        boolean showTo = !"enter".equals(pane);
-        toLabel.setVisibility(showTo ? VISIBLE : GONE); to.setVisibility(showTo ? VISIBLE : GONE);
-        toLabel.setText(sell() ? "DESTINATION · Ethereum address, 0x + 40 hex" : "DESTINATION · Minima address — leave empty to keep the " + c + " in this node’s wallet");
-        to.setHint(sell() ? "0x…" : "Mx…");
-        review.setText("REVIEW " + ("enter".equals(pane) ? "ENTRY" : pane.toUpperCase(Locale.ROOT)) + "  →");
+        emptyTitle.setText("No one is quoting a " + (sell ? "buy" : "sell") + " price right now.");
+        paintSlippage();
         quote();
+        paintStages();
         renderSwaps(list);
+    }
+
+    private void paintSlippage() {
+        slipRow.removeAllViews();
+        slipRow.setVisibility(sell ? GONE : VISIBLE);
+        if (sell) return;
+        double cur = slippage() * 100;
+        boolean is2 = Math.abs(cur - 2) < 0.001, is42 = Math.abs(cur - 4.2) < 0.001;
+        slipRow.addView(t("Max slippage", Design.DIM(), 11.5f, Design.sans()));
+        slipRow.addView(slipPill("2%", is2, () -> setSlippage(2)));
+        slipRow.addView(slipPill("4.2%", is42, () -> setSlippage(4.2)));
+        slipRow.addView(slipPill(!is2 && !is42 ? pct(cur) + "%" : "Custom", !is2 && !is42, this::customSlippage));
+    }
+    private TextView slipPill(String label, boolean on, Runnable tap) {
+        TextView p = Design.pill(getContext(), label, on ? soft(route()) : Design.SURFACE2(), on ? acc(route()) : Design.DIM());
+        LayoutParams l = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT); l.leftMargin = Design.dp(getContext(), 6);
+        p.setLayoutParams(l); p.setOnClickListener(v -> tap.run()); Design.pressable(p);
+        return p;
+    }
+    private void customSlippage() {
+        LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
+        int p = Design.dp(act, 20); box.setPadding(p, Design.dp(act, 12), p, Design.dp(act, 4));
+        TextView h = t("The most above the best price you'll pay per " + coin() + " when a buy fills across deeper levels (0.1–50 %).", Design.DIM(), 12.5f, Design.sans());
+        h.setPadding(0, 0, 0, Design.dp(act, 10)); box.addView(h);
+        EditText e = input("%", true); e.setTextSize(16f); e.setText(pct(slippage() * 100)); box.addView(e);
+        act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Max slippage").setView(box)
+                .setPositiveButton("Set", (d, w) -> {
+                    try { setSlippage(Double.parseDouble(e.getText().toString().trim())); }
+                    catch (NumberFormatException ex) { act.toast("Enter a percentage, e.g. 3"); }
+                })
+                .setNegativeButton("Cancel", null).show());
     }
 
     private void paintTop() {
@@ -251,6 +434,7 @@ public final class DoorsTab extends LinearLayout {
         bals.setText("ETH " + (host.ethWei == null ? "—" : eth(host.ethWei)) + " · USDT " + usdt
                 + " · MxUSD " + nz(host.coinBalance(TradingContext.MXUSDT)) + " · MINIMA " + minima12(host.coinBalance(TradingContext.MINIMA))
                 + (host.gasWei != null ? " · gas " + EthWallet.format(host.gasWei, 9, 3) + " gwei" : ""));
+        if (sendChip != null) { sendChip.set(sell); recvChip.set(!sell); }
     }
     private static String nz(String s) { return s == null ? "—" : s; }
     /** A MINIMA amount cut to at most 12 decimals, never rounded (owner 4 Nov): the node's sendable carries up to 44. */
@@ -262,126 +446,230 @@ public final class DoorsTab extends LinearLayout {
 
     // ------------------------------------------------------------------ quote (the active market)
 
-    private DoorPlan.Route quoteFor(TradingContext m) {
-        return DoorPlan.route(host.book(m), m, sell(), amt.getText().toString().trim(), host.myPublicId(m));
+    /** AtomiX's plan for the {coin} amount: SELL sweeps it at any bid; BUY delivers it across asks within the slippage. */
+    DoorPlan.Plan plan() {
+        String amt = coinAmount();
+        if (amt.isEmpty() || !DoorPlan.positiveSwapAmount(amt)) return null;
+        return DoorPlan.buildSweepPlan(book(), sell, amt, sell ? 0 : slippage(), me());
     }
 
     private void quote() {
-        routes.removeAllViews();
-        DoorPlan.Route picked = quoteFor(route());
-        routes.addView(routeCard(picked), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        if (picked.plan == null) { details.setTextColor(picked.err == null ? Design.DIM() : Design.RED()); details.setText(picked.err == null ? "" : coin() + " route: " + picked.err); review.setAlpha(0.5f); return; }
-        String v = validate(picked.plan);
-        details.setTextColor(v.isEmpty() ? Design.TEXT() : Design.RED());
-        details.setText(planText(picked.plan, false) + (v.isEmpty() ? "" : "\n\n" + v));
+        String c = coin();
+        DoorPlan.Best q = DoorPlan.bestMakers(book(), me());
+        double best = sell ? q.bestBid : q.bestAsk, cap = sell ? q.bidCap : q.askCap, depth = DoorPlan.sweepDepthMinima(book(), sell, me());
+        int makers = DoorPlan.liveMakers(book(), sell, me());
+        bestLine.setText(best > 0 ? "Best price " + px(best) + " USDT/" + c + "  ·  up to ~" + trim6(cap) + " at best"
+                + (depth > cap + 1e-9 ? ", ~" + trim6(depth) + " across the book" : "") + "  ·  " + makers + (makers == 1 ? " maker" : " makers")
+                + (sell ? "" : "  ·  ETH gas per part") : "");
+        String amt = coinAmount();
+        if (amt.isEmpty()) { planLine.setText(""); review.setAlpha(0.5f); return; }
+        DoorPlan.Plan p = plan();
+        if (p == null) { say("Enter a valid " + c + " amount.", true); return; }
+        if (p.legs.isEmpty()) { say("below-min".equals(p.stopReason) ? "That's below the makers' minimum trade size." : "No liquidity available to fill that right now.", true); return; }
+        String v = validate(p);
+        StringBuilder b = new StringBuilder();
+        b.append(p.legs.size()).append(p.legs.size() == 1 ? " part" : " parts").append(" · avg ").append(px(p.avgPrice)).append(" · worst ").append(px(p.worstPrice)).append(" USDT/").append(c);
+        b.append(sell ? "\nYou receive ≈ " + trim6(p.totalUsdt) + " USDT" : "\nYou pay ≈ " + trim6(p.totalUsdt) + " USDT for " + trim6(p.filledMinima) + " " + c);
+        if (p.partial) b.append("\nPARTIAL: fills ").append(trim6(p.filledMinima)).append(" of ").append(trim6(p.target)).append(' ').append(c)
+                .append(!sell && "slippage".equals(p.stopReason) ? " — the rest is priced beyond your " + pct(slippage() * 100) + "% slippage." : " — the rest isn't in the book right now.");
+        if (!v.isEmpty()) b.append("\n\n").append(v);
+        planLine.setTextColor(v.isEmpty() ? (p.partial ? WARN : Design.DIM()) : Design.RED());
+        planLine.setText(b.toString());
         review.setAlpha(v.isEmpty() ? 1f : 0.5f);
     }
+    private void say(String s, boolean bad) { planLine.setTextColor(bad ? Design.RED() : Design.DIM()); planLine.setText(s); review.setAlpha(0.5f); }
 
-    private View routeCard(DoorPlan.Route r) {
-        boolean on = r.market == route(), s = r.sell;
-        LinearLayout c = new LinearLayout(getContext());
-        c.setOrientation(VERTICAL);
-        int p = Design.dp(getContext(), 9); c.setPadding(p, p, p, p);
-        c.setBackground(on ? Design.roundBg(getContext(), soft(r.market), 10) : Design.stroked(getContext(), Design.SURFACE2(), 10));
-        c.addView(t((on ? "● " : "○ ") + (s ? r.coin + " → USDT" : "USDT → " + r.coin), on ? acc(r.market) : Design.DIM(), 10f, Design.sansBold()));
-        if (r.plan != null) {
-            c.addView(t(s ? "≈ " + trim6(r.plan.totalUsdt) + " USDT" : trim6(r.plan.filledMinima) + " " + r.coin, Design.TEXT(), 13f, Design.monoBold()));
-            c.addView(t(s ? "for " + trim6(r.plan.filledMinima) + " " + r.coin : "for ≈ " + trim6(r.plan.totalUsdt) + " USDT", Design.DIM(), 9.5f, Design.mono()));
-            c.addView(t("avg " + px(r.plan.avgPrice) + " USDT/" + r.coin + " · " + r.plan.legs.size() + (r.plan.legs.size() == 1 ? " part" : " parts") + (r.plan.partial ? " · PARTIAL" : ""), Design.DIM(), 9.5f, Design.mono()));
-        } else if (r.err != null) c.addView(t(r.err, Design.RED(), 9.5f, Design.mono()));
-        else {
-            c.addView(t(r.best > 0 ? px(r.best) + " USDT/" + r.coin : "no quote", Design.TEXT(), 13f, Design.monoBold()));
-            c.addView(t(r.best > 0 ? "best " + (s ? "bid" : "ask") : "no maker " + (s ? "buying" : "selling"), Design.DIM(), 9.5f, Design.mono()));
-        }
-        c.addView(t("ceiling ~" + trim6(r.depth) + " " + r.coin + " · " + r.makers + (r.makers == 1 ? " maker" : " makers"), Design.DIM2(), 9f, Design.mono()));
-        if (s) c.addView(t("you hold " + (r.market == TradingContext.MINIMA ? minima12(host.coinBalance(r.market)) : nz(host.coinBalance(r.market))) + " " + r.coin, Design.DIM2(), 9f, Design.mono()));
-        return c;
-    }
-
-    /** The plan in words. {@code full} (the review dialog only) adds each part's maker id and the ETH gas lines. */
-    private String planText(DoorPlan.Plan p, boolean full) {
-        String c = coin(), dest = to.getText().toString().trim();
-        StringBuilder b = new StringBuilder();
-        b.append(p.sell ? "You give " + trim6(p.filledMinima) + " " + c + " → receive ≈ " + trim6(p.totalUsdt) + " USDT"
-                        : "You pay ≈ " + trim6(p.totalUsdt) + " USDT → receive " + trim6(p.filledMinima) + " " + c).append("  (" + c + " market)\n");
-        b.append("Avg ").append(px(p.avgPrice)).append(" · worst ").append(px(p.worstPrice)).append(" USDT per ").append(c).append(" · ")
-                .append(p.legs.size()).append(p.legs.size() == 1 ? " part" : " parts").append(p.sell ? "" : " · within " + (int) (DoorPlan.BUY_SLIPPAGE * 100) + "% slippage").append('\n');
-        if (p.partial) b.append("PARTIAL: fills ").append(trim6(p.filledMinima)).append(" of ").append(trim6(p.target)).append(' ').append(c)
-                .append("slippage".equals(p.stopReason) ? " — the rest is priced beyond the slippage cap.\n" : " — the rest is not in the book right now.\n");
-        for (int i = 0; i < p.legs.size(); i++) {
-            DoorPlan.Leg l = p.legs.get(i);
-            b.append("Part ").append(i + 1).append(": ").append(l.minima).append(' ').append(c).append(" @ ").append(px(l.price)).append(" → ").append(l.usdt).append(" USDT").append(full ? " · maker " + l.maker.signerPk : "").append('\n');
-        }
-        if (full) {   // the gas lines live in the review dialog only
-            if (p.sell) {
-                BigInteger wd = host.gasReserve(EthHtlc.GAS_WITHDRAW), fw = host.gasReserve(EthSend.GAS_ERC20);
-                b.append("ETH gas from the deposit address: withdraw ≈ ").append(eth(wd)).append(" ETH").append(dest.isEmpty() ? "" : " + forward ≈ " + eth(fw) + " ETH");
-            } else {
-                BigInteger lk = host.gasReserve(EthHtlc.GAS_LOCK);
-                b.append("ETH gas from the deposit address: ≈ ").append(eth(lk)).append(" ETH per part (+ a one-time USDT approval on first use)");
-            }
-            b.append(" (you hold ").append(host.ethWei == null ? "—" : eth(host.ethWei)).append(" ETH)\n");
-        }
-        if (!dest.isEmpty()) b.append(p.sell ? "USDT" : c).append(" will be forwarded to ").append(dest);
-        else if (!p.sell) b.append(c).append(" lands in this node’s wallet.");
-        return b.toString();
-    }
-
-    /** Fund + address checks for the PICKED route; every unreadable balance fails CLOSED. "" when OK. */
+    /** Fund + address checks for the plan; every unreadable balance fails CLOSED. "" when OK. */
     private String validate(DoorPlan.Plan p) {
         String c = coin(), dest = to.getText().toString().trim();
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
         if (host.busy()) return "An AtomiX swap is still starting — wait for it to finish.";
         if (!dest.isEmpty() && (p.sell ? !DoorForwards.isEthAddr(dest) : !DoorForwards.isMxAddr(dest)))
-            return p.sell ? "Destination must be an Ethereum address (0x + 40 hex)." : "Destination must be a Minima address (Mx… or 0x + 64 hex).";
-        if (needTo() && dest.isEmpty()) return "Enter the destination address.";
-        if (host.ethWei == null) return "Cannot read the ETH balance of the deposit address right now — try again shortly.";
+            return p.sell ? "The address to send the USDT to must be an Ethereum address (0x + 40 hex)." : "The address to send the " + c + " to must be a Minima address (Mx… or 0x + 64 hex).";
+        if (host.ethWei == null) return "Cannot read the ETH balance of your Ethereum wallet right now — try again shortly.";
         if (p.sell) {
             String have = host.coinBalance(route());
             if (have == null) return "Cannot read your " + c + " balance right now.";
-            if (p.filledMinima > Double.parseDouble(have) + 1e-9) return "You hold " + have + " " + c + " — reduce the amount.";
+            if (p.filledMinima > Double.parseDouble(have) + 1e-9) return "You only have " + coinHeld() + " " + c + " available to sell.";
             BigInteger g = host.gasReserve(EthHtlc.GAS_WITHDRAW.add(dest.isEmpty() ? BigInteger.ZERO : EthSend.GAS_ERC20));
             if (g == null) return "Cannot read the Ethereum gas price right now.";
-            if (g.compareTo(host.ethWei) > 0) return "Not enough ETH at the deposit address for the withdraw" + (dest.isEmpty() ? "" : " + forward") + " gas — send a little ETH there first.";
+            if (g.compareTo(host.ethWei) > 0) return "Not enough ETH in your Ethereum wallet for the withdraw" + (dest.isEmpty() ? "" : " + send") + " gas — send a little ETH there first.";
         } else {
             if (host.usdtRaw == null) return "Cannot read your USDT balance right now.";
-            if (EthSend.parseUnits(trim6(p.totalUsdt), 6).compareTo(host.usdtRaw) > 0) return "You hold " + EthWallet.format(host.usdtRaw, 6, 6) + " USDT at the deposit address — reduce the amount or top it up.";
+            if (EthSend.parseUnits(trim6(p.totalUsdt), 6).compareTo(host.usdtRaw) > 0)
+                return "Need ≈ " + trim6(p.totalUsdt) + " USDT for " + trim6(p.filledMinima) + " " + c + " (within " + pct(slippage() * 100) + "%) — you have " + EthWallet.format(host.usdtRaw, 6, 6) + ".";
             BigInteger g = host.gasReserve(EthHtlc.GAS_LOCK.multiply(BigInteger.valueOf(p.legs.size())));
             if (g == null) return "Cannot read the Ethereum gas price right now.";
-            if (g.compareTo(host.ethWei) > 0) return "Not enough ETH at the deposit address for " + p.legs.size() + " lock transaction" + (p.legs.size() == 1 ? "" : "s") + " — send a little ETH there first.";
+            if (g.compareTo(host.ethWei) > 0) return "Not enough ETH in your Ethereum wallet for " + p.legs.size() + " lock transaction" + (p.legs.size() == 1 ? "" : "s") + " — send a little ETH there first.";
         }
         return "";
     }
 
-    // ------------------------------------------------------------------ review → take
+    // ------------------------------------------------------------------ review → start (AtomiX reviewSweep)
 
     private void openReview() {
-        if (!host.ready()) { act.toast("AtomiX not ready — " + host.bootNote()); return; }
-        DoorPlan.Route r = quoteFor(route());
-        if (amt.getText().toString().trim().isEmpty()) { act.toast("Enter an amount first."); return; }
-        if (r.plan == null) { act.toast(coin() + " route: " + r.err); return; }
-        String v = validate(r.plan);
+        if (!host.ready()) { act.toast("AtomiX is still setting up — " + (host.bootNote().isEmpty() ? "one moment." : host.bootNote())); return; }
+        String c = coin();
+        if (coinAmount().isEmpty()) { act.toast("Enter how much " + c + " to " + (sell ? "sell" : "buy")); return; }
+        DoorPlan.Plan plan = plan();
+        if (plan == null) { act.toast("Enter a valid " + c + " amount."); return; }
+        if (plan.legs.isEmpty()) { act.toast("below-min".equals(plan.stopReason) ? "That's below the makers' minimum trade size." : "No liquidity available to fill that right now."); return; }
+        String v = validate(plan);
         if (!v.isEmpty()) { act.toast(v); return; }
-        final DoorPlan.Plan plan = r.plan;
+        host.scanBooks(null);   // AtomiX: a fresh book by the time you confirm; each part re-checks its maker before locking
         final TradingContext market = route();
-        final String dest = to.getText().toString().trim(), c = coin();
-        String head = pane.toUpperCase(Locale.ROOT) + " — " + (plan.sell ? "sell " + trim6(plan.filledMinima) + " " + c + " for ≈ " + trim6(plan.totalUsdt) + " USDT"
-                : "buy " + trim6(plan.filledMinima) + " " + c + " for ≈ " + trim6(plan.totalUsdt) + " USDT");
-        String body = planText(plan, true) + "\n\n" + (plan.sell ? "This locks your " + c + " on Minima now (block + 144 refund window)." : "This locks your USDT on Ethereum now (2 h refund window).")
-                + " The background service completes the swap; keep this node running.";
-        TextView msg = t(body, Design.TEXT(), 10.5f, Design.mono());
-        int p = Design.dp(getContext(), 18); msg.setPadding(p, p / 2, p, 0); msg.setTextIsSelectable(true);
-        android.widget.ScrollView sv = new android.widget.ScrollView(getContext()); sv.addView(msg);
-        act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle(head).setView(sv)
-                .setPositiveButton("START", (d, w) -> {
+        final String dest = to.getText().toString().trim();
+        final boolean s = plan.sell;
+
+        LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
+        int pd = Design.dp(act, 20); box.setPadding(pd, Design.dp(act, 12), pd, Design.dp(act, 4));
+        TextView hd = t(s ? "Sell " + trim6(plan.filledMinima) + " " + c + " in " + plan.legs.size() + (plan.legs.size() == 1 ? " part" : " parts")
+                          : "Buy ≈ " + trim6(plan.filledMinima) + " " + c + " for ≈ " + trim6(plan.totalUsdt) + " USDT in " + plan.legs.size() + (plan.legs.size() == 1 ? " part" : " parts"),
+                Design.TEXT(), 15f, Design.sansBold());
+        hd.setPadding(0, 0, 0, Design.dp(act, 6)); box.addView(hd);
+        TextView metrics = t("Avg " + px(plan.avgPrice) + "  ·  worst " + px(plan.worstPrice) + " USDT/" + c
+                + (!s && plan.slippagePct > 0 ? "  ·  within " + pct(plan.slippagePct) + "% slippage" : ""), Design.DIM(), 12.5f, Design.sans());
+        metrics.setPadding(0, 0, 0, Design.dp(act, 8)); box.addView(metrics);
+        for (int i = 0; i < plan.legs.size(); i++) {
+            DoorPlan.Leg leg = plan.legs.get(i);
+            TextView r = t("Part " + (i + 1) + " · " + leg.minima + " " + c + " @ " + px(leg.price) + " → " + leg.usdt + " USDT · " + leg.maker.signerPk,
+                    Design.TEXT(), 12f, Design.mono());
+            r.setPadding(0, Design.dp(act, 2), 0, Design.dp(act, 2));
+            final String pk = leg.maker.signerPk;   // RULE 1: in full; tap copies it
+            if (pk != null && !pk.isEmpty()) r.setOnClickListener(x -> act.copy("Counterparty key", pk));
+            box.addView(r);
+        }
+        TextView totals = t(s ? "Total: sell " + trim6(plan.filledMinima) + " " + c + " · receive ≈ " + trim6(plan.totalUsdt) + " USDT"
+                              : "Total: pay ≈ " + trim6(plan.totalUsdt) + " USDT · receive ≈ " + trim6(plan.filledMinima) + " " + c, acc(market), 12.5f, Design.sansBold());
+        totals.setPadding(0, Design.dp(act, 8), 0, Design.dp(act, 2)); box.addView(totals);
+        if (plan.partial) {
+            TextView pw = t("Fills " + trim6(plan.filledMinima) + " of " + trim6(plan.target) + " " + c + " — "
+                    + (!s && "slippage".equals(plan.stopReason) ? "the rest is priced beyond your " + pct(plan.slippagePct) + "% slippage." : "the rest isn't available in the book right now."),
+                    Design.RED(), 12f, Design.sans());
+            pw.setPadding(0, Design.dp(act, 8), 0, Design.dp(act, 2)); box.addView(pw);
+        }
+        String gas;
+        if (s) {
+            BigInteger wd = host.gasReserve(EthHtlc.GAS_WITHDRAW), fw = host.gasReserve(EthSend.GAS_ERC20);
+            gas = "ETH gas from your Ethereum wallet: withdraw ≈ " + eth(wd) + " ETH" + (dest.isEmpty() ? "" : " + send ≈ " + eth(fw) + " ETH");
+        } else {
+            gas = "Each part is a separate Ethereum transaction — you pay ETH gas " + plan.legs.size() + (plan.legs.size() == 1 ? " time" : " times")
+                    + " (≈ " + eth(host.gasReserve(EthHtlc.GAS_LOCK)) + " ETH each, + a one-time USDT approval on first use).";
+        }
+        gas += " You hold " + (host.ethWei == null ? "—" : eth(host.ethWei)) + " ETH.";
+        TextView g = t(gas, Design.DIM2(), 11.5f, Design.sans()); g.setPadding(0, Design.dp(act, 8), 0, Design.dp(act, 2)); box.addView(g);
+        String where = s ? (dest.isEmpty() ? "The USDT lands in your Ethereum wallet above." : "The USDT is then sent to " + dest + ".")
+                         : (dest.isEmpty() ? "The " + c + " lands in this node’s wallet." : "The " + c + " is then sent to " + dest + ".");
+        TextView wh = t(where, Design.TEXT(), 12f, Design.sans()); wh.setPadding(0, Design.dp(act, 8), 0, Design.dp(act, 2)); wh.setTextIsSelectable(true); box.addView(wh);
+        TextView note = t((s ? "This locks your " + c + " on Minima now (refund after 144 blocks if the maker never locks)."
+                             : "This locks your USDT on Ethereum now (refund after 2 h if the maker never locks).")
+                + " Parts run one at a time. If one can't start we stop and you keep the rest; unmatched parts auto-refund after the timelock. Keep this node running.",
+                Design.DIM2(), 11.5f, Design.sans());
+        note.setPadding(0, Design.dp(act, 8), 0, Design.dp(act, 2)); box.addView(note);
+        android.widget.ScrollView sv = new android.widget.ScrollView(act); sv.addView(box);
+
+        act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle(s ? "Review — Sell " + c : "Review — Buy " + c).setView(sv)
+                .setPositiveButton("Start swap", (d, w) -> {
                     String err = host.take(market, plan, dest, new DoorHost.Progress() {
-                        @Override public void stage(String s) { act.setStage(s); }
+                        @Override public void stage(String st) { act.setStage(st); }
                         @Override public void done(String m, boolean error) { act.setStage(""); act.toast(m); if (error) Notifier.alert(act, "AtomiX swap stopped", m); act.repaint(); }
                     });
-                    if (err != null) act.toast(err); else amt.setText("");
+                    if (err != null) act.toast(err);
+                    else { syncing = true; send.setText(""); recv.setText(""); syncing = false; }
                     render();
                 })
-                .setNegativeButton("Back", null).show());
+                .setNegativeButton("Cancel", null).show());
+    }
+
+    // ------------------------------------------------------------------ YOUR SWAP (AtomiX swapStages)
+
+    private void paintStages() {
+        StringBuilder sig = new StringBuilder();
+        List<SwapDb.Swap> all = host.swaps();
+        SwapDb.Swap sw = latestRelevant(all);
+        boolean paired = act.paired();
+        boolean coinOk = DoorPlan.parseD(host.coinBalance(route()), 0) > 0;
+        boolean usdtOk = host.usdtRaw != null && host.usdtRaw.signum() > 0, ethOk = host.ethWei != null && host.ethWei.signum() > 0;
+        int more = 0;
+        for (SwapDb.Swap s : all) if (!SwapVisibility.isTerminal(s)) more++;
+        if (sw != null && !SwapVisibility.isTerminal(sw)) more--;
+        sig.append(sell).append(paired).append(coinOk).append(usdtOk).append(ethOk).append(coin()).append(more);
+        if (sw != null) sig.append(sw.hash).append(sw.status).append(sw.sellAmount).append(sw.buyAmount);
+        if (sig.toString().equals(stagesSig)) return;   // unchanged: no relayout under a finger that is typing
+        stagesSig = sig.toString();
+
+        stages.removeAllViews();
+        TextView hd = t("YOUR SWAP", Design.DIM(), 11f, Design.sans()); hd.setLetterSpacing(0.06f);
+        hd.setPadding(Design.dp(act, 2), 0, 0, Design.dp(act, 8)); stages.addView(hd);
+        stages.addView(stage("Node connected", paired ? STG_DONE : STG_WARN));
+        if (sell) stages.addView(stage(coin() + " ready to sell", coinOk ? STG_DONE : STG_WARN));
+        else {
+            stages.addView(stage("USDT ready to spend", usdtOk ? STG_DONE : STG_WARN));
+            stages.addView(stage("ETH for gas", ethOk ? STG_DONE : STG_WARN));
+        }
+        if (sw != null) {
+            String st = DoorForwards.label(sw.sellToken), bt = DoorForwards.label(sw.buyToken);
+            TextView which = t(sw.sellAmount + " " + st + "  →  " + sw.buyAmount + " " + bt + "   ·   " + (sw.role == null ? "" : sw.role.toLowerCase(Locale.ROOT)),
+                    Design.TEXT(), 13f, Design.mono());
+            which.setPadding(Design.dp(act, 2), Design.dp(act, 8), 0, Design.dp(act, 6)); stages.addView(which);
+            if (SwapDb.ST_REFUNDED.equals(sw.status)) stages.addView(stage("Timed out — " + sw.sellAmount + " " + st + " refunded", STG_WARN));
+            else if (SwapDb.ST_ERROR.equals(sw.status)) stages.addView(stage("Stopped — see the swap below for what happened", STG_WARN));
+            else {
+                int a = stageIndex(sw.status);
+                stages.addView(stage("Locked your " + sw.sellAmount + " " + st, legState(1, a)));
+                stages.addView(stage("Counterparty locks their side", legState(2, a)));
+                stages.addView(stage("Claim your " + sw.buyAmount + " " + bt, legState(3, a)));
+                stages.addView(stage("Swap complete", legState(4, a)));
+            }
+            if (!SwapVisibility.isTerminal(sw)) {
+                TextView chk = Design.pill(act, "Check now", Design.SURFACE2(), Design.TEXT());
+                LayoutParams cl = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT); cl.topMargin = Design.dp(act, 8);
+                chk.setLayoutParams(cl);
+                chk.setOnClickListener(v -> { host.poll(); act.toast("Checking both chains now…"); act.repaint(); }); Design.pressable(chk);
+                stages.addView(chk);
+            }
+            if (more > 0) {
+                TextView m = t("+ " + more + " more swap" + (more == 1 ? "" : "s") + " in flight — see Activity", Design.DIM2(), 11.5f, Design.sans());
+                m.setPadding(Design.dp(act, 2), Design.dp(act, 8), 0, 0);
+                m.setOnClickListener(v -> act.showTab(MainActivity.TAB_ACTIVITY)); Design.pressable(m);
+                stages.addView(m);
+            }
+        } else stages.addView(stage("Enter an amount and tap Review to begin", STG_PENDING));
+    }
+
+    /** AtomiX latestRelevantSwap: an in-flight swap first; else one that finished in the last 30 s, so you see it land. */
+    private static SwapDb.Swap latestRelevant(List<SwapDb.Swap> all) {
+        SwapDb.Swap active = null, done = null;
+        long now = System.currentTimeMillis();
+        for (SwapDb.Swap s : all) {
+            if (!SwapVisibility.isTerminal(s)) { if (active == null || s.created > active.created) active = s; }
+            else if (now - s.updated <= PANEL_GRACE_MS && (done == null || s.updated > done.updated)) done = s;
+        }
+        return active != null ? active : done;
+    }
+    private static int stageIndex(String status) {
+        if (SwapDb.ST_LOCKED.equals(status) || SwapDb.ST_CLAIMING.equals(status)) return 3;
+        if (SwapDb.ST_COMPLETE.equals(status)) return 5;
+        return 2;
+    }
+    private static int legState(int i, int active) { return i < active ? STG_DONE : i == active ? STG_ACTIVE : STG_PENDING; }
+
+    private LinearLayout stage(String label, int state) {
+        LinearLayout row = new LinearLayout(act); row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(Design.dp(act, 2), Design.dp(act, 5), Design.dp(act, 2), Design.dp(act, 5));
+        View dot = new View(act);
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        if (state == STG_DONE) g.setColor(Design.IN());
+        else if (state == STG_ACTIVE) g.setColor(acc(route()));
+        else if (state == STG_WARN) g.setColor(WARN);
+        else { g.setColor(0); g.setStroke(Math.max(1, Design.dp(act, 1)), Design.DIM2()); }
+        dot.setBackground(g);
+        LayoutParams dl = new LayoutParams(Design.dp(act, 9), Design.dp(act, 9)); dl.leftMargin = Design.dp(act, 2); dl.rightMargin = Design.dp(act, 12);
+        row.addView(dot, dl);
+        TextView tv = t(label, state == STG_WARN ? WARN : state == STG_PENDING ? Design.DIM() : Design.TEXT(), 13f, state == STG_ACTIVE ? Design.sansBold() : Design.sans());
+        row.addView(tv);
+        return row;
     }
 
     // ------------------------------------------------------------------ door swaps (IN PROGRESS here; the same lines in ACTIVITY / HISTORY)
