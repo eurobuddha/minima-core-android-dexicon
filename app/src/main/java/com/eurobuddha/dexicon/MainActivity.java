@@ -71,9 +71,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
     public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9, TAB_PSWAP = 10, TAB_PMINE = 11, TAB_PWALLET = 12, TAB_PACT = 13;
-    /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange, picked in a one-line
-     *  switcher at the top. ONE bottom bar, AtomiX's own (icon over label): the room's three pages, then ACTIVITY /
-     *  ASSETS / SETTINGS shared by all three — six tabs, nothing to tap above AND below (owner, 4 Nov). */
+    /** Three rooms, picked in a one-line switcher at the top: ① MxUSD (AtomiX) · ② Pools (PandaPools) · ③ Exchange.
+     *  ONE bottom bar, AtomiX's own style (icon over label): in ① and ③ the room's three pages plus ACTIVITY / ASSETS /
+     *  SETTINGS shared by both; in ② PandaPools' own five tabs alone (owner, 4 Nov). */
     static final String[] ROOMS = {"① MxUSD", "② Pools", "③ Exchange"};   // ① is AtomiX (owner, 4 Nov: named MxUSD)
     /** ② is PandaPools (owner, 4 Nov: "keep the new app feel, true to PandaPools"): its five pages, its own screens, as
      *  tabs on Dexicon's bottom bar — the way ① carries AtomiX's. */
