@@ -70,14 +70,14 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
-    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9, TAB_PSWAP = 10;
+    public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9, TAB_PSWAP = 10, TAB_PMINE = 11;
     /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange. Each room's own pages
      *  sit in the row under the rail; ACTIVITY / ASSETS / SETTINGS are shared by all three at the bottom. */
     static final String[] ROOMS = {"① DOLLARS IN", "② POOLS", "③ EXCHANGE"};
     static final String[] ROOM_SUBS = {"AtomiX · USDT ⇄ ", "optional", "MINIMA / MxUSD"};   // ① ends with the active market
-    static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_PSWAP, TAB_POOLS}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
+    static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_PSWAP, TAB_POOLS, TAB_PMINE}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
     private static final int[] SHARED = {TAB_ACTIVITY, TAB_ASSETS, TAB_RELAYS};
-    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS", "MARKET", "OTC", "SWAP"};
+    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS", "MARKET", "OTC", "SWAP", "MY POOLS"};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
@@ -128,7 +128,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private RelaysTab relaysTab;
     private DoorsTab doorsTab;
     private PoolsTab poolsTab;
-    private PoolSwapTab poolSwapTab;   // ② Swap: PandaPools' SwapView (vendored), framed by Dexicon's explainer
+    private PoolSwapTab poolSwapTab;
+    private MyPoolsTab myPoolsTab;     // ② My pools: PandaPools' MyLpView + ActivityView (vendored)   // ② Swap: PandaPools' SwapView (vendored), framed by Dexicon's explainer
     private MarketTab marketTab;
     private OtcTab otcTab;
     private LinearLayout content;          // the visible page(s): one, or two side by side on a wide screen
@@ -1042,7 +1043,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         content = new LinearLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); poolSwapTab = new PoolSwapTab(this, track(new com.eurobuddha.pandapools.SwapView(this))); poolsTab = new PoolsTab(this, track(new com.eurobuddha.pandapools.PoolsView(this))); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); poolSwapTab = new PoolSwapTab(this, track(new com.eurobuddha.pandapools.SwapView(this))); poolsTab = new PoolsTab(this, track(new com.eurobuddha.pandapools.PoolsView(this))); myPoolsTab = new MyPoolsTab(this, track(new com.eurobuddha.pandapools.MyLpView(this)), track(new com.eurobuddha.pandapools.ActivityView(this))); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
         View[] tv = tabViews();
         panes = new ScrollView[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
@@ -1171,6 +1172,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         for (int t : new int[]{left, right}) {   // a ② page coming into view refreshes like a PandaPools tab
             if (t == TAB_PSWAP) poolSwapTab.shown();
             if (t == TAB_POOLS) poolsTab.shown();
+            if (t == TAB_PMINE) myPoolsTab.shown();
         }
         int r = roomOf(left);
         if (r >= 0) { room = r; roomLast[r] = left; }
@@ -1196,7 +1198,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         if (tabBar != null && tab2 >= 0 && !com.eurobuddha.dexicon.ui.Wide.on(this)) selectTab(tab);
     }
 
-    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, poolsTab, marketTab, otcTab, poolSwapTab}; }
+    private View[] tabViews() { return new View[]{trade, activityTab, ordersTab, historyTab, assetsTab, doorsTab, relaysTab, poolsTab, marketTab, otcTab, poolSwapTab, myPoolsTab}; }
 
     /** A vendored PandaPools screen joins this Activity's pool-screen fan-out (new block, stop, destroy). */
     private <V extends com.eurobuddha.pandapools.BaseView> V track(V v) { poolViews.add(v); return v; }
@@ -1209,6 +1211,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         for (int t : new int[]{tab, tab2}) {
             if (t == TAB_PSWAP) return PP_SWAP;
             if (t == TAB_POOLS) return PP_POOLS;
+            if (t == TAB_PMINE) return PP_ACTIVITY;   // PandaPools' pool activity sits under My pools
         }
         return -1;
     }
@@ -1216,6 +1219,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     @Override public void goToTab(int index) {
         if (index == PP_SWAP) selectTab(TAB_PSWAP);
         else if (index == PP_POOLS) selectTab(TAB_POOLS);
+        else if (index == PP_MYLP || index == PP_ACTIVITY) selectTab(TAB_PMINE);
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -1275,6 +1279,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             case TAB_DOORS: doorsTab.render(); break;
             case TAB_POOLS: poolsTab.render(); break;
             case TAB_PSWAP: break;   // PandaPools' SwapView repaints itself
+            case TAB_PMINE: myPoolsTab.render(); break;
             case TAB_MARKET: marketTab.render(); break;
             case TAB_OTC: otcTab.render(); break;
             default: relaysTab.render();

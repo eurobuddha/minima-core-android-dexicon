@@ -41,6 +41,11 @@ public final class PoolsTab extends LinearLayout {
 
         addView(list.getRoot(), new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
 
+        TextView create = Ui.button(act, "Create a pool (advanced)");
+        create.setOnClickListener(v -> act.showTab(MainActivity.TAB_PMINE));
+        addView(create, Ui.wide(act, 4, 4));
+        addView(Ui.text(act, "Create walks you through PandaPools' four steps on My pools, then a forced backup.", 12f, Design.DIM(), Design.sans()), Ui.wide(act, 0, 10));
+
         Ui.why(this, "HOSTING ONE IS A COMMITMENT", "• Your phone must stay online. Pool coins are renewed about twice a day.\n"
                 + "• A pool left dark for about 1,700 blocks recovers only from an unpruned MegaMMR. Dexicon has eurobuddha.com's built in; "
                 + "the other public MegaMMRs are pruned and can't help.\n"

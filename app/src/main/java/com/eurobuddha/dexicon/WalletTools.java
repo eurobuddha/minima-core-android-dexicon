@@ -29,7 +29,11 @@ final class WalletTools {
                         + "Your node picks the coins with its standard consolidation command. Nothing leaves your wallet and there is no fee.\n\n"
                         + "consolidate tokenid:" + tokenid)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Consolidate", (d, w) -> run(act, "consolidate tokenid:" + tokenid, "Consolidate " + name)).show();
+                .setPositiveButton("Consolidate", (d, w) -> com.eurobuddha.pandapools.DexiconPools.checkConsolidation(act, error -> {
+                    // PandaPools' guard: never let the node pick a coin of a pool owner key that cannot sign
+                    if (error != null) message(act, "Nothing consolidated", error);
+                    else run(act, "consolidate tokenid:" + tokenid, "Consolidate " + name);
+                })).show();
     }
 
     static void split(MainActivity act, String tokenid, String name, BigDecimal sendable) {

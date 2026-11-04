@@ -70,4 +70,34 @@ public class PoolsRoomSmokeTest {
         assertNotNull(a.pools());
         assertNotNull(a.history());
     }
+
+    @Test public void myPoolsIsPandaPoolsMyLpWithItsCreateGate() {
+        MainActivity a = DoorsTabSmokeTest.launch();
+        View root = a.getWindow().getDecorView();
+        DoorsTabSmokeTest.find(root, DoorsTabSmokeTest.room(1)).performClick();
+        DoorsTabSmokeTest.find(root, "Create a pool (advanced)").performClick();
+        assertTrue("lands on My pools", a.findViewById(R.id.lpCreateBtn).isShown());
+        assertTrue(a.findViewById(R.id.lpRecoveryBtn).isShown());
+        assertNotNull("PandaPools' pool activity", a.findViewById(R.id.actContainer));
+        assertNotNull(containing(root, "KEEPING YOUR POOL ALIVE"));
+        assertNotNull(containing(root, "eurobuddha.com:9001 · unpruned MegaMMR"));
+        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY, a.currentTab());
+        a.findViewById(R.id.lpCreateBtn).performClick();
+        android.app.Dialog d = org.robolectric.shadows.ShadowDialog.getLatestDialog();
+        assertNotNull("create opens PandaPools' obligations first", d);
+        assertNotNull(containing(d.getWindow().getDecorView(), "Two things this pool will need from you"));
+    }
+
+    @Test public void awaitingPoolsAreListedInFullOnMyPools() {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        android.content.pm.PackageInfo pi = new android.content.pm.PackageInfo(); pi.packageName = TradingGate.PANDAPOOLS;
+        String pool = "0x" + "ab".repeat(32);
+        com.eurobuddha.pandapools.DexiconPools.markAwaiting(app, java.util.Collections.singletonList(pool));
+        MainActivity a = DoorsTabSmokeTest.launch();
+        org.robolectric.Shadows.shadowOf(app.getPackageManager()).installPackage(pi);   // after launch: the card, not the gate
+        a.showTab(MainActivity.TAB_PMINE);
+        View root = a.getWindow().getDecorView();
+        assertNotNull(containing(root, "AWAITING HAND-OVER"));
+        assertNotNull("the full address", containing(root, pool));
+    }
 }

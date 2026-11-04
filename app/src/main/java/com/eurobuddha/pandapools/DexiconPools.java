@@ -171,6 +171,29 @@ public final class DexiconPools {
         });
     }
 
+    // ---- ② My pools / ASSETS helpers ----
+
+    /** A PandaPools fund write lost its reply: pool signing is paused until the user resolves it. */
+    public static boolean interruptedWrite(MainActivity act) { return act.node() != null && act.node().hasInterruptedWrite(); }
+
+    /** PandaPools' own "Resolve interrupted write" review (WalletTools). */
+    public static void resolveInterruptedWrite(MainActivity act) { new WalletTools(act).resolveInterruptedWrite(); }
+
+    /** PandaPools' consolidation guard: the node's consolidate picks its own coins, so it must not run while the wallet
+     *  holds a pool owner key that cannot sign. {@code cb} gets null (go ahead) or the reason nothing may be consolidated. */
+    public static void checkConsolidation(MainActivity act, java.util.function.Consumer<String> cb) {
+        if (act.node() == null) { cb.accept(null); return; }
+        OwnerKeyRecovery.checkConsolidation(act.node()::cmd, () -> OwnPoolStore.all(act), cb);
+    }
+
+    /** Restored pools standalone PandaPools still keeps (full lower-case covenant addresses). */
+    public static List<String> awaitingNow(Context c) {
+        List<String> out = new ArrayList<>();
+        for (String a : awaiting(c)) if (keptElsewhere(c, a)) out.add(a);
+        java.util.Collections.sort(out);
+        return out;
+    }
+
     /** Pools of mine (recipes) — for Dexicon's own screens, e.g. "you host N pools". */
     public static int ownPoolCount(Context c) { return OwnPoolStore.active(c).size(); }
 
