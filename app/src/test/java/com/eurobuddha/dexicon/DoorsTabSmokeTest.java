@@ -127,4 +127,33 @@ public class DoorsTabSmokeTest {
         a.getSharedPreferences("atomix_swap_ui", android.content.Context.MODE_PRIVATE).edit().putFloat("buy_slippage_pct", 99f).apply();
         assertEquals("out of range falls back to AtomiX's default", 0.042, d.slippage(), 1e-9);
     }
+
+    private static void watch(String field, Object v) throws Exception {
+        java.lang.reflect.Field f = com.eurobuddha.atomix.IdentityWatch.class.getDeclaredField(field); f.setAccessible(true); f.set(null, v);
+    }
+
+    /** 0.2.4 (AtomiX renderMismatchBlocker): halted → the rescue card, keys in full, rescue before any wipe. */
+    @Test public void aHaltShowsTheRescueCard() throws Exception {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        String stale = "0x" + "5a".repeat(20), now = "0x" + "6b".repeat(20);
+        java.lang.reflect.Field cf = com.eurobuddha.atomix.eth.EthWallet.class.getDeclaredField("creds"); cf.setAccessible(true);
+        com.eurobuddha.atomix.eth.EthWallet w = com.eurobuddha.dexicon.doors.DoorHost.get(app).wallet();
+        cf.set(w, org.web3j.crypto.Credentials.create("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318"));
+        try {
+            watch("ethMismatch", true); watch("staleEth", stale); watch("nodeEth", now);
+            MainActivity a = launch();
+            View root = a.getWindow().getDecorView();
+            assertTrue(find(root, "⛔  Wallet mismatch — AtomiX is halted").isShown());
+            assertNotNull("both addresses in full", PoolsRoomSmokeTest.containing(root, stale));
+            assertNotNull(PoolsRoomSmokeTest.containing(root, now));
+            assertNotNull("pools are named before any wipe", PoolsRoomSmokeTest.containing(root, "back up your pools"));
+            for (String b : new String[]{"🔑  Export the stale ETH key", "↑  Sweep funds to the node wallet", "🧹  Clear app storage (App info)", "Uninstall & reinstall Dexicon"})
+                assertNotNull(b, find(root, b));
+            find(root, "↑  Sweep funds to the node wallet").performClick();
+            android.app.AlertDialog send = (android.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            assertNotNull("the sweep goes to the node's CURRENT wallet", find(send.getWindow().getDecorView(), now));
+        } finally { watch("ethMismatch", false); watch("staleEth", ""); watch("nodeEth", ""); cf.set(w, null); }
+    }
 }

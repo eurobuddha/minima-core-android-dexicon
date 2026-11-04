@@ -102,7 +102,10 @@ final class WalletActions {
         catch (java.util.concurrent.RejectedExecutionException stopped) { c.cancel(); act.toast("Wallet session changed. Review again."); }
     }
 
-    void send() {
+    void send() { send(null); }
+
+    /** {@code to}: a recipient filled in up front (the halt rescue: sweep the stale wallet to the node's current one). */
+    void send(String prefillTo) {
         if (!host.wallet().ready()) { act.toast("ETH wallet not ready yet"); return; }
         final SendContext c = new SendContext();
         final AtomicBoolean reviewing = new AtomicBoolean();
@@ -128,6 +131,7 @@ final class WalletActions {
         final EditText toE = new EditText(act);
         toE.setHint("0x… recipient"); toE.setTextColor(Design.TEXT()); toE.setHintTextColor(Design.DIM2()); toE.setTextSize(13f); toE.setTypeface(Design.mono());
         toE.setSingleLine(true); toE.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        if (prefillTo != null) toE.setText(prefillTo);
         box.addView(toE);
 
         LinearLayout amtRow = new LinearLayout(act); amtRow.setGravity(Gravity.CENTER_VERTICAL);

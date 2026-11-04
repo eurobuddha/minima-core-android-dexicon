@@ -55,7 +55,9 @@ public final class DoorsTab extends LinearLayout {
     private final DoorHost host;
     private final SharedPreferences prefs;
     private final TextView flip;
-    private final TextView halt, launch, head, sellTab, buyTab, bestLine, planLine, toLabel, review;
+    private final LinearLayout rescue;
+    private String rescueSig = "";
+    private final TextView launch, head, sellTab, buyTab, bestLine, planLine, toLabel, review;
     private final TextView setupTitle, setupBody, emptyTitle;
     private final LinearLayout swapCard, setupCard, emptyCard, slipRow, stages, list;
     private final Chip sendChip, recvChip;
@@ -101,8 +103,8 @@ public final class DoorsTab extends LinearLayout {
         int pad = Design.dp(act, 12);
         setPadding(pad, pad, pad, pad);
 
-        halt = t("", Design.RED(), 10.5f, Design.sansBold()); halt.setVisibility(GONE);
-        addView(halt);
+        rescue = new LinearLayout(act); rescue.setOrientation(VERTICAL); rescue.setVisibility(GONE);
+        addView(rescue);
         launch = t("", Design.TEXT(), 11f, Design.sansBold());
         int lp = Design.dp(act, 10); launch.setPadding(lp, lp, lp, lp);
         launch.setVisibility(GONE);
@@ -416,9 +418,7 @@ public final class DoorsTab extends LinearLayout {
         String ln = host.launchNote();
         launch.setVisibility(ln == null ? GONE : VISIBLE);
         if (ln != null) { launch.setText(ln); launch.setBackground(Design.roundBg(getContext(), soft(TradingContext.MINIMA), 10)); }
-        boolean h = IdentityWatch.halted();
-        halt.setVisibility(h ? VISIBLE : GONE);
-        if (h) halt.setText(IdentityWatch.fgLine() + " — new AtomiX swaps are stopped; in-flight swaps keep settling. Rescue funds, then reinstall Dexicon.");
+        paintRescue();
         if (sendChip != null) { sendChip.set(sell); recvChip.set(!sell); }
     }
     private static String nz(String s) { return s == null ? "—" : s; }
@@ -568,6 +568,73 @@ public final class DoorsTab extends LinearLayout {
                     render();
                 })
                 .setNegativeButton("Cancel", null).show());
+    }
+
+    // ------------------------------------------------------------------ halted: AtomiX renderMismatchBlocker
+
+    /** The node's seed no longer matches the keys AtomiX holds: trading stops, in-flight swaps keep settling, and the
+     *  RESCUE comes before any wipe — the stale ETH key exists only in memory, the claim secrets only in this app. */
+    private void paintRescue() {
+        boolean h = IdentityWatch.halted();
+        int unsettled = 0;
+        if (h) for (SwapDb.Swap s : host.swaps()) if (!SwapDb.ST_COMPLETE.equals(s.status) && !SwapDb.ST_REFUNDED.equals(s.status) && !SwapDb.ST_ERROR.equals(s.status)) unsettled++;
+        String sig = h + "|" + IdentityWatch.minimaMismatch() + IdentityWatch.ethMismatch() + IdentityWatch.orphanedPk() + IdentityWatch.staleEth() + IdentityWatch.nodeEth() + unsettled;
+        if (sig.equals(rescueSig)) return;
+        rescueSig = sig;
+        rescue.removeAllViews();
+        rescue.setVisibility(h ? VISIBLE : GONE);
+        if (!h) return;
+        LinearLayout c = bigCard(rescue);
+        ((LayoutParams) c.getLayoutParams()).topMargin = 0;
+        c.addView(t("⛔  Wallet mismatch — AtomiX is halted", Design.RED(), 18f, Design.sansBold()));
+        TextView why = t("Your node's seed no longer matches the keys AtomiX is holding. Trading, publishing and new swaps are stopped. "
+                + "Swaps already in flight keep settling — that part is safe to leave running.", Design.DIM(), 13f, Design.sans());
+        why.setPadding(0, Design.dp(act, 8), 0, Design.dp(act, 12)); c.addView(why);
+        StringBuilder d = new StringBuilder();   // RULE 1: the fund-recovery moment — every key in full, selectable, copyable
+        if (IdentityWatch.minimaMismatch()) d.append("Minima identity: ORPHANED\n  in use    ").append(IdentityWatch.orphanedPk()).append("\n  your node does not own it\n\n");
+        if (IdentityWatch.ethMismatch()) d.append("ETH wallet: STALE\n  in use    ").append(IdentityWatch.staleEth()).append("\n  node now  ").append(IdentityWatch.nodeEth()).append('\n');
+        TextView det = t(d.toString().trim(), Design.TEXT(), 12f, Design.mono());
+        det.setTextIsSelectable(true);
+        det.setOnLongClickListener(v -> { act.copy("Recovery details", det.getText().toString()); return true; });
+        c.addView(det);
+        TextView warn = t("⚠  Clearing Dexicon's storage or reinstalling it wipes the claim secrets for " + unsettled + " unsettled swap" + (unsettled == 1 ? "" : "s")
+                + (IdentityWatch.ethMismatch() ? ", the stale ETH key itself (it is never stored — only your OLD node seed could rebuild it)" : "")
+                + ", your pools' local records and your exchange orders. Rescue what you need FIRST: export the key, sweep the funds, and back up your pools "
+                + "(② Pools › My pools › Recovery › Back up).\n\nIf this warning returns after a reinstall, Android restored old settings from a backup — clear storage instead.",
+                Design.RED(), 12f, Design.sans());
+        warn.setPadding(0, Design.dp(act, 14), 0, Design.dp(act, 14)); c.addView(warn);
+        WalletActions w = new WalletActions(act);
+        if (IdentityWatch.ethMismatch()) {
+            c.addView(rescuePill("🔑  Export the stale ETH key", Design.SURFACE2(), Design.TEXT(), w::exportKey));
+            c.addView(rescuePill("↑  Sweep funds to the node wallet", Design.SURFACE2(), Design.TEXT(), () -> w.send(IdentityWatch.nodeEth())));
+        }
+        c.addView(rescuePill("🧹  Clear app storage (App info)", Design.SURFACE2(), Design.TEXT(), () -> act.track(new AlertDialog.Builder(act, Design.dialogTheme())
+                .setTitle("Clear Dexicon storage")
+                .setMessage("This is the step that always works.\n\nTap “Open App info”, then Storage → Clear storage. That wipes the saved AtomiX identity so it "
+                        + "re-derives cleanly from your node.\n\nIt also deletes your swap history, the claim secrets for any unsettled swap, your pools' local "
+                        + "records and your exchange orders, and the stale ETH key is not stored anywhere — rescue and back up first.")
+                .setPositiveButton("Open App info", (x, y) -> openAppInfo()).setNegativeButton("Cancel", null).show())));
+        c.addView(rescuePill("Uninstall & reinstall Dexicon", Design.RED(), 0xFFFFFFFF, () -> act.track(new AlertDialog.Builder(act, Design.dialogTheme())
+                .setTitle("Reinstall Dexicon")
+                .setMessage("This removes Dexicon and its data — the claim secrets for any unsettled swap, the stale ETH key, your pools' local records and "
+                        + "your exchange orders. Only continue once you have exported, swept and backed up what you need.\n\nThen install Dexicon again: it picks "
+                        + "up your node's current keys cleanly. If this warning comes back, Android restored old settings — clear storage instead.")
+                .setPositiveButton("Uninstall now", (x, y) -> {
+                    try { act.startActivity(new android.content.Intent(android.content.Intent.ACTION_DELETE, android.net.Uri.parse("package:" + act.getPackageName()))); }
+                    catch (Exception e) { act.toast("Couldn't open the uninstaller — remove Dexicon from Android Settings › Apps"); }
+                }).setNegativeButton("Cancel", null).show())));
+    }
+    private TextView rescuePill(String label, int bg, int fg, Runnable r) {
+        TextView p = Design.pill(act, label, bg, fg);
+        p.setMinHeight(Design.dp(act, 48)); p.setGravity(Gravity.CENTER);
+        p.setOnClickListener(v -> r.run()); Design.pressable(p);
+        LayoutParams lp = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); lp.topMargin = Design.dp(act, 8);
+        p.setLayoutParams(lp);
+        return p;
+    }
+    private void openAppInfo() {
+        try { act.startActivity(new android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + act.getPackageName()))); }
+        catch (Exception e) { act.toast("Open Android Settings › Apps › Dexicon › Storage › Clear storage"); }
     }
 
     // ------------------------------------------------------------------ YOUR SWAP (AtomiX swapStages)
