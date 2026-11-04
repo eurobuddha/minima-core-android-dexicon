@@ -94,4 +94,12 @@ public class DoorsTabSmokeTest {
         assertNotNull(find(root, "YOUR ETHEREUM WALLET"));
         assertNotNull(find(root, "How this works ▸"));
     }
+
+    /** 0.1.92: MINIMA shows at most 12 decimals, cut and never rounded. */
+    @Test public void minimaIsCutToTwelveDecimalsNeverRounded() {
+        assertEquals("891.250628510678", DoorsTab.minima12("891.25062851067800000000000000000000099989999449"));
+        assertEquals("0.999999999999", DoorsTab.minima12("0.9999999999999999"));
+        assertEquals("5", DoorsTab.minima12("5"));
+        assertEquals("—", DoorsTab.minima12(null));
+    }
 }

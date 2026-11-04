@@ -249,10 +249,16 @@ public final class DoorsTab extends LinearLayout {
         ethAddr.setText(a != null ? a : host.bootNote().isEmpty() ? "deriving…" : host.bootNote());
         String usdt = host.usdtRaw == null ? "—" : EthWallet.format(host.usdtRaw, 6, 6);
         bals.setText("ETH " + (host.ethWei == null ? "—" : eth(host.ethWei)) + " · USDT " + usdt
-                + " · MxUSD " + nz(host.coinBalance(TradingContext.MXUSDT)) + " · MINIMA " + nz(host.coinBalance(TradingContext.MINIMA))
+                + " · MxUSD " + nz(host.coinBalance(TradingContext.MXUSDT)) + " · MINIMA " + minima12(host.coinBalance(TradingContext.MINIMA))
                 + (host.gasWei != null ? " · gas " + EthWallet.format(host.gasWei, 9, 3) + " gwei" : ""));
     }
     private static String nz(String s) { return s == null ? "—" : s; }
+    /** A MINIMA amount cut to at most 12 decimals, never rounded (owner 4 Nov): the node's sendable carries up to 44. */
+    static String minima12(String s) {
+        if (s == null) return "—";
+        try { return new BigDecimal(s).setScale(12, java.math.RoundingMode.DOWN).stripTrailingZeros().toPlainString(); }
+        catch (NumberFormatException e) { return s; }
+    }
 
     // ------------------------------------------------------------------ quote (the active market)
 
@@ -288,7 +294,7 @@ public final class DoorsTab extends LinearLayout {
             c.addView(t(r.best > 0 ? "best " + (s ? "bid" : "ask") : "no maker " + (s ? "buying" : "selling"), Design.DIM(), 9.5f, Design.mono()));
         }
         c.addView(t("ceiling ~" + trim6(r.depth) + " " + r.coin + " · " + r.makers + (r.makers == 1 ? " maker" : " makers"), Design.DIM2(), 9f, Design.mono()));
-        if (s) c.addView(t("you hold " + nz(host.coinBalance(r.market)) + " " + r.coin, Design.DIM2(), 9f, Design.mono()));
+        if (s) c.addView(t("you hold " + (r.market == TradingContext.MINIMA ? minima12(host.coinBalance(r.market)) : nz(host.coinBalance(r.market))) + " " + r.coin, Design.DIM2(), 9f, Design.mono()));
         return c;
     }
 
