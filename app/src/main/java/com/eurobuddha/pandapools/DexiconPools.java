@@ -286,12 +286,12 @@ public final class DexiconPools {
 
     private static final String OWNER_COINS = "the node would choose the coins itself, and your wallet holds coins of this token at the pool owner address\n";
 
-    /** Coins of the token sit at the owner addresses {@code found}: queue them for collection, then refuse only if a pool
-     *  there is kept elsewhere or its owner key is not safe to sign with. */
+    /** Coins of the token sit at the owner addresses {@code found}: refuse only if a pool there is kept elsewhere (or its
+     *  custody is unknown or stale) or its owner key is not safe to sign with. Nothing is queued here: a PendingCollect
+     *  entry created without evidence parses as legacy forever and would block that address's real collections. */
     private static void judgeOwnerCoins(com.eurobuddha.dexicon.NodeApi dex, List<String> found, java.util.function.Consumer<String> cb) {
         if (found.isEmpty()) { cb.accept(null); return; }
         final Context ctx = dex.context().getApplicationContext();
-        for (String oadr : found) PendingCollect.add(ctx, oadr);   // the keep-alive's CollectSweeper forwards them
         final java.util.function.Supplier<List<Pool>> pools = () -> {
             List<Pool> out = new ArrayList<>();
             for (Pool p : OwnPoolStore.all(ctx)) if (p.oadr != null && found.contains(low(p.oadr))) out.add(p);
@@ -299,8 +299,9 @@ public final class DexiconPools {
         };
         Runnable judge = () -> {
             Custody k = custody;
+            boolean unsure = pandaPoolsInstalled(ctx) && stale(ctx, k, CUSTODY_SIGN_MAX_AGE_MS);   // a failed read leaves an old cache
             for (Pool p : pools.get())
-                if (keptBy(ctx, k, p.address)) {
+                if (unsure || keptBy(ctx, k, p.address)) {
                     cb.accept(REFUSED + OWNER_COINS + low(p.oadr) + "\nof the pool\n" + low(p.address) + "\nwhich "
                             + (k == null || k.keptHere == null ? "PandaPools may still keep (it is installed and could not say which pools it keeps)"
                                                                : "standalone PandaPools still keeps")

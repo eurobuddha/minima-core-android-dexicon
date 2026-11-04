@@ -76,12 +76,14 @@ public class OwnerCoinGuardTest {
         return err[0];
     }
 
-    @Test public void dustAtADexiconKeptPoolWithASafeKeyDoesNotBlockAndIsQueuedForCollection() {
+    @Test public void dustAtADexiconKeptPoolWithASafeKeyDoesNotBlockAndQueuesNothing() {
         keyHeld = true;
         assertNull(PendingCollect.get(app, OWNER));
         assertNull(tombstone());
         assertEquals("the tombstone was posted", 1, sends.size());
-        assertNotNull("the dust is queued for the keep-alive's collection", PendingCollect.get(app, OWNER.toLowerCase()));
+        // never queued from the guard: an evidence-less PendingCollect entry parses as legacy forever and would block
+        // that address's real collections (its later refresh/close evidence could never clear it)
+        assertNull("nothing queued by the guard", PendingCollect.get(app, OWNER.toLowerCase()));
     }
 
     @Test public void anOwnerKeyNotSafeToSignWithRefuses() {
@@ -92,7 +94,7 @@ public class OwnerCoinGuardTest {
         assertTrue("names the owner address in full", why.contains(OWNER.toLowerCase()));
         assertTrue(why, why.contains("not safe to sign"));
         assertTrue(sends.isEmpty());
-        assertNotNull(PendingCollect.get(app, OWNER.toLowerCase()));
+        assertNull(PendingCollect.get(app, OWNER.toLowerCase()));
     }
 
     /** PandaPools' key check passes a failed `keys` read's message through; a null one must not read as "safe". */

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.94 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.95 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -1294,6 +1294,8 @@ public final class SwapEngine {
                 if (tip < first + LOCK_GONE_CONFIRM_BLOCKS) return;
                 minima.loadMyKeys(new MinimaHtlc.KeysCb() {
                     @Override public void ok(java.util.Set<String> keys) {
+                        // an empty reply means "node busy/locked", never "no keys": never let it wipe the key set
+                        if (keys == null || keys.isEmpty()) return;
                         setMyPubkeys(keys);   // raises the identity alarm (halt) if the publish key is gone
                         if (com.eurobuddha.atomix.IdentityWatch.halted() || !myPubkeys.contains(MinimaHtlc.normKey(key))
                                 || db.hasEvent(hash, event) || pendingLockGone(db, hash, event) != first) return;
@@ -1322,9 +1324,13 @@ public final class SwapEngine {
      *  By block number, never by event order: a clock set backwards cannot resurrect a voided reading. */
     static long pendingLockGone(SwapDb db, String hash, String event) {
         List<SwapDb.Event> events = db.getEvents(hash);
-        long voided = presentBlock(events), first = -1;
+        long voided = presentBlock(events), first = -1, presentId = 0;
+        // ALSO by insertion: a reading logged before the newest PRESENT row is void even if its block is higher
+        // (0.1.91/0.1.92 wrote PRESENT with the sweep's start block, a GONE_SEEN with the later tip).
+        for (SwapDb.Event e : events) if (SwapDb.EV_LOCK_PRESENT.equals(e.event)) presentId = Math.max(presentId, e.id);
         for (SwapDb.Event e : events) {
             if (!SwapDb.EV_LOCK_GONE_SEEN.equals(e.event) || e.note == null || !e.note.startsWith(event + " minima block ")) continue;
+            if (presentId > 0 && e.id > 0 && e.id < presentId) continue;
             long b = goneBlock(e.note);
             if (b > voided && (first < 0 || b < first)) first = b;
         }
@@ -1775,6 +1781,12 @@ public final class SwapEngine {
 
         boolean iAmReceiver = gc.receiver != null && gc.receiver.equalsIgnoreCase(myEth);
         boolean iAmSender = gc.owner != null && gc.owner.equalsIgnoreCase(myEth);
+        // contractId = sha256(hash): ONE contract per swap, so "refunded" proves the taker's leg is gone whoever the
+        // receiver reads as (an ERROR responder row under an older ETH key would otherwise be re-read forever).
+        if (gc.refunded && !iAmReceiver && ethLegUnproven(s)) {
+            db.logEvent(hash, SwapDb.EV_ETH_LEG_REFUNDED, "eth-read", "", "contract " + contractId);
+            return;
+        }
 
         if (iAmReceiver) {
             // gc.withdrawn is AUTHORITATIVE: only the receiver (me) can withdraw, so it means MY claim settled.
@@ -1783,7 +1795,8 @@ public final class SwapEngine {
             if (gc.withdrawn) { confirmEthWithdrawn(hash, s); return; }
             if (gc.refunded) {                     // counterparty refunded before I claimed — this leg is gone
                 // Handover.stuck's proof that no collect is owed (a responder may never have learned the secret).
-                if (!db.hasEvent(hash, SwapDb.EV_ETH_LEG_REFUNDED)) db.logEvent(hash, SwapDb.EV_ETH_LEG_REFUNDED, "ETH", "", contractId);
+                // token "eth-read" + "contract …" note: never parsed as an Ethereum tx by the CSV export (tools/dexHistory)
+                if (!db.hasEvent(hash, SwapDb.EV_ETH_LEG_REFUNDED)) db.logEvent(hash, SwapDb.EV_ETH_LEG_REFUNDED, "eth-read", "", "contract " + contractId);
                 finalizeEthLost(hash);
                 return;
             }

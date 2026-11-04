@@ -171,7 +171,7 @@ public class NodeApi {
         // the refuse decision may read PandaPools' custody provider: decide OFF the main thread, act back on it
         DexiconPools.offMain(() -> {
             String refused;
-            try { refused = refuse.apply(command); } catch (RuntimeException e) { refused = "Could not check this command: " + e.getMessage() + ". Nothing was sent."; }
+            try { refused = refuse.apply(command); } catch (Throwable e) { refused = "Could not check this command: " + e + ". Nothing was sent."; }
             final String why = refused;
             mMain.post(() -> { if (why == null) send(command, cb); else if (cb != null) cb.onError(why); });
         });
