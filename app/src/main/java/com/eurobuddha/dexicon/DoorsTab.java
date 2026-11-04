@@ -64,7 +64,7 @@ public final class DoorsTab extends LinearLayout {
     private final TextView progressLabel, finished;
     private final Swaps hooks;
     private final EditText send, recv, to;
-    private boolean sell = false;   // ① is "Dollars in": it opens on Buy
+    private boolean sell = false;   // ① (MxUSD) opens on Buy: most come to bring USDT in
     private boolean syncing;
     /** Which field the user typed last (null: neither) — the other follows the CURRENT best price on every re-quote. */
     private Boolean typedSend;

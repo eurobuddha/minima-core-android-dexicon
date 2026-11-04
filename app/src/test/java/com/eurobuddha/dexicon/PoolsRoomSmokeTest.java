@@ -43,6 +43,7 @@ public class PoolsRoomSmokeTest {
         assertNull("its own Wallet and Activity — not Dexicon's shared tabs", shownTab(root, "Assets"));
         assertNull(shownTab(root, "Settings"));
         assertTrue("opens on SWAP, as PandaPools", a.findViewById(R.id.swapAmount).isShown());
+        assertNull("AtomiX's ⇄ pill is not PandaPools'", PoolsRoomSmokeTest.containing(root, "⇄  MxUSD") != null && PoolsRoomSmokeTest.containing(root, "⇄  MxUSD").isShown() ? "shown" : null);
         assertNull("no Dexicon additions", containing(root, "Skip — go to the exchange"));
         assertNull(containing(root, "Create a pool (advanced)"));
         assertNull(containing(root, "WHAT A POOL IS"));

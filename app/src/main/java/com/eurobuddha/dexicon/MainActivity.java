@@ -74,7 +74,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange, picked in a one-line
      *  switcher at the top. ONE bottom bar, AtomiX's own (icon over label): the room's three pages, then ACTIVITY /
      *  ASSETS / SETTINGS shared by all three — six tabs, nothing to tap above AND below (owner, 4 Nov). */
-    static final String[] ROOMS = {"① Dollars in", "② Pools", "③ Exchange"};
+    static final String[] ROOMS = {"① MxUSD", "② Pools", "③ Exchange"};   // ① is AtomiX (owner, 4 Nov: named MxUSD)
     /** ② is PandaPools (owner, 4 Nov: "keep the new app feel, true to PandaPools"): its five pages, its own screens, as
      *  tabs on Dexicon's bottom bar — the way ① carries AtomiX's. */
     static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_PSWAP, TAB_POOLS, TAB_PMINE, TAB_PWALLET, TAB_PACT}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
@@ -1190,7 +1190,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     /** (Re)start the pill's glow, cancelling any previous one (AtomiX startCcyGlow). Never animates a hidden pill. */
     private void startCcyGlow() {
         stopCcyGlow();
-        if (ccyPill == null || !FOREGROUND || Boolean.TRUE.equals(gateShown)) return;   // never under the gate
+        if (ccyPill == null || !FOREGROUND || Boolean.TRUE.equals(gateShown) || room != 0) return;   // never under the gate; AtomiX's room only
         com.eurobuddha.atomix.TradingContext m = com.eurobuddha.dexicon.doors.DoorHost.get(this).market();
         ccyGlowAnim = Design.glow(ccyPill, Design.ccyRing(this, DoorsTab.soft(m), m.other().accent, m == com.eurobuddha.atomix.TradingContext.MINIMA), Design.glowLevel(this));
     }
@@ -1205,7 +1205,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         track(new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle("Switch to " + to + "?")
                 .setMessage("AtomiX publishes and market-makes in ONE currency at a time. Switching to " + to
-                        + " re-themes ① Dollars in and moves your swaps, order/market-making and OTC to the " + to + " book.\n\nYour current "
+                        + " re-themes ① and moves your swaps, order/market-making and OTC to the " + to + " book.\n\nYour current "
                         + from + " orders simply stop being maintained (a live market is withdrawn from the book). Any in-flight swaps in "
                         + "either currency keep settling safely in the background — switching never strands them.")
                 .setPositiveButton("Switch to " + to, (d, w) -> {
@@ -1245,6 +1245,11 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         for (int t : new int[]{left, right}) poolPageShown(t);   // a ② page coming into view refreshes like a PandaPools tab
         int r = roomOf(left);
         if (r >= 0) { room = r; roomLast[r] = left; }
+        // the ⇄ pill is AtomiX's currency switch: it shows (and glows) in ① only — never over PandaPools or the exchange
+        if (ccyPill != null) {
+            ccyPill.setVisibility(room == 0 ? View.VISIBLE : View.GONE);
+            if (room == 0) startCcyGlow(); else stopCcyGlow();
+        }
 
         for (int i = 0; i < tabCell.length; i++) {
             if (tabCell[i] == null) continue;
