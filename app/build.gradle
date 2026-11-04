@@ -11,8 +11,8 @@ android {
         minSdk 28
         targetSdk 35
         // Every code change bumps BOTH (pre-commit hook .githooks/pre-commit enforces it).
-        versionCode 169
-        versionName "0.1.69"
+        versionCode 170
+        versionName "0.1.70"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -78,6 +78,12 @@ dependencies {
     implementation 'org.web3j:abi:4.9.8'
     implementation 'org.web3j:rlp:4.9.8'
     implementation 'org.web3j:utils:4.9.8'
+
+    // ② POOLS (vendored PandaPools engine, scripts/vendor-pandapools.sh): Pandamonium's pinned Minima wire codecs for the
+    // proof-only MegaMMR recovery (app/libs/MINIMA-PROVENANCE.md), and SVG token icons (PandaPools' ImageLoader).
+    // PandaPools' SHA3Digest comes from the bcprov-jdk15on already on this classpath (1.70, via web3j) — never jdk18on.
+    implementation files('libs/minima.jar')
+    implementation 'com.caverock:androidsvg-aar:1.4'
 
     // ---- Local JVM unit tests (src/test) ----
     testImplementation 'junit:junit:4.13.2'

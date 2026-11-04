@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <!-- portfolio summary -->
+        <LinearLayout
+            android:id="@+id/lpSummaryCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:layout_marginBottom="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="YOUR LIQUIDITY"
+                android:textSize="11sp"
+                android:letterSpacing="0.10"
+                android:id="@+id/lpSummaryLabel" />
+
+            <TextView
+                android:id="@+id/lpSummaryValue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="—"
+                android:textSize="26sp"
+                android:paddingTop="4dp" />
+
+            <TextView
+                android:id="@+id/lpSummarySub"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="—"
+                android:textSize="13sp"
+                android:paddingTop="2dp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/lpCreateBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="+  CREATE A POOL"
+            android:gravity="center"
+            android:textSize="15sp"
+            android:letterSpacing="0.06"
+            android:padding="15dp"
+            android:layout_marginBottom="10dp" />
+
+        <TextView
+            android:id="@+id/lpRecoveryBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="BACK UP / RESTORE POOLS"
+            android:gravity="center"
+            android:textSize="12sp"
+            android:letterSpacing="0.06"
+            android:padding="12dp"
+            android:layout_marginBottom="10dp" />
+
+        <TextView
+            android:id="@+id/lpStatementBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="EXPORT STATEMENT"
+            android:gravity="center"
+            android:textSize="12sp"
+            android:letterSpacing="0.06"
+            android:padding="12dp"
+            android:layout_marginBottom="10dp" />
+
+        <TextView
+            android:id="@+id/lpCalcBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="POOL CALCULATOR"
+            android:gravity="center"
+            android:textSize="12sp"
+            android:letterSpacing="0.06"
+            android:padding="12dp"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:id="@+id/lpStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Loading your pools…"
+            android:textSize="13sp"
+            android:paddingBottom="8dp" />
+
+        <LinearLayout
+            android:id="@+id/lpList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

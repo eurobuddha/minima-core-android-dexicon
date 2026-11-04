@@ -19,7 +19,7 @@ public final class NodeTransportService extends Service {
     private long lastEvent;
 
     private final Handler handler = new Handler(Looper.getMainLooper(), msg -> {
-        if (msg.what != 1 || msg.replyTo == null || msg.sendingUid != android.os.Process.myUid()) return true;
+        if ((msg.what != 1 && msg.what != 2) || msg.replyTo == null || msg.sendingUid != android.os.Process.myUid()) return true;
         String id = msg.getData().getString("id", "");
         if (!NodeTransport.validId(id)) return true;
         Messenger target = msg.replyTo;
@@ -27,7 +27,12 @@ public final class NodeTransportService extends Service {
         try {
             String command = NodeTransport.read(request);
             request.delete();
-            if ("__register__".equals(command)) {
+            if (msg.what == 2) {   // PandaPools FILE request: {"action","path","newPath"?,"uri"?}
+                JSONObject file = new JSONObject(command);
+                api.FileCommand(file.getString("action"), file.getString("path"), file.optString("newPath", null),
+                        file.has("uri") ? android.net.Uri.parse(file.getString("uri")) : null,
+                        reply -> respond(target, id, reply));
+            } else if ("__register__".equals(command)) {
                 api.onDestroy();
                 api = new MinimaAPI(getApplicationContext(), reply -> {
                     JSONObject result = new JSONObject();

@@ -125,14 +125,18 @@ public class NodeApi {
 
     /** As {@link #cmd(String, Cb)}, with a guard re-checked when the command reaches the head of the IPC queue: false →
      *  nothing is sent and cb gets an error (the vendored AtomiX engine's "market changed" contract, via comms.NodeApi). */
-    public void cmd(String command, java.util.function.BooleanSupplier guard, Cb cb) {
-        if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, guard, cb)); return; }
+    public void cmd(String command, java.util.function.BooleanSupplier guard, Cb cb) { cmd(command, guard, 0, cb); }
+
+    /** As {@link #cmd(String, java.util.function.BooleanSupplier, Cb)} with an explicit reply timeout ({@code <= 0}: the
+     *  default for the verb). The vendored PandaPools engine waits 180 s for `backup`, `newaddress` and its key probe. */
+    public void cmd(String command, java.util.function.BooleanSupplier guard, long timeoutMs, Cb cb) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, guard, timeoutMs, cb)); return; }
         String invalid = CommandSafety.failure(command);
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         if (mReleased) { if (cb != null) mMain.post(() -> cb.onError("Node connection closed.")); return; }
         if (needsAdmin() && !"__register__".equals(command)) { if (cb != null) mMain.post(() -> cb.onError(ERR_NOT_ADMIN)); return; }   // never queue a pending
         queuedCommands++;
-        IPC_QUEUE.submit(finish -> guarded(guard, command, new Cb() {
+        IPC_QUEUE.submit(finish -> guarded(guard, command, timeoutMs, new Cb() {
             private boolean delivered;
             public void onResult(JSONObject reply) { complete(reply, null); }
             public void onError(String message) { complete(null, message); }
@@ -190,14 +194,14 @@ public class NodeApi {
         return out;
     }
 
-    private void guarded(java.util.function.BooleanSupplier guard, String command, Cb cb) {
+    private void guarded(java.util.function.BooleanSupplier guard, String command, long timeoutMs, Cb cb) {
         boolean ok;
         try { ok = guard == null || guard.getAsBoolean(); } catch (RuntimeException e) { ok = false; }
         if (!ok) { cb.onError("Market changed; refresh and try again. No command was sent."); return; }
-        dispatch(command, cb);
+        dispatch(command, timeoutMs, cb);
     }
 
-    private void dispatch(String command, Cb cb) {
+    private void dispatch(String command, long timeoutMs, Cb cb) {
         if (mReleased) { cb.onError("Node connection closed."); return; }
         final boolean funds = writesFunds(command);
         final boolean[] done = {false};
@@ -213,7 +217,7 @@ public class NodeApi {
         };
         ref[0] = timeout;
         mPending.add(timeout);
-        mMain.postDelayed(timeout, timeoutFor(command));
+        mMain.postDelayed(timeout, timeoutMs > 0 ? timeoutMs : timeoutFor(command));
 
         try { mApi.Command(command, new MinimaAPIListener() {
             @Override public void response(JSONObject zResponse) {
@@ -243,6 +247,31 @@ public class NodeApi {
             mMain.removeCallbacks(timeout);
             timeout.run();
         }
+    }
+
+    /** PandaPools NodeApi.file: the node's admin-gated FILE service (list | get | delete …). Bytes travel by content URI,
+     *  never through Binder. Used only by the vendored PandaPools node-backup capture (its own generated file name). */
+    public void file(String action, String path, String newPath, android.net.Uri uri, Cb cb) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> file(action, path, newPath, uri, cb)); return; }
+        if (mReleased) { cb.onError("Node connection closed."); return; }
+        if (needsAdmin()) { cb.onError(ERR_NOT_ADMIN); return; }
+        queuedCommands++;
+        IPC_QUEUE.submit(finish -> {
+            final boolean[] delivered = {false};
+            final Runnable[] timer = new Runnable[1];
+            java.util.function.Consumer<JSONObject> complete = reply -> {
+                if (delivered[0]) return; delivered[0] = true;
+                mMain.removeCallbacks(timer[0]); mPending.remove(timer[0]);
+                try {
+                    if (reply == null || reply.has("transporterror")) cb.onError("Node file access is unavailable. Check Admin permission and node version.");
+                    else cb.onResult(reply);
+                } catch (RuntimeException ignored) {
+                } finally { queuedCommands--; mMain.post(finish); finishDestroy(); }
+            };
+            timer[0] = () -> complete.accept(null); mPending.add(timer[0]); mMain.postDelayed(timer[0], WRITE_TIMEOUT_MS);
+            try { mApi.FileCommand(action, path, newPath, uri, reply -> mMain.post(() -> complete.accept(reply))); }
+            catch (RuntimeException failed) { complete.accept(null); }
+        });
     }
 
     public void onDestroy() { destroyRequested = true; finishDestroy(); }

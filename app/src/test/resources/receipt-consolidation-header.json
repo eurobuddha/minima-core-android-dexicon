@@ -1,0 +1,83 @@
+{
+  "txpowid": "0x0000B366B9A4E506FB1DAE5DA3D6753C7315CC671ED579822682A1E93698A632",
+  "header": {
+    "blkdiff": "0x794EDDA5660BBBF3ED7E5750C37A5509B139B29D6F71014A5F3032F9AA",
+    "block": "2304536",
+    "cascadelevels": 32,
+    "chainid": "0x00",
+    "customhash": "0x00",
+    "date": "Tue Sep 08 21:56:18 UTC 2026",
+    "magic": {
+      "currentmaxkissvmops": "1024",
+      "currentmaxtxn": "256",
+      "currentmaxtxpowsize": "65536",
+      "currentmintxpowwork": "0x068DB8BAC710CB295E9E1B089A027525460AA64C2F837B4A2339C0EBEDFA43",
+      "desiredmaxkissvmops": "1024",
+      "desiredmaxtxn": "256",
+      "desiredmaxtxpowsize": "65536",
+      "desiredmintxpowwork": "0x068DB8BAC710CB295E9E1B089A027525460AA64C2F837B4A2339C0EBEDFA43"
+    },
+    "mmr": "0x60422DAC7E7BA9BC54A2E024A1CC0935BEC40E61E8D386717E399066E98FD9AC",
+    "nonce": "99814353280658631.49594022748745075392729009224486418907137",
+    "superparents": [
+      {
+        "count": 3,
+        "difficulty": 2,
+        "parent": "0x000000120C82B65B9BA7DD1CCEC78D865A397C8E594337EEAE855C5B50393991"
+      },
+      {
+        "count": 1,
+        "difficulty": 3,
+        "parent": "0x00000009CF2F5E47AA3FD66BAA9192CEAA3B43253D7AFD7A86E051CC38F13E50"
+      },
+      {
+        "count": 3,
+        "difficulty": 6,
+        "parent": "0x00000001B1B7401A979117F6805171C104F30A34BD474A2FE4F8B73A09E12EF1"
+      },
+      {
+        "count": 1,
+        "difficulty": 7,
+        "parent": "0x00000000B342A1D437949002E5794EC2D2D3DAB776283EFD8759A5D98738EE7A"
+      },
+      {
+        "count": 2,
+        "difficulty": 9,
+        "parent": "0x0000000028CE0C720288A8C763027CA74F1AA70459A155CBC761A68D18D7397E"
+      },
+      {
+        "count": 2,
+        "difficulty": 11,
+        "parent": "0x000000000951273E324EB9B684293FAA668F0CE700BDD5D65AB68906317580FE"
+      },
+      {
+        "count": 1,
+        "difficulty": 12,
+        "parent": "0x00000000076E090A1ED12B0356DF7789FAF70B649D7999E18446A000D20CCCF1"
+      },
+      {
+        "count": 1,
+        "difficulty": 13,
+        "parent": "0x00000000020B425EA8FA9F0C55C3B2F842E4FA6462FF570412B5C1CC5D5058F3"
+      },
+      {
+        "count": 1,
+        "difficulty": 14,
+        "parent": "0x00000000012398DB3F67DB3173B82E77C2658C5DFED3B8315F8383331A0130D3"
+      },
+      {
+        "count": 11,
+        "difficulty": 25,
+        "parent": "0x0000000000002D2F6784DF233F28FACD18DF7D2201CAAB69D643A0551723D0A3"
+      },
+      {
+        "count": 6,
+        "difficulty": 31,
+        "parent": "0x00"
+      }
+    ],
+    "timemilli": "1788904578296",
+    "total": "999978154.12318354253151269097224749309776437321940043",
+    "txbodyhash": "0xA15911153EBA47512B648FD101DA85BEBC030AF70940AC69698C8821D3A994A6"
+  }
+}

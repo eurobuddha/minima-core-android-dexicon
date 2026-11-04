@@ -27,6 +27,8 @@ final class NodeTransport {
     private final Map<String, FutureTask<Void>> reads = new HashMap<>();
     private final Map<String, Runnable> deadlines = new HashMap<>();
     private final Map<String, Runnable> connectDeadlines = new HashMap<>();
+    /** 1 = node command, 2 = admin-gated FILE request (PandaPools' node-backup capture; bytes move by content URI). */
+    private final Map<String, Integer> requestTypes = new HashMap<>();
     private Messenger remote;
     private boolean bound, closed;
     private final Messenger replies = new Messenger(new Handler(Looper.getMainLooper(), msg -> {
@@ -84,7 +86,19 @@ final class NodeTransport {
         });
     }
 
-    void Command(String command, MinimaAPIListener cb) {
+    /** PandaPools NodeTransport.FileCommand: an admin-gated FILE action, staged like a command (type 2). */
+    void FileCommand(String action, String path, String newPath, android.net.Uri uri, MinimaAPIListener cb) {
+        try {
+            JSONObject value = new JSONObject().put("action", action).put("path", path);
+            if (newPath != null) value.put("newPath", newPath);
+            if (uri != null) value.put("uri", uri.toString());
+            stage(value.toString(), 2, cb);
+        } catch (Exception invalid) { cb.response(failure("Could not stage file request.")); }
+    }
+
+    void Command(String command, MinimaAPIListener cb) { stage(command, 1, cb); }
+
+    private void stage(String command, int type, MinimaAPIListener cb) {
         if (closed || !bound) { cb.response(failure("Node reply service is unavailable.")); return; }
         if (callbacks.size() >= MAX_PENDING) { cb.response(failure("Too many unanswered node requests.")); return; }
         String id = UUID.randomUUID().toString();
@@ -93,7 +107,7 @@ final class NodeTransport {
             if (bytes.length > MAX_BYTES) throw new IOException("Oversized command");
             java.nio.file.Files.write(file(context, id, ".cmd").toPath(), bytes);
         } catch (Exception error) { cb.response(failure("Could not stage node command.")); return; }
-        callbacks.put(id, cb); unsent.add(id);
+        callbacks.put(id, cb); requestTypes.put(id, type); unsent.add(id);
         Runnable expiry = () -> complete(id, failure("Node reply was not received. Outcome remains unknown."));
         deadlines.put(id, expiry);
         main.postDelayed(expiry, REPLY_RETENTION_MS);
@@ -109,13 +123,14 @@ final class NodeTransport {
         if (!unsent.remove(id)) return;
         Runnable connectExpiry = connectDeadlines.remove(id);
         if (connectExpiry != null) main.removeCallbacks(connectExpiry);
-        Message request = Message.obtain(null, 1);
+        Integer type = requestTypes.get(id);
+        Message request = Message.obtain(null, type == null ? 1 : type);
         Bundle b = new Bundle(); b.putString("id", id); request.setData(b); request.replyTo = replies;
         try { remote.send(request); }
         catch (RemoteException error) { complete(id, failure("Node reply service disconnected.")); }
     }
     private void complete(String id, JSONObject reply) {
-        unsent.remove(id); reading.remove(id);
+        unsent.remove(id); reading.remove(id); requestTypes.remove(id);
         FutureTask<Void> task = reads.remove(id);
         if (task != null) { task.cancel(true); reader.remove(task); }
         file(context, id, ".json").delete();

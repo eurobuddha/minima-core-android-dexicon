@@ -58,6 +58,8 @@ import java.util.concurrent.Executors;
  *   tick/30s  settlement tracker: a fill is done once one of its output coins exists on chain
  *   tick/10s  ACTIVITY tracker (ActivityLog.track) while any trade row can still change: tip, inputs, output coin
  *   tick/60s  maker refresh: re-back orders whose coins moved, relock stale coins, renew expiry
+ *   tick/5min ② POOLS keep-alive (vendored PandaPools, DexiconPools.keepAlivePass): recreate my aging pool reserves,
+ *             stranding alarm, re-announce, finish collections — runs while the trading gate is shut too (settlement)
  * A Doze-proof exact alarm ({@link HeartbeatReceiver}) drives a pass when the Handler loop stalls.
  */
 public class MakerService extends Service {
@@ -109,6 +111,12 @@ public class MakerService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (started && intent != null && ACTION_HEARTBEAT.equals(intent.getAction())) { acquireTimedWakelock(); h.removeCallbacks(tick); h.post(tick); }
         if (started && intent != null && ACTION_LADDER.equals(intent.getAction())) h.post(this::kickLadder);
+        // ② Pools: a stranding notification's Re-publish (relayed by the pandapools.PoolKeepAliveService shim)
+        if (started && intent != null && com.eurobuddha.pandapools.PoolKeepAliveService.ACTION_DEXICON_REPUBLISH.equals(intent.getAction())) {
+            final String address = intent.getStringExtra(com.eurobuddha.pandapools.PoolKeepAliveService.EXTRA_ADDRESS);
+            acquireTimedWakelock();
+            h.post(() -> { if (paired) com.eurobuddha.pandapools.DexiconPools.republish(this, node, address); });
+        }
         return START_STICKY;
     }
 
@@ -202,6 +210,10 @@ public class MakerService extends Service {
             long nowMs = System.currentTimeMillis();
             if (nowMs - lastHubMs >= HUB_EVERY_MS) { lastHubMs = nowMs; com.eurobuddha.dexicon.TradingGate.checkMiniHub(MakerService.this, node, MakerService.this::changed); }
             ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
+            // ② Pools: PandaPools' keep-alive (keep-fresh, stranding alarm, re-announce, collections), at most every 5 min.
+            // Settlement, so it runs even while the trading gate is shut; it needs no relay or identity.
+            try { com.eurobuddha.pandapools.DexiconPools.keepAlivePass(MakerService.this, node); }
+            catch (RuntimeException e) { log("pool keep-alive: " + e); }
             if (me == null) { deriveIdentity(); return; }
             List<String> relays = RelayStore.load(MakerService.this);
             Tokens.setMxUsd(RelayStore.mxusdOverride(MakerService.this));

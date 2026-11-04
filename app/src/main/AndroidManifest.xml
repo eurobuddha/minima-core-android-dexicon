@@ -65,8 +65,30 @@
             android:foregroundServiceType="specialUse|dataSync">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Polls the Dexicon relay inbox and co-signs fills of the user's own resting orders while the app is closed" />
+                android:value="Polls the Dexicon relay inbox, co-signs fills of the user's own resting orders and keeps the user's liquidity pools alive while the app is closed" />
         </service>
+
+        <!-- ② Pools (vendored PandaPools). The bare host shim only forwards a stranding notification's tap to ② My pools. -->
+        <activity android:name="com.eurobuddha.pandapools.MainActivity" android:exported="false" />
+        <!-- The stranding notification's Re-publish action targets this; it hands the address to MakerService and stops. -->
+        <service
+            android:name="com.eurobuddha.pandapools.PoolKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|dataSync">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Hands a pool re-publish request from a notification to the Dexicon keep-alive service" />
+        </service>
+        <!-- PandaPools' statement export: only the staged accounting file (cache/export/) is ever shared. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <receiver android:name=".maker.HeartbeatReceiver" android:exported="false" />
 
