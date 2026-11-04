@@ -564,7 +564,7 @@ public final class DoorsTab extends LinearLayout {
                         @Override public void done(String m, boolean error) { act.setStage(""); act.toast(m); if (error) Notifier.alert(act, "AtomiX swap stopped", m); act.repaint(); }
                     });
                     if (err != null) act.toast(err);
-                    else { syncing = true; send.setText(""); recv.setText(""); syncing = false; }
+                    else { syncing = true; send.setText(""); recv.setText(""); syncing = false; act.ensureKeepAlive(); }
                     render();
                 })
                 .setNegativeButton("Cancel", null).show());

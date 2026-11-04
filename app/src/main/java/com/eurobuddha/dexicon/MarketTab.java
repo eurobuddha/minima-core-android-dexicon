@@ -281,6 +281,7 @@ public final class MarketTab extends LinearLayout {
             });
             if (err != null) { bad(out, err); return; }
             d.dismiss();
+            act.ensureKeepAlive();   // a swap is now open: its claim / refund needs the background service (weekly ask at most)
             act.toast("Swap started — follow it on Swap or Activity");
             act.repaint();
         });

@@ -1154,6 +1154,12 @@ public final class DoorHost {
         java.util.Set<String> set = dismissed(); set.add(hash);
         prefs.edit().putString("dismissed_swaps", android.text.TextUtils.join(",", set)).apply();
     }
+    /** An AtomiX swap still needs the background service (a claim, refund or withdrawal outstanding). */
+    public boolean anyOpenSwap() {
+        for (SwapDb.Swap s : db.allSwaps()) if (!com.eurobuddha.atomix.swap.SwapVisibility.isTerminal(s)) return true;
+        return false;
+    }
+
     /** Every swap the live lists show (Swap, Activity): all but the ones the user hid. */
     public List<SwapDb.Swap> liveListSwaps() {
         java.util.Set<String> hidden = dismissed();

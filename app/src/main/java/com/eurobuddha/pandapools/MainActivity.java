@@ -107,7 +107,9 @@ public class MainActivity extends AppCompatActivity {
      *  as AtomiX asks its makers, for a node with an AtomiX market or OTC offer on — an unexempt phone is the leading cause
      *  of a market disappearing overnight. */
     public void ensureKeepAlive() {
-        if (OwnPoolStore.all(this).isEmpty() && !com.eurobuddha.dexicon.doors.DoorHost.get(this).makerLive()) return;
+        com.eurobuddha.dexicon.doors.DoorHost doors = com.eurobuddha.dexicon.doors.DoorHost.get(this);
+        // AtomiX asks every user: an open swap's claim / refund runs in the background service too
+        if (OwnPoolStore.all(this).isEmpty() && !doors.makerLive() && !doors.anyOpenSwap()) return;
         ensureNotificationPermissionNow();
         try { androidx.core.content.ContextCompat.startForegroundService(this, new Intent().setClassName(this, "com.eurobuddha.dexicon.maker.MakerService")); } catch (Exception ignored) {}
         try {
