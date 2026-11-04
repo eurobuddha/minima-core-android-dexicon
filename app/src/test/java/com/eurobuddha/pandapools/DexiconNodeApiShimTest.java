@@ -187,4 +187,25 @@ public class DexiconNodeApiShimTest {
         org.robolectric.shadows.ShadowLooper.idleMainLooper();
         assertNotNull("other commands never touch the lock", other.result);
     }
+
+    /** 0.2.34: pool signing joins the one process-wide signing queue; reads and txnpost do not. */
+    @Test public void signingVerbsAreRecognised() {
+        for (String c : new String[]{"txnsign id:x publickey:auto", "send address:Mx amount:1", "consolidate tokenid:0x00", "tokencreate name:x amount:1", "sign data:0x00"})
+            assertTrue(c, NodeApi.signs(c));
+        for (String c : new String[]{"txnpost id:x", "balance", "coins relevant:true", "sendpoll list", "txncreate id:x"})
+            assertFalse(c, NodeApi.signs(c));
+    }
+
+    @Test public void aSignedCommandStillReplies() throws Exception {
+        NodeApi n = new NodeApi(dex);
+        nextReply = new JSONObject().put("status", true);
+        Box b = new Box();
+        n.cmd("txnsign id:x publickey:auto", b);
+        org.robolectric.shadows.ShadowLooper.idleMainLooper();
+        assertNotNull("through the signing queue and back", b.result);
+        Box after = new Box();
+        n.cmd("txnsign id:y publickey:auto", after);
+        org.robolectric.shadows.ShadowLooper.idleMainLooper();
+        assertNotNull("the slot was released: the next one runs", after.result);
+    }
 }

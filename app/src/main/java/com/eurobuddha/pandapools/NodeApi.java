@@ -191,7 +191,27 @@ public class NodeApi {
                 public void onError(String m) { unlock.run(); if (inner != null) inner.onError(m); }
             };
         }
+        if (signs(command)) {   // the ONE process-wide signing queue (Dexicon / AtomiX SignGate): a pool signature never
+            final Cb out = cb;   // interleaves with a door claim or a fill co-sign on the same one-time keys (code review B3)
+            com.eurobuddha.dexicon.SignGate.submit(release -> {
+                java.util.concurrent.atomic.AtomicBoolean freed = new java.util.concurrent.atomic.AtomicBoolean();
+                Runnable free = () -> { if (freed.compareAndSet(false, true)) release.free(); };
+                try {
+                    sendUnlocked(command, new Cb() {
+                        public void onResult(JSONObject j) { free.run(); if (out != null) out.onResult(j); }
+                        public void onError(String m) { free.run(); if (out != null) out.onError(m); }
+                    });
+                } catch (RuntimeException e) { free.run(); throw e; }
+            });
+            return;
+        }
         sendUnlocked(command, cb);
+    }
+
+    /** Node commands that sign with the wallet's one-time keys (send / tokencreate / consolidate sign internally). */
+    static boolean signs(String command) {
+        String v = command == null ? "" : command.trim().toLowerCase(java.util.Locale.ROOT).split("\\s+", 2)[0];
+        return v.equals("txnsign") || v.equals("send") || v.equals("consolidate") || v.equals("tokencreate") || v.equals("sign");
     }
 
     private void sendUnlocked(String command, Cb cb) {
