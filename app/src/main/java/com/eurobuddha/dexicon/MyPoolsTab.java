@@ -62,12 +62,16 @@ public final class MyPoolsTab extends LinearLayout {
             fix.setOnClickListener(v -> { DexiconPools.resolveInterruptedWrite(act); });
             w.addView(fix);
         }
-        List<String> waiting = DexiconPools.awaitingNow(act);
+        List<String> waiting = DexiconPools.keptElsewhereNow(act);
         if (!waiting.isEmpty()) {
             LinearLayout a = Ui.card(notices);
-            a.addView(Ui.text(act, "AWAITING HAND-OVER", 13f, Design.ACCENT(), Design.sansBold()));
-            a.addView(Ui.para(act, "Restored from your PandaPools backup. Standalone PandaPools still keeps " + (waiting.size() == 1 ? "this pool" : "these pools")
-                    + ", so Dexicon leaves " + (waiting.size() == 1 ? "it" : "them") + " alone until PandaPools hands " + (waiting.size() == 1 ? "it" : "them")
+            boolean unreadable = DexiconPools.custodyUnreadable(act);
+            a.addView(Ui.text(act, unreadable ? "UPDATE PANDAPOOLS" : "KEPT BY PANDAPOOLS", 13f, unreadable ? Design.RED() : Design.ACCENT(), Design.sansBold()));
+            a.addView(Ui.para(act, unreadable
+                    ? "Standalone PandaPools is installed but cannot tell Dexicon which pools it keeps, so Dexicon signs for none of these "
+                    + "until you update PandaPools (two keepers would fight over the same reserves)."
+                    : "Standalone PandaPools keeps " + (waiting.size() == 1 ? "this pool" : "these pools") + ", so Dexicon leaves "
+                    + (waiting.size() == 1 ? "it" : "them") + " alone until PandaPools hands " + (waiting.size() == 1 ? "it" : "them")
                     + " over (two keepers would fight over the same reserves)."), Ui.wide(act, 6, 6));
             for (String p : waiting) a.addView(Ui.evidence(act, "Pool", p));
         }

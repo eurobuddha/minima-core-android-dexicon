@@ -85,10 +85,12 @@ public final class MakerEngine {
         });
     }
 
-    /** Spendable, state-free, unspent coins of one token at SIMPLE addresses (each with .script attached). */
+    /** Spendable, state-free, unspent coins of one token at SIMPLE addresses (each with .script attached) — never one at a
+     *  ② pool's owner payout address: that coin signs with the pool's one-time owner key. */
     public static void walletCoins(NodeApi node, String tokenid, CoinsCb cb) {
         simpleScripts(node, (e0, scripts) -> {
             if (e0 != null) { cb.done(e0, null); return; }
+            for (String owner : com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context())) scripts.remove(owner);
             node.cmdR("coins relevant:true checkmempool:true tokenid:" + tokenid, new NodeApi.Cb() {   // a coin a pending txn spends is already gone
                 public void onResult(JSONObject j) {
                     List<Coin> out = new ArrayList<>();

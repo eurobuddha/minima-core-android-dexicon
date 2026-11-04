@@ -47,7 +47,11 @@ final class WalletTools {
                 .setMessage("Send all " + amt + " sendable " + name + " to yourself as " + SPLIT_COUNT + " equal coins, so several orders and trades "
                         + "can each have their own coin.\n\nThe coins stay in your wallet; they are spendable again once the send confirms.\n\n" + cmd)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Split", (d, w) -> run(act, cmd, "Split " + name)).show();
+                .setPositiveButton("Split", (d, w) -> com.eurobuddha.pandapools.DexiconPools.checkConsolidation(act, error -> {
+                    // a self-send lets the node pick the coins too: PandaPools' consolidation guard applies
+                    if (error != null) message(act, "Nothing split", error);
+                    else run(act, cmd, "Split " + name);
+                })).show();
     }
 
     private static void run(MainActivity act, String cmd, String label) {

@@ -121,9 +121,10 @@ final class GateView extends ScrollView {
         c.addView(rm, Ui.wide(act, 0, 0));
     }
 
-    /** PandaPools only: a live pool moves to Dexicon through PandaPools' own verified backup. Restored pools wait (AWAITING
-     *  HAND-OVER) — Dexicon does not keep them — until PandaPools hands them over and stops keeping them itself. */
+    /** PandaPools only: a live pool moves to Dexicon through PandaPools' own verified backup. Dexicon leaves every pool
+     *  PandaPools says it keeps (its custody provider, re-read on each render) to PandaPools until it hands it over. */
     private void poolSteps(LinearLayout c) {
+        com.eurobuddha.pandapools.DexiconPools.readCustody(act);
         c.addView(para("Host a pool? Restore your PandaPools backup here first. Dexicon records your pools but leaves them to PandaPools "
                 + "until PandaPools hands them over: two keepers would fight over the same reserves. Then hand over; PandaPools stops keeping "
                 + "exactly the pools Dexicon now holds, and Dexicon starts."));
@@ -135,9 +136,14 @@ final class GateView extends ScrollView {
             st.setTextIsSelectable(true);
             c.addView(st, Ui.wide(act, 0, 6));
         }
-        java.util.List<String> waiting = com.eurobuddha.pandapools.DexiconPools.awaitingNow(act);
+        if (com.eurobuddha.pandapools.DexiconPools.custodyUnreadable(act)) {
+            c.addView(Ui.text(act, "UPDATE PANDAPOOLS", 12f, Design.RED(), Design.sansBold()), Ui.wide(act, 4, 2));
+            c.addView(para("This PandaPools cannot tell Dexicon which pools it keeps, so Dexicon signs for none of your pools (no "
+                    + "keep-fresh, re-announce or payout sweep) until it can. Update PandaPools from the store, then tap Check again."));
+        }
+        java.util.List<String> waiting = com.eurobuddha.pandapools.DexiconPools.keptElsewhereNow(act);
         if (!waiting.isEmpty()) {
-            c.addView(Ui.text(act, "AWAITING HAND-OVER · PandaPools still keeps " + (waiting.size() == 1 ? "this pool" : "these " + waiting.size() + " pools"),
+            c.addView(Ui.text(act, "KEPT BY PANDAPOOLS · Dexicon leaves " + (waiting.size() == 1 ? "this pool" : "these " + waiting.size() + " pools") + " alone",
                     12f, Design.ACCENT(), Design.sansBold()), Ui.wide(act, 4, 2));
             for (String a : waiting) c.addView(Ui.evidence(act, "Pool", a));
         }

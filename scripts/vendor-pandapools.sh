@@ -9,7 +9,7 @@
 #   NodeApi.java               adapter onto com.eurobuddha.dexicon.NodeApi, keeping PandaPools' write-safety journal
 #   MainActivity.java          the PandaPools host surface (node(), pools(), pickers …) that Dexicon's MainActivity extends
 #   PoolKeepAliveService.java  the stranding notification's Re-publish action, forwarded to Dexicon's MakerService tick
-#   Handover.java              PandaPools' create/swap gate, answered by Dexicon's TradingGate + the AWAITING hand-over set
+#   Handover.java              PandaPools' create/swap gate, answered by Dexicon's TradingGate + PandaPools' custody provider (DexiconPools)
 #   Design.java  BuildConfig.java  R.java   PandaPools' tokens / build constants / resource ids, mapped onto Dexicon's
 #   DexiconPools.java          the one public door Dexicon's own code (com.eurobuddha.dexicon.*) uses into this engine
 # NOT vendored at all: BootReceiver, HeartbeatReceiver, PoolWatchWorker (MakerService already keeps the process alive),

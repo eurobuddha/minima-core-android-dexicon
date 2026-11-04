@@ -88,16 +88,20 @@ public class PoolsRoomSmokeTest {
         assertNotNull(containing(d.getWindow().getDecorView(), "Two things this pool will need from you"));
     }
 
-    @Test public void awaitingPoolsAreListedInFullOnMyPools() {
+    @Test public void poolsPandaPoolsKeepsAreListedInFullOnMyPools() {
         android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
-        android.content.pm.PackageInfo pi = new android.content.pm.PackageInfo(); pi.packageName = TradingGate.PANDAPOOLS;
         String pool = "0x" + "ab".repeat(32);
-        com.eurobuddha.pandapools.DexiconPools.markAwaiting(app, java.util.Collections.singletonList(pool));
+        com.eurobuddha.pandapools.Pool p = new com.eurobuddha.pandapools.Pool();
+        p.address = pool; p.opk = "0x" + "b0".repeat(32); p.oadr = "0x" + "c0".repeat(32); p.tok = "0x" + "d0".repeat(32);
+        p.kmin = "100"; p.covenantScript = "RETURN TRUE";
+        assertTrue(com.eurobuddha.pandapools.OwnPoolStore.recordDurably(app, p));
         MainActivity a = DoorsTabSmokeTest.launch();
-        org.robolectric.Shadows.shadowOf(app.getPackageManager()).installPackage(pi);   // after launch: the card, not the gate
+        CustodyFake.rows = new String[][]{{pool, com.eurobuddha.pandapools.DexiconPools.KEPT_HERE}};
+        CustodyFake.install(app, CustodyFake.Install.NEW, 981);   // after launch: the card, not the gate
         a.showTab(MainActivity.TAB_PMINE);
         View root = a.getWindow().getDecorView();
-        assertNotNull(containing(root, "AWAITING HAND-OVER"));
+        assertNotNull(containing(root, "KEPT BY PANDAPOOLS"));
         assertNotNull("the full address", containing(root, pool));
+        CustodyFake.rows = new String[0][];
     }
 }

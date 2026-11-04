@@ -553,10 +553,14 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 }
                 final int before = coins;
                 setStage("Your " + name + " is spread over " + coins + " coins — consolidating it, then the trade retries by itself");
-                SignGate.submit(release -> node.cmdR("consolidate tokenid:" + token, new NodeApi.Cb() {
-                    public void onResult(JSONObject x) { release.free(); waitThenRetry(buy, amount, price, token, need, chainBlock, true); }
-                    public void onError(String m) { release.free(); setStage(""); toast("Could not consolidate " + name + ": " + m + " — " + why); }
-                }));
+                // PandaPools' guard (as ASSETS › CONSOLIDATE): the node picks the coins, so never while a pool owner key cannot sign
+                com.eurobuddha.pandapools.DexiconPools.checkConsolidation(MainActivity.this, blocked -> {
+                    if (blocked != null) { setStage(""); explain("Nothing consolidated", blocked + "\n\n" + why); return; }
+                    SignGate.submit(release -> node.cmdR("consolidate tokenid:" + token, new NodeApi.Cb() {
+                        public void onResult(JSONObject x) { release.free(); waitThenRetry(buy, amount, price, token, need, chainBlock, true); }
+                        public void onError(String m) { release.free(); setStage(""); toast("Could not consolidate " + name + ": " + m + " — " + why); }
+                    }));
+                });
             }
             public void onError(String m) { toast(why); }
         });
@@ -1292,6 +1296,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         startCcyGlow();   // the pill survived the pause; re-arm exactly one animator on it
         if (node != null && !paired) node.reRegister();   // back from the node app's Apps screen: re-ask at once
         applySettings();
+        com.eurobuddha.pandapools.DexiconPools.readCustody(this);   // who keeps each pool, as of now
         recheckGate();
         bookLoop();
         repaint();
@@ -1359,11 +1364,11 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             TradingGate.noteAnswer(this, pkg, -2);   // the card follows the LAST answer
             String why = d == null ? null : d.getStringExtra("reason");
             why = why == null || why.isEmpty() ? name + " did not confirm the hand-over, so nothing changed." : why;
-            if (TradingGate.PANDAPOOLS.equals(pkg) && d != null) {
-                // Only an explicit "kept_by_dexicon" list moves a pool back (a refusal alone can leave PandaPools' keeper stopped).
-                List<String> back = com.eurobuddha.pandapools.DexiconPools.onHandoverRefused(this, d.getStringArrayExtra(com.eurobuddha.pandapools.DexiconPools.EXTRA_KEPT));
-                if (!back.isEmpty()) why += "\n\nPandaPools keeps " + (back.size() == 1 ? "this pool" : "these pools") + " again, so Dexicon has stopped keeping "
-                        + (back.size() == 1 ? "it" : "them") + " (AWAITING HAND-OVER):\n" + String.join("\n", back);
+            if (TradingGate.PANDAPOOLS.equals(pkg)) {
+                // Custody comes only from PandaPools' own provider: re-read it and say which pools PandaPools keeps now.
+                com.eurobuddha.pandapools.DexiconPools.readCustody(this);
+                List<String> there = com.eurobuddha.pandapools.DexiconPools.keptElsewhereNow(this);
+                if (!there.isEmpty()) why += "\n\nDexicon leaves " + (there.size() == 1 ? "this pool" : "these pools") + " to PandaPools for now:\n" + String.join("\n", there);
             }
             explain(name + " is not ready to remove", why);
         }
@@ -1375,26 +1380,30 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     /** The gate's PandaPools card: last restore result (full addresses, selectable). */
     String poolRestoreStatus = "";
 
-    /** "Restore your PandaPools backup here": PandaPools' own verify + restore; every pool restored waits (AWAITING). */
+    /** "Restore your PandaPools backup here": PandaPools' own verify + restore. A pool PandaPools still keeps is left to it. */
     void restorePandaPoolsBackup() {
         pickOpenFile(uri -> {
             if (uri == null) return;
             com.eurobuddha.pandapools.DexiconPools.restoreBackup(this, uri, line -> { poolRestoreStatus = line; if (gate != null) gate.render(); },
                     (restored, total, addresses, report) -> {
-                        poolRestoreStatus = total == 0 ? report : restored + " of " + total + " pool(s) restored with verified reserves. They are AWAITING HAND-OVER: "
-                                + "PandaPools keeps them until you hand over.\n\n" + report;
+                        poolRestoreStatus = total == 0 ? report : restored + " of " + total + " pool(s) restored with verified reserves. PandaPools keeps "
+                                + "them until you hand over; Dexicon starts keeping each one only once PandaPools says it has stopped.\n\n" + report;
                         if (gate != null) gate.render();
                         repaint();
                     });
         });
     }
 
-    /** PandaPools said OK and stopped keeping {@code pools}: Dexicon keeps exactly those now. Restored pools come back with
-     *  signing paused (PandaPools' rule); the user attests the wallet's signing state once, here, so keep-fresh can sign. */
+    /** PandaPools said OK. Custody is NOT taken from the answer — only from PandaPools' provider, re-read now. Of the named
+     *  pools, those PandaPools no longer keeps come back with signing paused (PandaPools' rule); the user attests the
+     *  wallet's signing state once, here, before keep-fresh signs for them. */
     private void poolsHandedOver(String[] pools) {
         if (pools == null || pools.length == 0) return;
-        if (!com.eurobuddha.pandapools.DexiconPools.onHandoverOk(this, pools)) { explain("Hand-over not saved", "Dexicon could not save which pools it keeps now. Hand over again."); return; }
-        com.eurobuddha.pandapools.DexiconPools.offerSigningConfirmation(this, java.util.Arrays.asList(pools), this::repaint);
+        com.eurobuddha.pandapools.DexiconPools.readCustody(this);
+        List<String> mine = new ArrayList<>();
+        for (String p : pools) if (p != null && !com.eurobuddha.pandapools.DexiconPools.keptElsewhere(this, p)) mine.add(p);
+        if (mine.isEmpty()) return;
+        com.eurobuddha.pandapools.DexiconPools.offerSigningConfirmation(this, mine, this::repaint);
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {

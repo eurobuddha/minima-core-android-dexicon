@@ -212,6 +212,7 @@ public class MakerService extends Service {
             ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
             // ② Pools: PandaPools' keep-alive (keep-fresh, stranding alarm, re-announce, collections), at most every 5 min.
             // Settlement, so it runs even while the trading gate is shut; it needs no relay or identity.
+            holdOrderCoins();   // ② pool coin selection must never pick a live ③ order's backing coin
             try { com.eurobuddha.pandapools.DexiconPools.keepAlivePass(MakerService.this, node); }
             catch (RuntimeException e) { log("pool keep-alive: " + e); }
             if (me == null) { deriveIdentity(); return; }
@@ -231,6 +232,13 @@ public class MakerService extends Service {
             });
         }
     };
+
+    /** Re-hold (every tick, inside PandaPools' ~3 min reservation) the coins backing my live ③ orders in PandaPools' CoinLock. */
+    void holdOrderCoins() {
+        List<String> ids = new ArrayList<>();
+        try { for (MyOrder o : db.myOrders()) if (o.live()) ids.addAll(o.coins); } catch (RuntimeException unreadable) { return; }
+        com.eurobuddha.pandapools.DexiconPools.holdCoins(ids);
+    }
 
     /** The inbox is a CONTINUOUS long-poll (like the MiniDapp's inboxLoop): a take or a maker's answer is handled the
      *  moment it lands, not at the next 10 s tick. TICK_MS stays as the watchdog and the pace when relays fail. */

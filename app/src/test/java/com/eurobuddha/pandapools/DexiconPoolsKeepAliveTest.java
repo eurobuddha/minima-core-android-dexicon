@@ -7,6 +7,8 @@ import static org.mockito.Mockito.*;
 import android.content.Context;
 import android.content.pm.PackageInfo;
 
+import com.eurobuddha.dexicon.CustodyFake;
+
 import org.json.JSONObject;
 import org.junit.Before;
 import org.junit.Test;
@@ -26,8 +28,8 @@ import java.util.function.BooleanSupplier;
 /**
  * DEXICON-OWNED: ② Pools under Dexicon's rules.
  *  - The trading gate shut by a CONFLICT (standalone PandaPools found): no new pool, no swap — the keep-alive still runs.
- *  - Moving a live pool: restored pools wait (AWAITING) while PandaPools keeps them; PandaPools' OK hands exactly the named
- *    pools over; a refusal moves a pool back only when its "kept_by_dexicon" list leaves that pool out.
+ *  - Custody comes only from PandaPools' provider (0.1.74): kept_here → left alone; handed_over / absent → Dexicon's;
+ *    unreadable → nobody signs from Dexicon; a take-back stops Dexicon's keeper within one pass.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
@@ -39,7 +41,8 @@ public class DexiconPoolsKeepAliveTest {
 
     @Before public void setUp() {
         ctx = RuntimeEnvironment.getApplication();
-        ctx.getSharedPreferences("dexicon_pools_handover", Context.MODE_PRIVATE).edit().clear().commit();
+        CustodyFake.rows = new String[0][];
+        CustodyFake.install((android.app.Application) RuntimeEnvironment.getApplication(), CustodyFake.Install.NONE, 0);
         com.eurobuddha.dexicon.TradingGate.record(ctx, new org.json.JSONArray());   // MiniHub read once: no MiniDapp
         DexiconPools.resetPassClock();
         dex = mock(com.eurobuddha.dexicon.NodeApi.class);
@@ -52,10 +55,7 @@ public class DexiconPoolsKeepAliveTest {
     }
 
     private void installPandaPools(boolean on) {
-        if (on) {
-            PackageInfo pi = new PackageInfo(); pi.packageName = com.eurobuddha.dexicon.TradingGate.PANDAPOOLS;
-            Shadows.shadowOf(ctx.getPackageManager()).installPackage(pi);
-        } else Shadows.shadowOf(ctx.getPackageManager()).removePackage(com.eurobuddha.dexicon.TradingGate.PANDAPOOLS);
+        CustodyFake.install((android.app.Application) ctx, on ? CustodyFake.Install.NEW : CustodyFake.Install.NONE, 981);
     }
 
     private static Pool pool(String address) {
@@ -96,39 +96,67 @@ public class DexiconPoolsKeepAliveTest {
         assertFalse("at most once per 5 min", DexiconPools.keepAlivePass(ctx, dex));
     }
 
-    @Test public void restoredPoolsWaitUntilPandaPoolsHandsThemOver() {
-        installPandaPools(true);
-        assertTrue(DexiconPools.markAwaiting(ctx, Arrays.asList(A, B)));
-        assertTrue("PandaPools still keeps it", DexiconPools.keptElsewhere(ctx, A.toLowerCase()));
-        assertTrue(Handover.keepable(ctx, Arrays.asList(pool(A), pool(B))).isEmpty());
-
-        // Dexicon's keeper refuses to refresh or re-announce a pool another app keeps (vendored PoolManager guard).
-        final String[] why = new String[1];
+    /** A recipe written by ANY path (MyLpView backfill, the ② restore menu, Recovery) while PandaPools keeps the pool:
+     *  Dexicon's keeper leaves it alone — no AWAITING mark is needed, the provider says so. */
+    @Test public void aBackfilledPoolPandaPoolsKeepsIsNotKeptHere() {
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), DexiconPools.KEPT_HERE}, {B.toLowerCase(), "handed_over"}};
+        CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.NEW, 981);
+        assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
+        assertTrue(DexiconPools.keptElsewhere(ctx, A));
+        assertFalse("handed_over: Dexicon keeps it", DexiconPools.keptElsewhere(ctx, B));
+        assertEquals(1, Handover.keepable(ctx, Arrays.asList(pool(A), pool(B))).size());
+        final String[] why = new String[2];
         new PoolManager(new NodeApi(dex)).reannounce(pool(A), new PoolManager.Result() {
             public void onPosted(String txpowid) { fail(); }
             public void onFailed(String message) { why[0] = message; }
         });
+        new PoolManager(new NodeApi(dex)).refresh(pool(A), new PoolManager.Result() {
+            public void onPosted(String txpowid) { fail(); }
+            public void onFailed(String message) { why[1] = message; }
+        });
         assertEquals(PoolManager.KEPT_BY_DEXICON, why[0]);
-
-        assertTrue(DexiconPools.onHandoverOk(ctx, new String[]{A}));
-        assertFalse("handed over: Dexicon keeps it", DexiconPools.keptElsewhere(ctx, A));
-        assertTrue("not named: still awaiting", DexiconPools.keptElsewhere(ctx, B));
-
-        assertTrue("a refusal without the list changes nothing", DexiconPools.onHandoverRefused(ctx, null).isEmpty());
-        assertTrue("PandaPools still leaves A alone", DexiconPools.onHandoverRefused(ctx, new String[]{A.toLowerCase()}).isEmpty());
-        assertFalse(DexiconPools.keptElsewhere(ctx, A));
-
-        assertEquals("taken back: A is absent from kept_by_dexicon", Collections.singletonList(A.toLowerCase()), DexiconPools.onHandoverRefused(ctx, new String[0]));
-        assertTrue("A waits again", DexiconPools.keptElsewhere(ctx, A));
-
-        installPandaPools(false);
-        assertFalse("PandaPools is gone: nothing else can keep it, so Dexicon does", DexiconPools.keptElsewhere(ctx, A));
+        assertEquals(PoolManager.KEPT_BY_DEXICON, why[1]);
+        assertTrue("nothing reached the node", sent.isEmpty());
     }
 
-    @Test public void aPoolCreatedInDexiconIsNeverMovedByARefusal() {
-        installPandaPools(true);
-        DexiconPools.onHandoverRefused(ctx, new String[0]);
+    /** PandaPools takes a pool back: the very next keep-alive pass re-reads custody before it refreshes anything. */
+    @Test public void aTakeBackFlipsWithinOnePass() {
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), "handed_over"}};
+        CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.NEW, 981);
+        assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
         assertFalse(DexiconPools.keptElsewhere(ctx, A));
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), DexiconPools.KEPT_HERE}};
+        assertFalse("the cached read stands between passes", DexiconPools.keptElsewhere(ctx, A));
+        assertTrue(DexiconPools.keepAlivePass(ctx, dex));
+        assertTrue("taken back: Dexicon stops within this pass", DexiconPools.keptElsewhere(ctx, A));
+        assertTrue(Handover.keepable(ctx, OwnPoolStore.all(ctx)).isEmpty());
+    }
+
+    /** An older PandaPools (no provider): every pool counts as kept there and no owner sweep runs from Dexicon. */
+    @Test public void anUnreadableProviderStopsEveryOwnerSignature() {
+        CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.OLD, 980);
+        assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
+        assertTrue(DexiconPools.custodyUnreadable(ctx));
+        assertTrue(Handover.keepable(ctx, OwnPoolStore.all(ctx)).isEmpty());
+        assertFalse(DexiconPools.sweepAllowed(ctx));
+        CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.NONE, 0);
+        assertTrue("PandaPools gone: Dexicon keeps (and sweeps) everything", DexiconPools.sweepAllowed(ctx));
+        assertEquals(1, Handover.keepable(ctx, OwnPoolStore.all(ctx)).size());
+    }
+
+    /** B: every pool owner payout address, in full and lower-case, for Dexicon's coin selection to skip. */
+    @Test public void ownerAddressesNameEveryRecipesPayoutAddress() {
+        assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
+        assertTrue(DexiconPools.ownerAddresses(ctx).contains(pool(A).oadr.toLowerCase()));
+        assertTrue(DexiconPools.ownerAddresses(null).isEmpty());
+    }
+
+    /** C: coins Dexicon holds (order backing, a trade's inputs) are reserved in PandaPools' own CoinLock. */
+    @Test public void heldCoinsAreSkippedByPoolSelection() {
+        String id = "0x" + String.join("", Collections.nCopies(64, "e"));
+        assertFalse(CoinLock.isReserved(id));
+        DexiconPools.holdCoins(Collections.singletonList(id));
+        assertTrue(CoinLock.isReserved(id));
     }
 
     @Test public void heldAddressesNameEveryRecipeInFull() {

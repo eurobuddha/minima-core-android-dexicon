@@ -19,47 +19,95 @@ import java.util.Set;
  * reserves before the cascade edge, raise the stranding alarm, re-announce faded beacons, finish collections — run from
  * Dexicon's one foreground service (MakerService). It is settlement: it runs even while the trading gate is shut.
  *
- * <b>Moving a live pool from standalone PandaPools</b>: its verified backup is restored here, and every pool in it is
- * first marked AWAITING HAND-OVER. While standalone PandaPools is installed, Dexicon does NOT keep an awaiting pool (two
- * keepers would rebuild the same reserves against each other). PandaPools' hand-over answers OK only after it has stopped
- * keeping them, with String[] "pools"; exactly those pools then leave AWAITING and Dexicon keeps them. Every refusal
- * carries String[] "kept_by_dexicon" — the pools PandaPools currently leaves alone; a pool Dexicon received by hand-over
- * that is ABSENT from it was taken back, and returns to AWAITING. A refusal without that extra changes nothing.
- * Once standalone PandaPools is gone (uninstalled), nothing else can keep a pool, so AWAITING no longer holds it back.
+ * <b>Custody — who keeps each pool</b> (0.1.74; replaces the AWAITING/HANDED inference): Dexicon never infers it. While
+ * standalone PandaPools is installed, the ONLY source is PandaPools' own custody signal, the exported provider
+ * {@code content://com.eurobuddha.pandapools.handover/state} (PandaPools 0.9.81+; it answers only Dexicon signed with the
+ * same key): one row per ACTIVE recipe PandaPools holds, {@code kept_here} or {@code handed_over}. A pool PandaPools lists
+ * as kept_here is kept elsewhere; any other pool (handed over, absent, PandaPools reinstalled with nothing) is Dexicon's.
+ * Unreadable (an older PandaPools, null, an error, a provider that is not PandaPools' own) → EVERY pool counts as kept
+ * elsewhere: nobody signs from Dexicon, and the gate card says to update PandaPools. PandaPools not installed → Dexicon
+ * keeps every recipe it holds. The read is cached with its time and refreshed on every keep-alive pass, onResume and
+ * gate render (and whenever the cache is over a minute old). The hand-over intent (dexicon_pools / pools /
+ * kept_by_dexicon) is only the permission to uninstall; custody never comes from it.
  */
 public final class DexiconPools {
     private DexiconPools() {}
 
     public static final String EXTRA_DEXICON_POOLS = "dexicon_pools", EXTRA_POOLS = "pools", EXTRA_KEPT = "kept_by_dexicon";
+    public static final String CUSTODY_AUTHORITY = "com.eurobuddha.pandapools.handover", KEPT_HERE = "kept_here";
+    static final android.net.Uri CUSTODY_URI = android.net.Uri.parse("content://" + CUSTODY_AUTHORITY + "/state");
+    /** The retired AWAITING/HANDED hand-over sets (≤0.1.73). Never read; {@link #readCustody} deletes them. */
     private static final String PREFS = "dexicon_pools_handover", AWAITING = "awaiting", HANDED = "handed";
-    static final long PASS_GAP_MS = 5 * 60_000;
+    static final long PASS_GAP_MS = 5 * 60_000, CUSTODY_MAX_AGE_MS = 60_000;
     private static long lastPassMs;
 
     private static SharedPreferences prefs(Context c) { return c.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
-    private static Set<String> set(Context c, String key) {
-        try { Set<String> s = prefs(c).getStringSet(key, null); return s == null ? new HashSet<>() : new HashSet<>(s); }
-        catch (RuntimeException unreadable) { return new HashSet<>(); }
-    }
     private static String low(String a) { return a == null ? "" : a.trim().toLowerCase(Locale.ROOT); }
-    private static Set<String> lows(String[] a) { Set<String> s = new HashSet<>(); if (a != null) for (String x : a) if (x != null && !low(x).isEmpty()) s.add(low(x)); return s; }
 
-    // ---- AWAITING HAND-OVER ----
+    // ---- custody (PandaPools' provider) ----
 
-    /** Lower-cased covenant addresses restored here that standalone PandaPools has not handed over (yet, or again). */
-    public static Set<String> awaiting(Context c) { return set(c, AWAITING); }
+    /** One custody read. {@code keptHere} null = PandaPools is installed but could not be read. */
+    public static final class Custody {
+        public final boolean installed;
+        public final Set<String> keptHere;
+        public final long at;
+        Custody(boolean installed, Set<String> keptHere, long at) { this.installed = installed; this.keptHere = keptHere; this.at = at; }
+        public boolean unreadable() { return installed && keptHere == null; }
+    }
+    private static volatile Custody custody;
 
-    /** True when another app still keeps this pool: AWAITING, and standalone PandaPools is still installed. */
+    private static boolean pandaPoolsInstalled(Context c) {
+        return com.eurobuddha.dexicon.TradingGate.installed(c, com.eurobuddha.dexicon.TradingGate.PANDAPOOLS);
+    }
+
+    /** Re-read PandaPools' custody signal now and cache it (keep-alive pass, onResume, gate render). */
+    public static Custody readCustody(Context c) {
+        Context ctx = c.getApplicationContext();
+        boolean installed = pandaPoolsInstalled(ctx);
+        Custody k = new Custody(installed, installed ? queryKeptHere(ctx) : null, System.currentTimeMillis());
+        custody = k;
+        try { if (prefs(ctx).contains(AWAITING) || prefs(ctx).contains(HANDED)) prefs(ctx).edit().remove(AWAITING).remove(HANDED).apply(); }
+        catch (RuntimeException ignored) { /* the retired sets are never read anyway */ }
+        return k;
+    }
+
+    /** The cached read, re-read when missing, over a minute old, or taken before PandaPools was (un)installed. */
+    public static Custody custody(Context c) {
+        Custody k = custody;
+        if (k == null || k.installed != pandaPoolsInstalled(c) || System.currentTimeMillis() - k.at > CUSTODY_MAX_AGE_MS) k = readCustody(c);
+        return k;
+    }
+
+    /** Lower-case addresses PandaPools says it keeps, or null when its provider cannot be read or is not PandaPools' own. */
+    static Set<String> queryKeptHere(Context c) {
+        String pp = com.eurobuddha.dexicon.TradingGate.PANDAPOOLS;
+        try {
+            android.content.pm.PackageManager pm = c.getPackageManager();
+            android.content.pm.ProviderInfo info = pm.resolveContentProvider(CUSTODY_AUTHORITY, 0);
+            if (info == null || !pp.equals(info.packageName)) return null;   // an older PandaPools, or someone else's provider
+            if (pm.checkSignatures(pp, c.getPackageName()) != android.content.pm.PackageManager.SIGNATURE_MATCH) return null;
+            try (android.database.Cursor cur = c.getContentResolver().query(CUSTODY_URI, null, null, null, null)) {
+                if (cur == null) return null;
+                int a = cur.getColumnIndex("address"), s = cur.getColumnIndex("state");
+                if (a < 0 || s < 0) return null;
+                Set<String> out = new HashSet<>();
+                while (cur.moveToNext()) if (KEPT_HERE.equals(cur.getString(s)) && !low(cur.getString(a)).isEmpty()) out.add(low(cur.getString(a)));
+                return out;
+            }
+        } catch (RuntimeException unreadable) { return null; }
+    }
+
+    /** True when Dexicon must not sign for this pool: standalone PandaPools keeps it, or PandaPools is installed and its
+     *  custody signal cannot be read (then every pool is treated as kept there). */
     public static boolean keptElsewhere(Context c, String address) {
         if (c == null || address == null) return false;
-        return awaiting(c).contains(low(address)) && com.eurobuddha.dexicon.TradingGate.installed(c, com.eurobuddha.dexicon.TradingGate.PANDAPOOLS);
+        if (!pandaPoolsInstalled(c)) return false;
+        Custody k = custody(c);
+        return k.keptHere == null || k.keptHere.contains(low(address));
     }
 
-    /** Durable (commit) BEFORE a restore writes any recipe, so no keep-alive pass can treat one as Dexicon's. */
-    public static boolean markAwaiting(Context c, Collection<String> addresses) {
-        Set<String> s = awaiting(c);
-        for (String a : addresses) if (!low(a).isEmpty()) s.add(low(a));
-        return prefs(c).edit().putStringSet(AWAITING, s).commit();
-    }
+    /** PandaPools is installed and cannot tell Dexicon which pools it keeps: nothing is signed from here; update it. */
+    public static boolean custodyUnreadable(Context c) { return pandaPoolsInstalled(c) && custody(c).unreadable(); }
 
     /** Every covenant address Dexicon holds a recipe for — the "dexicon_pools" extra of the hand-over request. */
     public static String[] heldAddresses(Context c) {
@@ -68,30 +116,36 @@ public final class DexiconPools {
         return out.toArray(new String[0]);
     }
 
-    /** PandaPools said OK and stopped keeping {@code pools}: exactly those leave AWAITING, and Dexicon keeps them. */
-    public static boolean onHandoverOk(Context c, String[] pools) {
-        Set<String> handed = lows(pools), awaiting = awaiting(c), mine = set(c, HANDED);
-        awaiting.removeAll(handed); mine.addAll(handed);
-        return prefs(c).edit().putStringSet(AWAITING, awaiting).putStringSet(HANDED, mine).commit();
+    /** Pool owner payout addresses (lower-case, full) of every recipe here: a coin there signs with the pool's one-time owner
+     *  key, so no Dexicon trade, order or self-send may select it. */
+    public static Set<String> ownerAddresses(Context c) {
+        if (c == null) return new HashSet<>();
+        try { return OwnPoolStore.ownerAddresses(c.getApplicationContext()); } catch (RuntimeException unreadable) { return new HashSet<>(); }
     }
 
-    /**
-     * PandaPools refused. {@code keptByDexicon} null (an older PandaPools, or no answer) → nothing changes. Otherwise a pool
-     * Dexicon received by hand-over and PandaPools no longer leaves alone was taken back: it returns to AWAITING.
-     * Returns the pools moved back.
-     */
-    public static List<String> onHandoverRefused(Context c, String[] keptByDexicon) {
-        List<String> back = new ArrayList<>();
-        if (keptByDexicon == null) return back;
-        Set<String> kept = lows(keptByDexicon), awaiting = awaiting(c), mine = set(c, HANDED);
-        for (String a : new ArrayList<>(mine)) if (!kept.contains(a)) { mine.remove(a); awaiting.add(a); back.add(a); }
-        if (!back.isEmpty()) prefs(c).edit().putStringSet(AWAITING, awaiting).putStringSet(HANDED, mine).commit();
-        return back;
+    /** Hold these wallet coins in PandaPools' own CoinLock (its ~3 min selection reservation), so ② pool coin selection
+     *  (keep-fresh, re-announce, create, swap) skips them: a live ③ order's backing coins (MakerService re-holds them every
+     *  tick) and the inputs a Dexicon trade just selected. Dexicon's resting CoinLock (PandaDEX's copy) is separate. */
+    public static void holdCoins(Collection<String> coinIds) {
+        if (coinIds == null || coinIds.isEmpty()) return;
+        List<Coin> coins = new ArrayList<>();
+        for (String id : coinIds) if (id != null && !id.isEmpty()) { Coin c = new Coin(); c.coinid = id; coins.add(c); }
+        CoinLock.reserve(coins);
+    }
+
+    /** A collection sweep forwards owner-payout coins (owner key). Not while custody is unreadable, nor while any pending
+     *  collection belongs to a pool kept elsewhere (CollectSweeper is vendored and sweeps its whole queue). */
+    static boolean sweepAllowed(Context c) {
+        if (custodyUnreadable(c)) return false;
+        for (PendingCollect.Entry e : PendingCollect.all(c))
+            for (Pool p : OwnPoolStore.all(c))
+                if (p.oadr != null && p.oadr.equalsIgnoreCase(e.oadr) && keptElsewhere(c, p.address)) return false;
+        return true;
     }
 
     // ---- restore a PandaPools backup (the gate's "Restore your PandaPools backup here") ----
 
-    public interface RestoreDone { void done(int restored, int total, List<String> awaiting, String report); }
+    public interface RestoreDone { void done(int restored, int total, List<String> addresses, String report); }
 
     /** The recipe addresses in a PandaPools backup JSON (empty if unreadable). */
     static List<String> recipeAddresses(String json) {
@@ -110,13 +164,14 @@ public final class DexiconPools {
     /**
      * Opens a PandaPools backup with PandaPools' own verify (password, authenticated bundle, valid recipes; CombinedBackupUi)
      * and restores it with PandaPools' own reserve-check restore (Recovery.restore: re-track, import proofs, record the
-     * recipe; signing stays paused, nothing is signed or withdrawn). Every pool in it is marked AWAITING first.
+     * recipe; signing stays paused, nothing is signed or withdrawn). Custody is read first, so a pool PandaPools still keeps
+     * is left to it from the moment its recipe lands here.
      */
     public static void restoreBackup(MainActivity act, android.net.Uri uri, java.util.function.Consumer<String> status, RestoreDone done) {
         CombinedBackupUi.open(act, uri, json -> {
             List<String> addresses = recipeAddresses(json);
             if (addresses.isEmpty()) { done.done(0, 0, addresses, "That file holds no pool recipe."); return; }
-            if (!markAwaiting(act, addresses)) { done.done(0, addresses.size(), addresses, "Could not save the hand-over state. Nothing restored."); return; }
+            readCustody(act);
             NodeApi n = act.node();
             if (n == null) { done.done(0, addresses.size(), addresses, "Connect to your node first. Nothing restored."); return; }
             final StringBuilder log = new StringBuilder();
@@ -139,13 +194,15 @@ public final class DexiconPools {
         if (now - lastPassMs < PASS_GAP_MS) return false;                // overlap guard
         if (OwnPoolStore.all(ctx).isEmpty()) return false;              // LP nodes only
         lastPassMs = now;
+        readCustody(ctx);                                               // a take-back stops Dexicon's keeper in this pass
         final NodeApi n = new NodeApi(dex);
         StrandingWatch.createChannel(ctx);
         try {
             new PoolRefresher(n).refreshAgingFromScan(ctx,
                     (ownFunded, allRecipes, tip) -> StrandingWatch.evaluate(ctx, ownFunded, allRecipes, tip),
-                    r -> new ReAnnouncer(n).refreshFadedFromScan(p ->
-                            new CollectSweeper(ctx, n).run((cleared, pending, stranded) -> {})));
+                    r -> new ReAnnouncer(n).refreshFadedFromScan(p -> {
+                        if (sweepAllowed(ctx)) new CollectSweeper(ctx, n).run((cleared, pending, stranded) -> {});
+                    }));
         } catch (Throwable ignored) { }
         return true;
     }
@@ -239,10 +296,10 @@ public final class DexiconPools {
         OwnerKeyRecovery.checkConsolidation(act.node()::cmd, () -> OwnPoolStore.all(act), cb);
     }
 
-    /** Restored pools standalone PandaPools still keeps (full lower-case covenant addresses). */
-    public static List<String> awaitingNow(Context c) {
+    /** Pools Dexicon holds a recipe for that it must leave alone right now (full lower-case covenant addresses). */
+    public static List<String> keptElsewhereNow(Context c) {
         List<String> out = new ArrayList<>();
-        for (String a : awaiting(c)) if (keptElsewhere(c, a)) out.add(a);
+        for (String a : heldAddresses(c)) if (keptElsewhere(c, a)) out.add(a);
         java.util.Collections.sort(out);
         return out;
     }

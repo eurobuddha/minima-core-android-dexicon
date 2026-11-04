@@ -14,10 +14,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  *     is shut (one trading app per phone — {@link com.eurobuddha.dexicon.TradingGate#blocked}). Keeping existing pools
  *     alive, recovery, withdrawals and collections never pass through here, so they always continue.
  *  2. {@link #keptByDexicon} / {@link #keepable}: in PandaPools these name the pools Dexicon now keeps, which PandaPools'
- *     keeper must leave alone. Read from Dexicon's side the rule is the same — "another app keeps this pool": a pool
- *     restored from a PandaPools backup stays AWAITING HAND-OVER ({@link DexiconPools#awaiting}) while standalone
- *     PandaPools is still installed and has not handed it over, and Dexicon's keeper (keep-fresh, re-announce, stranding
- *     alarm) leaves it alone. Two keepers must never rebuild the same pool's reserves.
+ *     keeper must leave alone. Read from Dexicon's side the rule is the same — "another app keeps this pool": standalone
+ *     PandaPools' custody signal lists it as kept_here, or PandaPools is installed and that signal cannot be read
+ *     ({@link DexiconPools#keptElsewhere}); Dexicon's keeper (keep-fresh, re-announce, stranding alarm, owner sweeps) then
+ *     leaves it alone. Two keepers must never rebuild the same pool's reserves.
  */
 final class Handover {
     private Handover() {}

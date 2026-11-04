@@ -94,6 +94,8 @@ public class DexTxn {
                 cb.onFailed(why != null ? why : "Insufficient funds for trade");
                 return;
             }
+            List<String> held = new ArrayList<>(); for (JSONObject c : coins) held.add(c.optString("coinid"));
+            com.eurobuddha.pandapools.DexiconPools.holdCoins(held);   // Dexicon glue: ② pool coin selection skips them too
             progress(cb, "Wallet coins selected · checking pool access");
             ensureTrackedPools(prep.route == null ? new ArrayList<>() : prep.route.allocs, 0,
                     () -> buildComposite(commands, plan, prep, takerBuys, coins, payoutAddress, cb), message -> {
@@ -123,6 +125,7 @@ public class DexTxn {
                 Object st = c == null ? null : c.opt("state");
                 boolean ok = c != null && token.equalsIgnoreCase(c.optString("tokenid")) && id.equalsIgnoreCase(c.optString("coinid"))
                         && !c.optBoolean("spent", false)
+                        && !com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context()).contains(c.optString("address").toLowerCase(java.util.Locale.ROOT))   // Dexicon glue: never a pool owner-key coin
                         && !(st instanceof org.json.JSONArray && ((org.json.JSONArray) st).length() > 0) && !(st instanceof JSONObject && ((JSONObject) st).length() > 0);
                 BigDecimal v = ok ? coinValue(c) : null;
                 if (v != null && v.signum() > 0) { got.add(c); presetCoins(token, need, ids, i + 1, got, sum.add(v), cb); }
@@ -423,7 +426,10 @@ public class DexTxn {
     public void findCoins(String tokenid, BigDecimal need, java.util.Set<String> excludeAddrsLower,
                           int maxInputs, CoinsCb cb) {
         lastFundError = null;
-        FundingCoins.select(node::cmd, tokenid, need, excludeAddrsLower, maxInputs, new FundingCoins.Done() {
+        // Dexicon glue (0.1.74): never a coin at a ② pool's owner payout address — it signs with the pool's one-time owner key.
+        java.util.Set<String> exclude = new java.util.HashSet<>(com.eurobuddha.pandapools.DexiconPools.ownerAddresses(node.context()));
+        if (excludeAddrsLower != null) exclude.addAll(excludeAddrsLower);
+        FundingCoins.select(node::cmd, tokenid, need, exclude, maxInputs, new FundingCoins.Done() {
             public void ok(List<JSONObject> coins, BigDecimal sum) { cb.found(coins); }
             public void fail(String message) { lastFundError = message; cb.found(null); }
         });
