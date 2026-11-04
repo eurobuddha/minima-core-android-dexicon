@@ -286,6 +286,16 @@ public final class DexiconPools {
 
     private static final String OWNER_COINS = "the node would choose the coins itself, and your wallet holds coins of this token at the pool owner address\n";
 
+    /** Why a node-picked spend was refused because of a pool Dexicon does not (or cannot confirm it does) keep. A stale
+     *  custody read only asks for a retry (the retry re-reads it); the other two point to PandaPools. Full addresses. */
+    static String keptElsewhereRefusal(boolean unsure, Custody k, String oadr, String poolAddress) {
+        String head = REFUSED + OWNER_COINS + low(oadr) + "\nof the pool\n" + low(poolAddress) + "\n";
+        if (unsure) return head + "whose keeper Dexicon could not confirm just now, so Dexicon did not sign with its owner key. Try again in a moment.";
+        return head + (k == null || k.keptHere == null ? "which PandaPools may still keep (it is installed and could not say which pools it keeps)"
+                                                       : "which standalone PandaPools still keeps")
+                + ", so Dexicon never signs with its owner key. Collect them in PandaPools (or hand the pool over), then try again.";
+    }
+
     /** Coins of the token sit at the owner addresses {@code found}: refuse only if a pool there is kept elsewhere (or its
      *  custody is unknown or stale) or its owner key is not safe to sign with. Nothing is queued here: a PendingCollect
      *  entry created without evidence parses as legacy forever and would block that address's real collections. */
@@ -301,14 +311,7 @@ public final class DexiconPools {
             Custody k = custody;
             boolean unsure = pandaPoolsInstalled(ctx) && stale(ctx, k, CUSTODY_SIGN_MAX_AGE_MS);   // a failed read leaves an old cache
             for (Pool p : pools.get())
-                if (unsure || keptBy(ctx, k, p.address)) {
-                    String who = unsure ? "whose keeper Dexicon could not confirm just now (try again in a moment)"
-                            : k == null || k.keptHere == null ? "which PandaPools may still keep (it is installed and could not say which pools it keeps)"
-                            : "which standalone PandaPools still keeps";
-                    cb.accept(REFUSED + OWNER_COINS + low(p.oadr) + "\nof the pool\n" + low(p.address) + "\n" + who
-                            + ", so Dexicon never signs with its owner key. Collect them in PandaPools (or hand the pool over), then try again.");
-                    return;
-                }
+                if (unsure || keptBy(ctx, k, p.address)) { cb.accept(keptElsewhereRefusal(unsure, k, p.oadr, p.address)); return; }
             // PandaPools' check passes a failed `keys` read's message straight through; a null/empty one would read as
             // "safe" — so every error carries text here (fail closed).
             final NodeApi keysNode = new NodeApi(dex);

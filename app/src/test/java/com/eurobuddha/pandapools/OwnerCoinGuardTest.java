@@ -24,8 +24,8 @@ import java.util.List;
 
 /** 0.1.83 (owner decision): coins at a pool owner address block a node-picked spend only when signing could harm that
  *  pool — its owner key is not safe to sign with, or the pool is kept elsewhere. Dust anyone sends to the public $OADR no
- *  longer blocks comms posts (e.g. a taker-protecting tombstone); every owner address found holding coins is queued for
- *  the keep-alive's collection. */
+ *  longer blocks comms posts (e.g. a taker-protecting tombstone). Nothing is queued by the guard (0.1.85): an
+ *  evidence-less PendingCollect entry would block that address's real collections. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
 public class OwnerCoinGuardTest {
@@ -93,6 +93,7 @@ public class OwnerCoinGuardTest {
         assertTrue(why, why.startsWith(DexiconPools.REFUSED));
         assertTrue("names the owner address in full", why.contains(OWNER.toLowerCase()));
         assertTrue(why, why.contains("not safe to sign"));
+        assertFalse("never promises a collection the guard does not queue", why.contains("queued"));
         assertTrue(sends.isEmpty());
         assertNull(PendingCollect.get(app, OWNER.toLowerCase()));
     }
@@ -127,5 +128,16 @@ public class OwnerCoinGuardTest {
         assertTrue(why, why.contains("could not say which pools it keeps"));
         assertTrue(sends.isEmpty());
         CustodyFake.install(app, CustodyFake.Install.NONE, 0);
+    }
+
+    /** A stale custody read only asks for a retry — it never sends the user into PandaPools for a pool Dexicon may keep. */
+    @Test public void aStaleCustodyRefusalOnlyAsksForARetry() {
+        String why = DexiconPools.keptElsewhereRefusal(true, null, OWNER, POOL);
+        assertTrue(why, why.startsWith(DexiconPools.REFUSED));
+        assertTrue("full addresses", why.contains(OWNER.toLowerCase()) && why.contains(POOL.toLowerCase()));
+        assertTrue(why, why.contains("could not confirm") && why.contains("Try again in a moment."));
+        assertFalse("no instruction to collect in PandaPools", why.contains("Collect them in PandaPools"));
+        String kept = DexiconPools.keptElsewhereRefusal(false, null, OWNER, POOL);
+        assertTrue(kept, kept.contains("could not say which pools it keeps") && kept.contains("Collect them in PandaPools"));
     }
 }
