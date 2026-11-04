@@ -130,9 +130,23 @@ public class PoolsRoomSmokeTest {
         try { java.lang.reflect.Field pf = MainActivity.class.getDeclaredField("paired"); pf.setAccessible(true); pf.set(a, true); }
         catch (Exception e) { throw new AssertionError(e); }
         a.showTab(MainActivity.TAB_PWALLET);
+        try {   // no node here: draw PandaPools' wallet box the way a balance reply does, twice (it rebuilds on every render)
+            java.lang.reflect.Field wf = MainActivity.class.getDeclaredField("pWallet"); wf.setAccessible(true);
+            Object w = wf.get(a);
+            java.lang.reflect.Method rc = w.getClass().getDeclaredMethod("renderCards"); rc.setAccessible(true);
+            rc.invoke(w); rc.invoke(w);
+        } catch (Exception e) { throw new AssertionError(e); }
         View root = a.getWindow().getDecorView();
         TextView link = shownTab(root, "Consolidate MxUSD coins");
         assertNotNull("on ② Wallet", link);
+        TextView minima = shownTab(root, "Consolidate MINIMA coins");
+        assertNotNull(minima);
+        android.view.ViewGroup box = (android.view.ViewGroup) minima.getParent();
+        assertSame("inside the AVAILABLE TO POOL box", box, link.getParent());
+        assertEquals("directly under the MINIMA one", box.indexOfChild(minima) + 1, box.indexOfChild(link));
+        assertEquals("same size", minima.getTextSize(), link.getTextSize(), 0.01f);
+        assertEquals("same font", minima.getTypeface(), link.getTypeface());
+        assertEquals("same colour", minima.getCurrentTextColor(), link.getCurrentTextColor());
         link.performClick();
         android.app.Dialog d = org.robolectric.shadows.ShadowDialog.getLatestDialog();
         assertNotNull(d);

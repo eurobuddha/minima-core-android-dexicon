@@ -39,6 +39,7 @@ public final class AssetsTab extends LinearLayout {
         android.view.ViewGroup scroll = (android.view.ViewGroup) wallet.getRoot();
         walletBox = scroll.getChildAt(0);
         scroll.removeView(walletBox);
+        act.consolidateMxUsdIn((android.view.ViewGroup) walletBox.findViewById(com.eurobuddha.pandapools.R.id.balancesContainer));   // "Consolidate MxUSD coins" under its MINIMA one
         setOrientation(VERTICAL);
         int pad = Design.dp(act, 12);
         setPadding(pad, pad, pad, pad);
@@ -74,7 +75,6 @@ public final class AssetsTab extends LinearLayout {
         TextView all = Ui.label(act, "WALLET · ALL TOKENS");
         all.setPadding(Design.dp(act, 4), Design.dp(act, 12), 0, Design.dp(act, 6));
         body.addView(all);
-        body.addView(act.consolidateMxUsdLink());   // next to the wallet's own "Consolidate MINIMA coins" (owner, 4 Nov)
         if (walletBox.getParent() != null) ((android.view.ViewGroup) walletBox.getParent()).removeView(walletBox);
         body.addView(walletBox);
 
