@@ -58,7 +58,10 @@ public final class ActivityTab extends LinearLayout {
         }
         LinearLayout.LayoutParams xl = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         xl.topMargin = Design.dp(act, 4); xl.bottomMargin = Design.dp(act, 4);
-        addView(pills, xl);
+        android.widget.HorizontalScrollView pillScroll = new android.widget.HorizontalScrollView(act);   // the cover screen never clips Export
+        pillScroll.setHorizontalScrollBarEnabled(false);
+        pillScroll.addView(pills);
+        addView(pillScroll, xl);
         marketBox = new LinearLayout(act); marketBox.setOrientation(VERTICAL); marketBox.setVisibility(GONE);
         addView(marketBox);
         empty = Ui.para(act, "No trades yet. Every BUY/SELL you make, every fill your node co-signs and every AtomiX swap shows its live progress here.");

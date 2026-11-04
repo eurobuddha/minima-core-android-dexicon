@@ -107,7 +107,7 @@ public final class Ui {
         Context c = parent.getContext();
         LinearLayout card = card(parent);
         TextView head = label(c, title);
-        head.setMinHeight(Design.dp(c, 32)); head.setGravity(Gravity.CENTER_VERTICAL);
+        head.setMinHeight(Design.dp(c, 40)); head.setGravity(Gravity.CENTER_VERTICAL);   // slim, but a real tap target
         TextView p = para(c, body);
         card.addView(head); card.addView(p);
         String foldedKey = "why_closed_" + title;   // stored true = FOLDED (the key name is kept so upgrades keep their folds)
