@@ -83,9 +83,12 @@ public final class HistoryTab extends LinearLayout {
         for (JSONObject f : fills) items.add(Ledger.fill(f, actByTx.get(f.optString("txpowid")), tz));
         DoorHost doors = DoorHost.get(act);
         if (hooks == null) hooks = new DoorsTab.Swaps(act, doors);
+        java.util.Set<String> hidden = doors.dismissed();
         for (SwapDb.Swap s : doors.swaps()) {
             String st = s.status == null ? "" : s.status;
             if (SwapDb.ST_COMPLETE.equals(st) || SwapDb.ST_REFUNDED.equals(st) || SwapDb.ST_ERROR.equals(st)) items.add(Ledger.asHistory(hooks.item(s), s, tz));
+            // AtomiX My swaps keeps hidden swaps: one hidden while still open stays reachable here, live (Check now, Refund now)
+            else if (hidden.contains(s.hash)) items.add(hooks.item(s));
         }
         LedgerView.sync(act, rows, Ledger.arrange(items, false, System.currentTimeMillis(), tz), "hist", hooks);
     }

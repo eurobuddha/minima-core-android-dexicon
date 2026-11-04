@@ -202,4 +202,29 @@ public class DoorsTabSmokeTest {
             assertTrue("a finished one hides at once", host.dismissed().contains(s.hash));
         } finally { host.prefs().edit().remove("dismissed_swaps").apply(); }
     }
+
+    /** 0.2.10: a swap hidden while still open stays reachable in History, live (AtomiX My swaps keeps it). */
+    @Test public void aHiddenOpenSwapStaysInHistory() throws Exception {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        MainActivity a = launch();
+        com.eurobuddha.dexicon.doors.DoorHost host = com.eurobuddha.dexicon.doors.DoorHost.get(app);
+        java.lang.reflect.Method sdb = com.eurobuddha.dexicon.doors.DoorHost.class.getDeclaredMethod("swapDb"); sdb.setAccessible(true);
+        com.eurobuddha.atomix.swap.SwapDb db = (com.eurobuddha.atomix.swap.SwapDb) sdb.invoke(host);
+        com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap();
+        s.hash = "0x" + "7e".repeat(32); s.role = "INITIATOR"; s.direction = "ERC20_TO_MINIMA"; s.status = "STARTED";
+        s.sellToken = "USDT"; s.sellAmount = "1"; s.buyToken = "MxUSD"; s.buyAmount = "1"; s.created = System.currentTimeMillis(); s.updated = s.created;
+        try {
+            db.upsertSwap(s);
+            String stored = null;
+            for (com.eurobuddha.atomix.swap.SwapDb.Swap x : host.swaps()) if (x.created == s.created && "1".equals(x.sellAmount)) stored = x.hash;
+            host.dismiss(stored);   // Hide always passes the row's own hash
+            View root = a.getWindow().getDecorView();
+            tab(root, "Activity").performClick();
+            assertNull("gone from the live list", PoolsRoomSmokeTest.containing(root, "1 USDT → 1 MxUSD") != null && PoolsRoomSmokeTest.containing(root, "1 USDT → 1 MxUSD").isShown() ? "x" : null);
+            a.showTab(MainActivity.TAB_HISTORY);
+            assertNotNull("still in History", PoolsRoomSmokeTest.containing(root, "1 USDT → 1 MxUSD"));
+        } finally { host.prefs().edit().remove("dismissed_swaps").apply(); s.status = "COMPLETE"; db.upsertSwap(s); }
+    }
 }

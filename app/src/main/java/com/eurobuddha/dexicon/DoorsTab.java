@@ -774,7 +774,7 @@ public final class DoorsTab extends LinearLayout {
             if (s == null) return;
             if (SwapVisibility.isTerminal(s)) { host.dismiss(s.hash); act.repaint(); return; }
             act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Hide this swap?")
-                    .setMessage("This only removes the card. If any funds were locked on-chain they still auto-refund at the timelock — hiding doesn't touch them. It stays in History.")
+                    .setMessage("This only removes the card from Swap and Activity. If any funds were locked on-chain they still auto-refund at the timelock — hiding doesn't touch them. It stays in History, with Check now and Refund now.")
                     .setPositiveButton("Hide", (d, w) -> { host.dismiss(s.hash); act.repaint(); })
                     .setNegativeButton("Cancel", null).show());
         }
