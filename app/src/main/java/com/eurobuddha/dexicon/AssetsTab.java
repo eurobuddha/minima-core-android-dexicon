@@ -61,6 +61,8 @@ public final class AssetsTab extends LinearLayout {
 
     /** Assets came into view: PandaPools' wallet reads the address and balances (as its tab does). */
     void shown() { wallet.onShown(); }
+    /** A new block while ASSETS is on screen: the wallet re-reads (it is not in the every-block fan-out — ② Wallet is). */
+    void newBlock() { wallet.onNewBlock(); }
 
     public void render() {
         body.removeAllViews();

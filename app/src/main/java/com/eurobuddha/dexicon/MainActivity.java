@@ -306,7 +306,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 Tokens.noteBlock(chainBlock); Tokens.setMxUsd(RelayStore.mxusdOverride(MainActivity.this));   // the override only on a proven test chain
                 restingRepo.setChainBlock(chainBlock); restingTxn.setChainBlock(chainBlock);
                 poolsBlock(chainBlock);   // ② Pools: confirmations + one shared pool scan per new block (PandaPools pollBlock)
-                if (chainBlock != was) { refreshResting(); warmMakers(); warmWallet(); }   // book + pools follow the chain, once per new block
+                if (chainBlock != was) { refreshResting(); warmMakers(); warmWallet(); if (tab == TAB_ASSETS) assetsTab.newBlock(); }   // book + pools follow the chain, once per new block
                 repaintHeader();
             }
             public void onError(String m) {}
@@ -1086,7 +1086,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         content = new LinearLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); assetsTab = new AssetsTab(this, track(new com.eurobuddha.pandapools.WalletView(this))); pSwap = track(new com.eurobuddha.pandapools.SwapView(this)); pPools = track(new com.eurobuddha.pandapools.PoolsView(this)); pMyLp = track(new com.eurobuddha.pandapools.MyLpView(this)); pWallet = track(new com.eurobuddha.pandapools.WalletView(this)); pAct = track(new com.eurobuddha.pandapools.ActivityView(this)); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); assetsTab = new AssetsTab(this, new com.eurobuddha.pandapools.WalletView(this)) /* not tracked: refreshed only while ASSETS shows; ② Wallet is the tracked one */; pSwap = track(new com.eurobuddha.pandapools.SwapView(this)); pPools = track(new com.eurobuddha.pandapools.PoolsView(this)); pMyLp = track(new com.eurobuddha.pandapools.MyLpView(this)); pWallet = track(new com.eurobuddha.pandapools.WalletView(this)); pAct = track(new com.eurobuddha.pandapools.ActivityView(this)); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
         View[] tv = tabViews();
         panes = new android.view.ViewGroup[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
