@@ -329,12 +329,12 @@ public class LedgerTest {
         assertTrue(it.sub, it.sub.contains("paid · USDT at your Ethereum address"));
     }
 
-    /** 0.2.2: AtomiX shows "Check now" until a swap is COMPLETE or REFUNDED (an ERROR row can still be inspected). */
-    @Test public void checkNowUntilTheSwapIsSettled() {
+    /** 0.2.11: as in AtomiX (a tap on any history card inspects it), every swap offers "Check now", settled ones too. */
+    @Test public void checkNowOnEverySwap() {
         com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap();
         s.hash = "0x" + "ab".repeat(32); s.role = "INITIATOR"; s.direction = "ERC20_TO_MINIMA";
         s.sellToken = "USDT"; s.sellAmount = "5"; s.buyToken = "MxUSD"; s.buyAmount = "5"; s.created = 1_700_000_000_000L; s.updated = s.created;
-        String[][] cases = {{"STARTED", "true"}, {"LOCKED", "true"}, {"CLAIMING", "true"}, {"ERROR", "true"}, {"COMPLETE", "false"}, {"REFUNDED", "false"}};
+        String[][] cases = {{"STARTED", "true"}, {"LOCKED", "true"}, {"CLAIMING", "true"}, {"ERROR", "true"}, {"COMPLETE", "true"}, {"REFUNDED", "true"}};
         for (String[] c : cases) {
             s.status = c[0];
             Ledger.Item it = Ledger.swap(s, new java.util.ArrayList<>(), null, s.created / 1000 + 60, 100, null, null, java.util.TimeZone.getTimeZone("UTC"));

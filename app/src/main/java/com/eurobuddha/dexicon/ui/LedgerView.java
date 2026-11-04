@@ -29,7 +29,7 @@ public final class LedgerView extends LinearLayout {
         Ledger.Item tick(String id);
         void refund(String id);
         void retry(String id);
-        /** AtomiX's "Check now" (only items marked checkable): advance it and show the live on-chain report. */
+        /** AtomiX's "Check now" (items marked checkable — every AtomiX swap): advance it and show the live on-chain report. */
         default void check(String id) {}
         /** AtomiX's ✕ (only items marked hideable): hide the card from the live lists. */
         default void hide(String id) {}

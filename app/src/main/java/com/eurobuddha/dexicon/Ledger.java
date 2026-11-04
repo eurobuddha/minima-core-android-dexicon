@@ -270,7 +270,7 @@ public final class Ledger {
         it.chipTone = running || "FORWARDING".equals(pill) ? Tone.LIVE : complete && "DONE".equals(pill) ? Tone.OK : complete ? Tone.WARN : Tone.BAD;
         it.icon = it.live ? "●" : complete ? "✓" : refunded ? "↺" : "!";
         it.tone = it.live ? Tone.LIVE : complete ? Tone.OK : Tone.BAD;
-        it.checkable = !complete && !refunded;
+        it.checkable = true;   // AtomiX: any swap card (history included) runs the live inspection
 
         long claimAt = 0, refundAt = 0;
         String makerId = null;
