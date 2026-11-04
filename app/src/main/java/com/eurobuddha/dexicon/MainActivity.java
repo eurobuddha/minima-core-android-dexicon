@@ -1256,6 +1256,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             PP_MYLP = com.eurobuddha.pandapools.MainActivity.TAB_MYLP, PP_ACTIVITY = com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY;
 
     @Override public int currentTab() {
+        // its only reader is PandaPools' ActivityView ("am I on screen?"): My pools on EITHER side of a two-page Fold
+        // view wins, or a pool swap on the left would stop the activity under My pools on the right from refreshing
+        if (tab == TAB_PMINE || tab2 == TAB_PMINE) return PP_ACTIVITY;   // PandaPools' pool activity sits under My pools
         for (int t : new int[]{tab, tab2}) {
             if (t == TAB_PSWAP) return PP_SWAP;
             if (t == TAB_POOLS) return PP_POOLS;

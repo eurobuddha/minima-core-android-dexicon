@@ -74,4 +74,15 @@ public class TwoPagesTest {
         assertTrue("left: ② POOLS", poolsPage.isShown());
         assertTrue("right: ACTIVITY", page(root, "Activity").isShown());
     }
+
+    /** 0.2.17: My pools on either side of a two-page view counts as PandaPools' activity being on screen. */
+    @Test public void myPoolsOnTheRightStillCountsAsShown() {
+        android.app.Application app = RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        MainActivity a = DoorsTabSmokeTest.launch();
+        a.showPages(MainActivity.TAB_PSWAP, MainActivity.TAB_PMINE);
+        org.junit.Assume.assumeTrue("needs the wide (two-page) Fold layout", a.currentTab() != -1);
+        assertEquals(com.eurobuddha.pandapools.MainActivity.TAB_ACTIVITY, a.currentTab());
+    }
 }
