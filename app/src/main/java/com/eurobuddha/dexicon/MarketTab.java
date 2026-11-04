@@ -104,7 +104,7 @@ public final class MarketTab extends LinearLayout {
             host.scanBooks(act::repaint);
         }
         body.removeAllViews();
-        TextView hint = Ui.text(act, "The live USDT ⇄ " + ccy() + " order book. Take it on the Swap page, or publish your own offer.", 12.5f, Design.DIM(), Design.sans());
+        TextView hint = Ui.text(act, "The live USDT ⇄ " + ccy() + " order book. Tap a level to take it, use the Swap page, or publish your own offer.", 12.5f, Design.DIM(), Design.sans());
         body.addView(hint);
         if (PriceOracle.mid() > 0) body.addView(Ui.text(act, DoorHost.mx(PriceOracle.describe()), 11.5f, Design.DIM(), Design.mono()), Ui.wide(act, 2, 2));
         if (host.gated()) body.addView(Ui.text(act, "One trading app per phone: while AtomiX or PandaPools is present, nothing is published or armed here.", 11.5f, Design.RED(), Design.sansBold()), Ui.wide(act, 6, 0));
@@ -203,8 +203,83 @@ public final class MarketTab extends LinearLayout {
         tag.setGravity(isBid ? Gravity.START : Gravity.END);
         if (!mine && maker.signerPk != null && !maker.signerPk.isEmpty()) tag.setOnClickListener(v -> act.copy("Maker key", maker.signerPk));
         h.addView(tag);
+        // AtomiX: tap a level to take it — a bid is where you SELL, an ask where you BUY (never your own order)
+        if (!mine && cap > 0) {
+            h.setOnClickListener(v -> takeDialog(maker, lvl, isBid, cap));
+            h.setContentDescription((isBid ? "Sell " : "Buy ") + ccy() + " at " + fmtPrice(lvl.price) + " USDT");
+            Design.pressable(h);
+        }
         return h;
     }
+
+    /** AtomiX takeOrderDialog: the level's side, price, cap and the maker's minimum, the full maker key, an amount in the
+     *  coin with "You receive / pay ≈", then Start swap. Taken through the same engine path and checks as the Swap page,
+     *  against that one maker, never worse than the tapped price (a better level of the same maker fills first). */
+    private void takeDialog(Order maker, Order.Level lvl, boolean sell, double cap) {
+        final TradingContext market = host.market();
+        final String c = ccy(), sym = DoorPlan.SYM;
+        final double price = lvl.price;
+        if (!Double.isFinite(price) || price <= 0) return;
+        Order.Pair pair = maker.pairs.get(sym);
+        final double min = pair != null ? pair.min : 0;
+        LinearLayout box = new LinearLayout(act); box.setOrientation(LinearLayout.VERTICAL);
+        int pd = Design.dp(act, 20); box.setPadding(pd, Design.dp(act, 12), pd, Design.dp(act, 4));
+        TextView info = Ui.text(act, (sell ? "Sell " + c + " → " + sym : "Buy " + c + " ← " + sym) + "\nPrice: " + fmtPrice(price) + " " + sym + " per " + c
+                + "\nThis level: up to " + abbrev(cap) + " " + c + (min > 0 ? "\nMin: " + fmtPrice(min) + " " + c : ""), 13f, Design.DIM(), Design.sans());
+        info.setPadding(0, 0, 0, Design.dp(act, 10));
+        box.addView(info);
+        final EditText amt = new EditText(act);
+        amt.setHint(c + " to " + (sell ? "sell" : "buy"));
+        amt.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        amt.setTextColor(Design.TEXT()); amt.setHintTextColor(Design.DIM2()); amt.setTextSize(16f); amt.setTypeface(Design.mono());
+        box.addView(amt);
+        final TextView out = Ui.text(act, "", 14f, DoorsTab.acc(market), Design.sans());
+        out.setPadding(0, Design.dp(act, 10), 0, 0);
+        box.addView(out);
+        amt.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence x, int a, int b, int d) {}
+            public void onTextChanged(CharSequence x, int a, int b, int d) {}
+            public void afterTextChanged(android.text.Editable e) {
+                String u = DoorPlan.computeUsdt(amt.getText().toString(), price);
+                out.setTextColor(DoorsTab.acc(market));
+                out.setText(u == null ? "" : (sell ? "You receive ≈ " : "You pay ≈ ") + u + " " + sym);
+            }
+        });
+        if (maker.signerPk != null && !maker.signerPk.isEmpty()) {   // RULE 1: who you lock with, in full; tap copies
+            TextView cp = Ui.text(act, "Counterparty\n" + maker.signerPk, 11f, Design.DIM(), Design.mono());
+            cp.setPadding(0, Design.dp(act, 8), 0, 0);
+            cp.setOnClickListener(v -> act.copy("Counterparty key", maker.signerPk));
+            box.addView(cp);
+        }
+        final AlertDialog d = act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle(sell ? "Sell " + c : "Buy " + c).setView(box)
+                .setPositiveButton("Start swap", null).setNegativeButton("Cancel", null).show());
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String raw = amt.getText().toString().trim();
+            if (!DoorPlan.positiveSwapAmount(raw)) { bad(out, "Enter a valid " + c + " amount"); return; }
+            double m = DoorPlan.parseD(raw, 0);
+            if (m > cap + 1e-9) { bad(out, "This level takes up to " + abbrev(cap) + " " + c + " — more will be auto-declined"); return; }
+            if (min > 0 && m < min) { bad(out, "Below the maker's minimum (" + fmtPrice(min) + " " + c + ")"); return; }
+            if (market != host.market()) { bad(out, "The market was switched — tap the level again."); return; }
+            Map<String, Order> one = new java.util.HashMap<>();
+            for (Map.Entry<String, Order> e : host.book(market).entrySet()) if (e.getValue() == maker) one.put(e.getKey(), maker);
+            if (one.isEmpty()) { bad(out, "That offer just left the book — refresh and try again."); return; }
+            DoorPlan.Best q = DoorPlan.bestMakers(one, host.myPublicId(market));
+            double slip = sell ? 0 : Math.max(0, price / q.bestAsk - 1);   // a buy fills at or below the tapped price
+            DoorPlan.Plan plan = DoorPlan.buildSweepPlan(one, sell, raw, slip, host.myPublicId(market));
+            if (plan.legs.isEmpty()) { bad(out, "below-min".equals(plan.stopReason) ? "That's below the maker's minimum trade size." : "That level can't fill this right now."); return; }
+            String err = DoorsTab.fundsCheck(host, plan, "", sell ? 0 : slip);
+            if (!err.isEmpty()) { bad(out, err); return; }
+            err = host.take(market, plan, "", new DoorHost.Progress() {
+                @Override public void stage(String st) { act.setStage(st); }
+                @Override public void done(String msg, boolean error) { act.setStage(""); act.toast(msg); if (error) Notifier.alert(act, "AtomiX swap stopped", msg); act.repaint(); }
+            });
+            if (err != null) { bad(out, err); return; }
+            d.dismiss();
+            act.toast("Swap started — follow it on Swap or Activity");
+            act.repaint();
+        });
+    }
+    private static void bad(TextView out, String s) { out.setTextColor(Design.RED()); out.setText(s); }
 
     private LinearLayout quote(String a, String b, int priceColor, boolean best, boolean left) {
         LinearLayout h = new LinearLayout(act);

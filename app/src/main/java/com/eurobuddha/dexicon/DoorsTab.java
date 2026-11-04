@@ -465,24 +465,28 @@ public final class DoorsTab extends LinearLayout {
     private void say(String s, boolean bad) { planLine.setTextColor(bad ? Design.RED() : Design.DIM()); planLine.setText(s); review.setAlpha(0.5f); }
 
     /** Fund + address checks for the plan; every unreadable balance fails CLOSED. "" when OK. */
-    private String validate(DoorPlan.Plan p) {
-        String c = coin(), dest = to.getText().toString().trim();
+    private String validate(DoorPlan.Plan p) { return fundsCheck(host, p, to.getText().toString().trim(), slippage()); }
+
+    /** The same checks for any AtomiX take on the active market (Swap's form, Market's tap-to-take). */
+    static String fundsCheck(DoorHost host, DoorPlan.Plan p, String dest, double slippage) {
+        TradingContext m = host.market();
+        String c = DoorPlan.coin(m), h = host.coinBalance(m), held = m == TradingContext.MINIMA ? minima12(h) : nz(h);
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
         if (host.busy()) return "An AtomiX swap is still starting — wait for it to finish.";
         if (!dest.isEmpty() && (p.sell ? !DoorForwards.isEthAddr(dest) : !DoorForwards.isMxAddr(dest)))
             return p.sell ? "The address to send the USDT to must be an Ethereum address (0x + 40 hex)." : "The address to send the " + c + " to must be a Minima address (Mx… or 0x + 64 hex).";
         if (host.ethWei == null) return "Cannot read the ETH balance of your Ethereum wallet right now — try again shortly.";
         if (p.sell) {
-            String have = host.coinBalance(route());
+            String have = host.coinBalance(m);
             if (have == null) return "Cannot read your " + c + " balance right now.";
-            if (p.filledMinima > Double.parseDouble(have) + 1e-9) return "You only have " + coinHeld() + " " + c + " available to sell.";
+            if (p.filledMinima > Double.parseDouble(have) + 1e-9) return "You only have " + held + " " + c + " available to sell.";
             BigInteger g = host.gasReserve(EthHtlc.GAS_WITHDRAW.add(dest.isEmpty() ? BigInteger.ZERO : EthSend.GAS_ERC20));
             if (g == null) return "Cannot read the Ethereum gas price right now.";
             if (g.compareTo(host.ethWei) > 0) return "Not enough ETH in your Ethereum wallet for the withdraw" + (dest.isEmpty() ? "" : " + send") + " gas — send a little ETH there first.";
         } else {
             if (host.usdtRaw == null) return "Cannot read your USDT balance right now.";
             if (EthSend.parseUnits(trim6(p.totalUsdt), 6).compareTo(host.usdtRaw) > 0)
-                return "Need ≈ " + trim6(p.totalUsdt) + " USDT for " + trim6(p.filledMinima) + " " + c + " (within " + pct(slippage() * 100) + "%) — you have " + EthWallet.format(host.usdtRaw, 6, 6) + ".";
+                return "Need ≈ " + trim6(p.totalUsdt) + " USDT for " + trim6(p.filledMinima) + " " + c + " (within " + pct(slippage * 100) + "%) — you have " + EthWallet.format(host.usdtRaw, 6, 6) + ".";
             BigInteger g = host.gasReserve(EthHtlc.GAS_LOCK.multiply(BigInteger.valueOf(p.legs.size())));
             if (g == null) return "Cannot read the Ethereum gas price right now.";
             if (g.compareTo(host.ethWei) > 0) return "Not enough ETH in your Ethereum wallet for " + p.legs.size() + " lock transaction" + (p.legs.size() == 1 ? "" : "s") + " — send a little ETH there first.";

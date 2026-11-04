@@ -81,4 +81,50 @@ public class MarketTabSmokeTest {
             assertFalse("nothing saved into MINIMA", host.loadOrder().hasLiquidity());
         } finally { host.switchMarket(TradingContext.MXUSDT, null); }
     }
+
+    /** 0.2.3 (AtomiX takeOrderDialog): tap a book level to take it — the maker in full, and AtomiX's own guards. */
+    @Test public void tappingALevelOpensAtomixsTakeDialog() throws Exception {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        MainActivity a = DoorsTabSmokeTest.launch();
+        com.eurobuddha.dexicon.doors.DoorHost host = com.eurobuddha.dexicon.doors.DoorHost.get(app);
+        Order o = new Order();
+        o.signerPk = "0x" + "a1".repeat(32); o.commsPublicId = "0x" + "b2".repeat(64); o.minimaAvail = 100; o.usdtAvail = 0; o.ts = System.currentTimeMillis();
+        Order.Pair p = new Order.Pair(true, 1.01, 0, 2); p.asks.add(new Order.Level(1.01, 50)); Order.sanitize(p);
+        o.pairs.put("USDT", p);
+        java.lang.reflect.Field f = com.eurobuddha.dexicon.doors.DoorHost.class.getDeclaredField("books"); f.setAccessible(true);
+        @SuppressWarnings("unchecked") java.util.Map<TradingContext, java.util.Map<String, Order>> books = (java.util.Map<TradingContext, java.util.Map<String, Order>>) f.get(host);
+        java.util.Map<String, Order> before = books.get(host.market());
+        try {
+            books.put(host.market(), java.util.Collections.singletonMap(o.signerPk, o));
+            View root = a.getWindow().getDecorView();
+            DoorsTabSmokeTest.tab(root, "Market").performClick();
+            View level = null;
+            for (View v : all(root)) if (("Buy " + com.eurobuddha.dexicon.doors.DoorPlan.coin(host.market()) + " at 1.01 USDT").equals(String.valueOf(v.getContentDescription()))) level = v;
+            assertNotNull("an ask level is tappable", level);
+            level.performClick();
+            androidx.appcompat.app.AlertDialog d = (androidx.appcompat.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            assertTrue(d.isShowing());
+            View dv = d.getWindow().getDecorView();
+            assertNotNull("the maker's key in full", PoolsRoomSmokeTest.containing(dv, o.signerPk));
+            assertNotNull(PoolsRoomSmokeTest.containing(dv, "This level: up to 50"));
+            assertNotNull(PoolsRoomSmokeTest.containing(dv, "Min: 2"));
+            android.widget.EditText amt = null;
+            for (View v : all(dv)) if (v instanceof android.widget.EditText) amt = (android.widget.EditText) v;
+            amt.setText("1");
+            d.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).performClick();
+            assertNotNull("below the maker's minimum: refused before anything locks", PoolsRoomSmokeTest.containing(dv, "Below the maker's minimum"));
+            amt.setText("60");
+            d.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).performClick();
+            assertNotNull(PoolsRoomSmokeTest.containing(dv, "This level takes up to 50"));
+            assertTrue("still open: nothing started", d.isShowing());
+        } finally { books.put(host.market(), before); }
+    }
+
+    private static java.util.List<View> all(View v) {
+        java.util.List<View> out = new java.util.ArrayList<>(); out.add(v);
+        if (v instanceof android.view.ViewGroup) for (int i = 0; i < ((android.view.ViewGroup) v).getChildCount(); i++) out.addAll(all(((android.view.ViewGroup) v).getChildAt(i)));
+        return out;
+    }
 }
