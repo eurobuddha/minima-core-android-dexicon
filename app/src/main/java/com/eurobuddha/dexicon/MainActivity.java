@@ -1051,8 +1051,19 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         View[] tv = tabViews();
         panes = new ScrollView[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
-            panes[i] = new ScrollView(this);
-            panes[i].addView(tv[i], new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+            ScrollView pane = panes[i] = new ScrollView(this);
+            pane.addView(tv[i], new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+            // A focused input pulls its ScrollView back to it on every relayout (a live swap list repainting below it made
+            // the page jump, owner 4 Nov). The pane itself can hold focus, and an input scrolled off screen hands it over.
+            pane.setFocusableInTouchMode(true);
+            pane.setDescendantFocusability(android.view.ViewGroup.FOCUS_BEFORE_DESCENDANTS);
+            pane.setOnScrollChangeListener((v, x, y, ox, oy) -> {
+                View f = pane.findFocus();
+                if (f instanceof android.widget.EditText && !f.getGlobalVisibleRect(new android.graphics.Rect())) {
+                    ((android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(f.getWindowToken(), 0);
+                    pane.requestFocus();
+                }
+            });
         }
 
         stageTv = new TextView(this);
