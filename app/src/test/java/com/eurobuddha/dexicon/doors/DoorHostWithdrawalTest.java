@@ -36,6 +36,7 @@ import java.util.List;
 public class DoorHostWithdrawalTest {
     private DoorHost host;
     private DoorHost.Tombstones real;
+    private java.util.function.IntSupplier realTip;
     private final List<Order> sent = new ArrayList<>();
     private final List<String> outcome = new ArrayList<>();
     private final LazySodium ls = mock(LazySodium.class);
@@ -46,6 +47,7 @@ public class DoorHostWithdrawalTest {
         com.eurobuddha.dexicon.TradingGate.record(app, new org.json.JSONArray());
         host = DoorHost.get(app);
         real = host.tombstones;
+        realTip = host.tip;
         idle(5);
         host.switchMarket(TradingContext.MXUSDT, null);
         idle(5);
@@ -63,11 +65,11 @@ public class DoorHostWithdrawalTest {
             }
         };
     }
-    @After public void down() { host.tombstones = real; host.switchMarket(TradingContext.MXUSDT, null); idle(5); quiet(); }
+    @After public void down() { host.tip = realTip; host.tombstones = real; host.switchMarket(TradingContext.MXUSDT, null); idle(5); quiet(); }
 
     private void quiet() {
         host.prefs().edit().remove("order_config").remove("market_mxusdt").remove("market_minima")
-                .remove("withdraw_pending_mxusdt").remove("withdraw_pending_minima").remove("withdraw_pending_at_mxusdt").remove("withdraw_pending_at_minima")
+                .remove("withdraw_pending_mxusdt").remove("withdraw_pending_minima").remove("withdraw_pending_at_mxusdt").remove("withdraw_pending_at_minima").remove("withdraw_pending_tip_mxusdt").remove("withdraw_pending_tip_minima")
                 .putBoolean("auto_publish", false).putBoolean("otc_enable", false).putBoolean("otc_auto", false).commit();
     }
     private static void idle(int s) { Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(s)); }
@@ -110,6 +112,19 @@ public class DoorHostWithdrawalTest {
         assertFalse(host.prefs().contains("withdraw_pending_minima"));
         pending(TradingContext.MINIMA, DoorHost.WITHDRAW_MARKER_MS - 60_000);
         assertTrue(host.withdrawalPending(TradingContext.MINIMA));
+    }
+
+    /** 0.1.81: with a known tip the marker ages out by chain time — 72 scanned blocks + 12 — whatever the wall clock says. */
+    @Test public void theMarkerAgesOutByChainTimeWhenTheTipIsKnown() {
+        host.tip = () -> 1000;
+        host.prefs().edit().putBoolean("withdraw_pending_minima", true).putLong("withdraw_pending_at_minima", System.currentTimeMillis() - DoorHost.WITHDRAW_MARKER_MS - 60_000)
+                .putInt("withdraw_pending_tip_minima", 1000).commit();
+        assertTrue("70 min of wall time, but no blocks yet: still on the book", host.withdrawalPending(TradingContext.MINIMA));
+        host.tip = () -> 1000 + SwapOrderBook.SCAN_DEPTH + 11;
+        assertTrue(host.withdrawalPending(TradingContext.MINIMA));
+        host.tip = () -> 1000 + SwapOrderBook.SCAN_DEPTH + 12;
+        assertFalse("aged off the scanned window", host.withdrawalPending(TradingContext.MINIMA));
+        assertFalse(host.prefs().contains("withdraw_pending_tip_minima"));
     }
 
     @Test public void aPre078MarkerStartsItsClockOnFirstSight() {

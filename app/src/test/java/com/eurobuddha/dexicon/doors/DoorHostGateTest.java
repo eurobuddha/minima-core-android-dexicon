@@ -215,6 +215,25 @@ public class DoorHostGateTest {
         idle(5);
     }
 
+    /** 0.1.81: an LP's deal is EXECUTING before the LP has locked — there is no swap row yet (status null). The switch
+     *  must wait, or otcLpDeal (active market only) never locks the LP's leg. */
+    @Test public void theSwitchWaitsForAnLpWhoseLegIsNotLockedYet() {
+        OtcDb.Deal d = new OtcDb.Deal();
+        d.ref = "gate-test-lp-executing"; d.role = OtcDb.ROLE_LP; d.peerCommsId = "peer"; d.side = OtcOffer.LP_SELLS_MINIMA;
+        d.amount = "2"; d.price = "1"; d.status = OtcDb.ST_EXECUTING; d.whoseTurn = OtcDb.TURN_ME; d.currency = TradingContext.MXUSDT.key;
+        d.hash = "0x" + "5a".repeat(32);   // the instigator's hashlock; no swap row of mine under it yet
+        assertTrue(host.otcDb().createDeal(d));
+        try {
+            assertTrue(host.otcMidExecution(TradingContext.MXUSDT));
+            assertEquals(DoorHost.OTC_MID_EXECUTION, host.switchMarket(TradingContext.MINIMA, null));
+            assertEquals(TradingContext.MXUSDT, host.market());
+        } finally {
+            OtcDb.Deal done = host.otcDb().getDeal(d.ref).copy(); done.status = OtcDb.ST_REJECTED;
+            assertTrue(host.otcDb().replaceDeal(host.otcDb().getDeal(d.ref), done));
+        }
+        assertFalse(host.otcMidExecution(TradingContext.MXUSDT));
+    }
+
     @Test public void theSwitchVoidsQueuedPublicationsBeforeItsTombstone() {
         host.prefs().edit().putString("order_config", Order.toConfigJson(liquid())).putBoolean("auto_publish", true).commit();
         long gen0 = PublishGate.gen();

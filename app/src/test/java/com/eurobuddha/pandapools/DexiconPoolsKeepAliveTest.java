@@ -92,6 +92,7 @@ public class DexiconPoolsKeepAliveTest {
 
         assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
         assertTrue("the keep-alive is settlement: it runs under the gate", DexiconPools.keepAlivePass(ctx, dex));
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();   // custody is read in the background, then the pass runs
         assertEquals("block", sent.get(0));
         assertFalse("at most once per 5 min", DexiconPools.keepAlivePass(ctx, dex));
     }
@@ -181,6 +182,63 @@ public class DexiconPoolsKeepAliveTest {
         assertFalse("the UI/generic read keeps its minute-long cache", DexiconPools.keptElsewhere(ctx, A));
         assertTrue("re-read before signing: taken back", Handover.keptByDexicon(ctx, A));
     }
+
+    /** 0.1.81: an owner-signing step on the MAIN thread never queries the provider: with a read over ~5 s old it kicks a
+     *  background re-read and fails closed for this step; once that read lands the next step signs on it. */
+    @Test public void aSigningStepOnTheMainThreadNeverReadsTheProvider() {
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), "handed_over"}};
+        CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.NEW, 981);
+        assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
+        final List<Runnable> background = new ArrayList<>();
+        DexiconPools.custodyExecutorForTest(background::add);
+        try {
+            int before = CustodyFake.queries.get();
+            assertFalse("a fresh read stands", Handover.keptByDexicon(ctx, A));
+            DexiconPools.ageCustody(6_000);
+            assertTrue("older than ~5 s on the main thread: kept elsewhere for this step", Handover.keptByDexicon(ctx, A));
+            assertTrue(Handover.keepable(ctx, OwnPoolStore.all(ctx)).isEmpty());
+            assertEquals("no provider query on the main thread", before, CustodyFake.queries.get());
+            assertEquals("ONE background read for both steps", 1, background.size());
+            background.remove(0).run();
+            assertEquals(before + 1, CustodyFake.queries.get());
+            assertFalse("the fresh read lets the next step sign", Handover.keptByDexicon(ctx, A));
+        } finally { DexiconPools.custodyExecutorForTest(Runnable::run); }
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+    }
+
+    /** 0.1.81 (5): every screen waiting on the one background read is re-rendered, not only the first. */
+    @Test public void everyWaitingScreenIsToldWhenTheReadLands() {
+        installPandaPools(true);
+        final List<Runnable> background = new ArrayList<>();
+        DexiconPools.custodyExecutorForTest(background::add);
+        final int[] fresh = new int[1];
+        try {
+            DexiconPools.ageCustody(120_000);
+            DexiconPools.custodyForUi(ctx, () -> fresh[0]++);
+            DexiconPools.custodyForUi(ctx, () -> fresh[0]++);
+            assertEquals(1, background.size());
+            background.remove(0).run();
+        } finally { DexiconPools.custodyExecutorForTest(Runnable::run); }
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertEquals(2, fresh[0]);
+    }
+
+    /** 0.1.81 (2): Dexicon's own hold mark lapses inside PandaPools' ~3 min CoinLock window, so a reservation PandaPools
+     *  renewed (e.g. an owner-signed refresh) is seen by Dexicon's selection; lapsed marks are pruned. */
+    @Test public void aPoolReservationOutlivingDexiconsHoldIsSeen() {
+        assertTrue(DexiconPools.HELD_MS < 3 * 60_000);
+        String id = "0x" + String.join("", Collections.nCopies(64, "7")), other = "0x" + String.join("", Collections.nCopies(64, "8"));
+        DexiconPools.holdCoins(Collections.singletonList(id));
+        assertFalse("Dexicon's own hold is not a pool reservation", DexiconPools.poolReserved(id));
+        DexiconPools.ageHeld(DexiconPools.HELD_MS);
+        CoinLock.reserve(Collections.singletonList(coin(id)));   // PandaPools re-reserves it for its own selection
+        assertTrue(DexiconPools.poolReserved(id));
+        DexiconPools.holdCoins(Collections.singletonList(other));
+        DexiconPools.ageHeld(DexiconPools.HELD_MS);
+        DexiconPools.holdCoins(Collections.singletonList(id));
+        assertEquals("the lapsed mark is pruned", 1, DexiconPools.heldCount());
+    }
+    private static Coin coin(String id) { Coin c = new Coin(); c.coinid = id; return c; }
 
     /** B: every pool owner payout address, in full and lower-case, for Dexicon's coin selection to skip. */
     @Test public void ownerAddressesNameEveryRecipesPayoutAddress() {

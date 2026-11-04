@@ -204,14 +204,18 @@ public final class DoorHost {
     }
 
     /** An OTC deal of {@code m} at the point where leaving its market would strand it: AGREED (an instigator locks leg 1
-     *  next), or EXECUTING with its swap still STARTED (the counter-leg is not locked yet) — the vendored controller
-     *  drives those steps only while its market is active. */
+     *  next), or EXECUTING with its swap still STARTED or with no swap row yet (an LP has not locked its leg: otcLpDeal
+     *  locks only while the deal is in the active market) — the vendored controller drives those steps only while its
+     *  market is active. */
     public boolean otcMidExecution(TradingContext m) {
         if (!otcOpen(m)) return false;
         for (OtcDb.Deal d : otcDb.allDeals()) {
             if (d.market() != m || OtcController.isTerminal(d.status)) continue;
             if (OtcDb.ST_AGREED.equals(d.status)) return true;
-            if (OtcDb.ST_EXECUTING.equals(d.status) && d.hash != null && SwapDb.ST_STARTED.equals(engine.swapStatus(d.hash))) return true;
+            if (OtcDb.ST_EXECUTING.equals(d.status)) {
+                String st = d.hash == null ? null : engine.swapStatus(d.hash);
+                if (st == null || SwapDb.ST_STARTED.equals(st)) return true;
+            }
         }
         return false;
     }
@@ -219,18 +223,29 @@ public final class DoorHost {
             + "other side). Switching now would stop it from progressing — switch once it is locked on both sides.";
 
     // A withdrawal (tombstone) of a market sent but not yet confirmed: the order is still on the book until it lands — or
-    // until it ages off on its own (~1 h of blocks after its last publish, which is never later than the marker).
+    // until it ages off on its own: the book scan reads SCAN_DEPTH (72) blocks back from the tip, and the last live publish
+    // was never later than the marker. Aged out by CHAIN TIME (the tip at marking + 72 + 12 blocks of slack); wall time
+    // (~70 min) only when no tip was known at marking or is known now.
     static final long WITHDRAW_MARKER_MS = 70 * 60_000;
+    static final int WITHDRAW_MARKER_BLOCKS = SwapOrderBook.SCAN_DEPTH + 12;
+    /** The Minima tip this host last saw (0 = unknown); tests replace it. */
+    java.util.function.IntSupplier tip = this::lastMinimaBlock;
     private void markWithdrawal(TradingContext m) {
-        prefs.edit().putBoolean("withdraw_pending_" + m.key, true).putLong("withdraw_pending_at_" + m.key, System.currentTimeMillis()).apply();
+        prefs.edit().putBoolean("withdraw_pending_" + m.key, true).putLong("withdraw_pending_at_" + m.key, System.currentTimeMillis())
+                .putInt("withdraw_pending_tip_" + m.key, Math.max(0, tip.getAsInt())).apply();
     }
-    private void withdrawalLanded(TradingContext m) { prefs.edit().remove("withdraw_pending_" + m.key).remove("withdraw_pending_at_" + m.key).apply(); }
-    /** A withdrawal of {@code m} is unconfirmed and its order may still be on the book (aged out ~70 min after it was set). */
+    private void withdrawalLanded(TradingContext m) {
+        prefs.edit().remove("withdraw_pending_" + m.key).remove("withdraw_pending_at_" + m.key).remove("withdraw_pending_tip_" + m.key).apply();
+    }
+    /** A withdrawal of {@code m} is unconfirmed and its order may still be on the book (aged out 84 blocks after it was
+     *  set, or ~70 min when the tip is unknown). */
     public boolean withdrawalPending(TradingContext m) {
         if (!prefs.getBoolean("withdraw_pending_" + m.key, false)) return false;
         long at = prefs.getLong("withdraw_pending_at_" + m.key, 0), now = System.currentTimeMillis();
         if (at == 0) { prefs.edit().putLong("withdraw_pending_at_" + m.key, now).apply(); return true; }   // a pre-0.1.78 marker: its clock starts now
-        if (now - at < WITHDRAW_MARKER_MS) return true;
+        int markTip = prefs.getInt("withdraw_pending_tip_" + m.key, 0), nowTip = tip.getAsInt();
+        if (markTip > 0 && nowTip > 0) { if (nowTip < markTip + WITHDRAW_MARKER_BLOCKS) return true; }
+        else if (now - at < WITHDRAW_MARKER_MS) return true;
         withdrawalLanded(m);   // the order has aged off the book by itself
         return false;
     }
@@ -1284,8 +1299,9 @@ public final class DoorHost {
             }
             @Override public void onError(String m) {
                 gate.free();
-                // A lost reply to a `send` may still have gone through — never resend that automatically.
-                boolean unknown = m != null && (m.contains("may still complete") || m.contains("didn't respond") || m.contains("Outcome is unknown"));
+                // A lost reply to a `send` may still have gone through — never resend that automatically. A pool owner-coin
+                // guard refusal never reached the node: never uncertain, whatever its words.
+                boolean unknown = m != null && !com.eurobuddha.pandapools.DexiconPools.refusal(m) && (m.contains("may still complete") || m.contains("didn't respond") || m.contains("Outcome is unknown"));
                 done.run(m, null, unknown);
             }
         }));

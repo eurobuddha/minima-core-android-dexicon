@@ -254,6 +254,14 @@ public class MakerService extends Service {
     /** Paired: run every queued Re-publish; every signing guard of DexiconPools.republish still applies. An address is
      *  forgotten only once its republish actually ran (or has no recipe here) — one a guard held back stays queued. */
     void runPendingRepublish() {
+        Set<String> s = getSharedPreferences(PREFS_REPUBLISH, MODE_PRIVATE).getStringSet("pending", null);
+        if (s == null || s.isEmpty()) return;
+        // custody is re-read OFF the main thread first, so the owner-signing guard decides on a fresh read (on the main
+        // thread an older one fails closed and would hold the queue back every tick)
+        com.eurobuddha.pandapools.DexiconPools.readCustodyAsync(this, this::drainRepublish);
+    }
+
+    private void drainRepublish() {
         android.content.SharedPreferences p = getSharedPreferences(PREFS_REPUBLISH, MODE_PRIVATE);
         Set<String> s = p.getStringSet("pending", null);
         if (s == null || s.isEmpty()) return;

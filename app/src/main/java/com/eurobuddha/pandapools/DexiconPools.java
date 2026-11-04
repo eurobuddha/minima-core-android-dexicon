@@ -22,13 +22,16 @@ import java.util.Set;
  * <b>Custody — who keeps each pool</b> (0.1.74; replaces the AWAITING/HANDED inference): Dexicon never infers it. While
  * standalone PandaPools is installed, the ONLY source is PandaPools' own custody signal, the exported provider
  * {@code content://com.eurobuddha.pandapools.handover/state} (PandaPools 0.9.81+; it answers only Dexicon signed with the
- * same key): one row per ACTIVE recipe PandaPools holds, {@code kept_here} or {@code handed_over}. A pool PandaPools lists
+ * same key): one row per recipe PandaPools holds — active AND retired since PandaPools 0.9.82 — {@code kept_here} or
+ * {@code handed_over}. A pool PandaPools lists
  * as kept_here is kept elsewhere; any other pool (handed over, absent, PandaPools reinstalled with nothing) is Dexicon's.
  * Unreadable (an older PandaPools, null, an error, a provider that is not PandaPools' own) → EVERY pool counts as kept
  * elsewhere: nobody signs from Dexicon, and the gate card says to update PandaPools. PandaPools not installed → Dexicon
- * keeps every recipe it holds. The read is cached with its time: re-read at every keep-alive pass start, again right
- * before each owner-signing step when over ~5 s old ({@link #keptElsewhereToSign}), and — off the main thread — on
- * onResume and whenever a screen finds the cache over a minute old (render itself never reads the provider). The hand-over intent (dexicon_pools / pools /
+ * keeps every recipe it holds. The read is cached with its time and NEVER taken on the main thread: re-read in the
+ * background at every keep-alive pass start (the pass runs once it lands), before each owner-signing step when over
+ * ~5 s old ({@link #keptElsewhereToSign}: off the main thread it re-reads; on it, it kicks a background read and counts
+ * the pool as kept elsewhere for that step), on onResume, and whenever a screen finds the cache over a minute old. The
+ * hand-over intent (dexicon_pools / pools /
  * kept_by_dexicon) is only the permission to uninstall; custody never comes from it.
  */
 public final class DexiconPools {
@@ -89,20 +92,29 @@ public final class DexiconPools {
      *  PandaPools between the pass start and the signature must stop the signature. */
     static final long CUSTODY_SIGN_MAX_AGE_MS = 5_000;
 
-    /** As {@link #keptElsewhere}, on a read at most ~5 s old — for the step that is about to sign with a pool owner key. */
+    /** As {@link #keptElsewhere}, on a read at most ~5 s old — for the step that is about to sign with a pool owner key.
+     *  Never a provider read on the main thread: there, an older read kicks a background re-read and FAILS CLOSED (kept
+     *  elsewhere) for this step; the next pass signs on the fresh read. */
     public static boolean keptElsewhereToSign(Context c, String address) {
         if (c == null || address == null) return false;
         if (!pandaPoolsInstalled(c)) return false;
-        Custody k = custody(c, CUSTODY_SIGN_MAX_AGE_MS);
+        Custody k = custody;
+        if (stale(c, k, CUSTODY_SIGN_MAX_AGE_MS)) {
+            if (onMainThread()) { refreshInBackground(c, null); return true; }
+            k = readCustody(c);
+        }
         return k.keptHere == null || k.keptHere.contains(low(address));
     }
+    private static boolean onMainThread() { return android.os.Looper.myLooper() == android.os.Looper.getMainLooper(); }
 
     // ---- custody for the UI: never a provider read on the main thread ----
 
     private static java.util.concurrent.Executor custodyIo = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "dexicon-custody"); t.setDaemon(true); return t;
     });
-    private static final java.util.concurrent.atomic.AtomicBoolean READING = new java.util.concurrent.atomic.AtomicBoolean();
+    /** The callbacks waiting on the one background read in flight (guarded by itself); null = no read in flight. */
+    private static final Object READ_LOCK = new Object();
+    private static List<Runnable> waiting;
     /** Tests run the background read inline. */
     public static void custodyExecutorForTest(java.util.concurrent.Executor e) { custodyIo = e; }
 
@@ -120,9 +132,27 @@ public final class DexiconPools {
      *  background read runs and {@code onFresh} follows on the main thread. */
     public static Custody custodyForUi(Context c, Runnable onFresh) {
         Custody k = custody;
-        if (stale(c, k, CUSTODY_MAX_AGE_MS) && READING.compareAndSet(false, true))
-            readCustodyAsync(c, () -> { READING.set(false); if (onFresh != null) onFresh.run(); });
+        if (stale(c, k, CUSTODY_MAX_AGE_MS)) refreshInBackground(c, onFresh);
         return k;
+    }
+
+    /** At most ONE background read in flight; every caller's {@code onFresh} (may be null) runs on the main thread once it lands. */
+    private static void refreshInBackground(Context c, Runnable onFresh) {
+        boolean start;
+        synchronized (READ_LOCK) {
+            start = waiting == null;
+            if (start) waiting = new ArrayList<>();
+            if (onFresh != null) waiting.add(onFresh);
+        }
+        if (!start) return;
+        final Context ctx = c.getApplicationContext();
+        final android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+        custodyIo.execute(() -> {
+            try { readCustody(ctx); } catch (RuntimeException ignored) { /* unread: the cache stays as it was */ }
+            List<Runnable> run;
+            synchronized (READ_LOCK) { run = waiting; waiting = null; }   // a later caller starts a new read
+            for (Runnable r : run) main.post(r);
+        });
     }
     /** UI: PandaPools is installed and this read could not tell which pools it keeps. */
     public static boolean unreadableForUi(Context c, Custody k) { return k != null && pandaPoolsInstalled(c) && k.unreadable(); }
@@ -198,30 +228,43 @@ public final class DexiconPools {
         } catch (org.json.JSONException e) { return null; }
     }
 
+    /** Every refusal of {@link #guardNodePickedSpend} starts with this: nothing reached the node, so a refusal is never an
+     *  uncertain write (whatever words follow, e.g. a coin read that "didn't respond"). */
+    public static final String REFUSED = "Nothing was sent: ";
+    public static boolean refusal(String message) { return message != null && (message.startsWith(REFUSED) || message.equals(OWNERS_UNREADABLE)); }
+
     /**
      * Before a NODE-PICKED spend of {@code tokenid} (send / consolidate: the node chooses the inputs, so it may take a coin at
-     * a pool owner address and sign with that pool's one-time owner key) — PandaPools' consolidation guard, narrowed to the
-     * pools whose owner address holds sendable coins of that token. {@code cb} gets null (go ahead) or why nothing may be
-     * sent. Fails closed: unreadable recipes or coins refuse.
+     * a pool owner address and sign with that pool's one-time owner key — the vendored engine must never spend one).
+     * Refuses while ANY sendable coin of that token sits at ANY pool owner address — whoever keeps the pool and whether or
+     * not its key can sign; payout coins there are forwarded by the collection within minutes. Reads each owner address on
+     * its own ({@code address:} — bounded, never the whole fragmented wallet). {@code cb} gets null (go ahead) or why
+     * nothing was sent (starting {@link #REFUSED}, or {@link #OWNERS_UNREADABLE}). Fails closed: unreadable recipes or
+     * coins refuse.
      */
     public static void guardNodePickedSpend(com.eurobuddha.dexicon.NodeApi dex, String tokenid, java.util.function.Consumer<String> cb) {
         final Context ctx = dex == null ? null : dex.context();
         final Set<String> owners = ownerAddresses(ctx);
         if (owners == null) { cb.accept(OWNERS_UNREADABLE); return; }
-        if (owners.isEmpty()) { cb.accept(null); return; }
-        dex.cmd("coins relevant:true sendable:true tokenid:" + tokenid, new com.eurobuddha.dexicon.NodeApi.Cb() {
+        guardOwner(dex, tokenid, new ArrayList<>(owners), 0, cb);
+    }
+
+    private static void guardOwner(com.eurobuddha.dexicon.NodeApi dex, String tokenid, List<String> owners, int i, java.util.function.Consumer<String> cb) {
+        if (i >= owners.size()) { cb.accept(null); return; }
+        final String oadr = owners.get(i);
+        dex.cmd("coins relevant:true sendable:true tokenid:" + tokenid + " address:" + oadr, new com.eurobuddha.dexicon.NodeApi.Cb() {
             @Override public void onResult(org.json.JSONObject j) {
-                if (!j.optBoolean("status", false)) { cb.accept("Could not read your wallet coins, so a pool owner-key coin cannot be ruled out. Nothing was sent."); return; }
-                Set<String> at = new HashSet<>();
-                for (org.json.JSONObject row : com.eurobuddha.dexicon.NodeApi.rows(j)) { String a = low(row.optString("address", "")); if (owners.contains(a)) at.add(a); }
-                if (at.isEmpty()) { cb.accept(null); return; }
-                final List<Pool> pools = new ArrayList<>();
-                for (Pool p : OwnPoolStore.all(ctx)) if (p.oadr != null && at.contains(low(p.oadr))) pools.add(p);
-                NodeApi pp = new NodeApi(dex);
-                OwnerKeyRecovery.checkConsolidation(pp::cmd, () -> pools, why -> cb.accept(why == null ? null
-                        : "Nothing was sent: the node would choose the coins itself, and your wallet holds pool owner-key coins of this token.\n\n" + why));
+                if (!j.optBoolean("status", false)) { cb.accept(REFUSED + "could not read your wallet coins, so a pool owner-key coin cannot be ruled out."); return; }
+                for (org.json.JSONObject row : com.eurobuddha.dexicon.NodeApi.rows(j))
+                    if (oadr.equals(low(row.optString("address", "")))) {
+                        cb.accept(REFUSED + "the node would choose the coins itself, and your wallet holds pool owner-payout coins of this "
+                                + "token at\n" + oadr + "\nThey sign with a pool's one-time owner key. Wait a few minutes for the collection "
+                                + "to forward them to your wallet (or collect them on ② My pools), then try again.");
+                        return;
+                    }
+                guardOwner(dex, tokenid, owners, i + 1, cb);
             }
-            @Override public void onError(String m) { cb.accept("Could not read your wallet coins (" + m + "). Nothing was sent."); }
+            @Override public void onError(String m) { cb.accept(REFUSED + "could not read your wallet coins (" + m + ")."); }
         });
     }
 
@@ -232,14 +275,20 @@ public final class DexiconPools {
         if (coinIds == null || coinIds.isEmpty()) return;
         List<Coin> coins = new ArrayList<>();
         long now = System.currentTimeMillis();
+        HELD.values().removeIf(at -> now - at >= HELD_MS);
         for (String id : coinIds) if (id != null && !id.isEmpty()) { Coin c = new Coin(); c.coinid = id; coins.add(c); HELD.put(low(id), now); }
         CoinLock.reserve(coins);
     }
 
     /** Coins Dexicon itself held in PandaPools' CoinLock (live-order backing, trade inputs) and when. */
     private static final java.util.Map<String, Long> HELD = new java.util.concurrent.ConcurrentHashMap<>();
-    /** Longer than CoinLock's own reservation window: a hold Dexicon renewed within it is still Dexicon's. */
-    static final long HELD_MS = 10 * 60_000;
+    /** SHORTER than CoinLock's own ~3 min reservation (its private TTL_MS): once Dexicon's hold mark lapses, a reservation
+     *  still standing was renewed by PandaPools itself (e.g. an owner-signed refresh), so it counts. MakerService re-holds
+     *  a live order's backing every ~10 s tick, well inside this window. */
+    static final long HELD_MS = 150_000;
+    static int heldCount() { return HELD.size(); }
+    /** For tests: make Dexicon's hold marks {@code ms} older. */
+    static void ageHeld(long ms) { HELD.replaceAll((id, at) -> at - ms); }
 
     /** The CoinLock is one-way no more: true when PANDAPOOLS' own selection holds this coin (a pool create / refresh /
      *  swap in flight, or posted), so no Dexicon selection may take it. A reservation Dexicon made itself
@@ -248,7 +297,10 @@ public final class DexiconPools {
     public static boolean poolReserved(String coinId) {
         if (coinId == null || !CoinLock.isReserved(coinId)) return false;
         Long at = HELD.get(low(coinId));
-        return at == null || System.currentTimeMillis() - at >= HELD_MS;
+        if (at == null) return true;
+        if (System.currentTimeMillis() - at < HELD_MS) return false;
+        HELD.remove(low(coinId), at);
+        return true;
     }
 
     /** A {@code coins} reply minus the rows {@link #poolReserved}; anything else is returned as is. */
@@ -338,7 +390,12 @@ public final class DexiconPools {
         if (now - lastPassMs < PASS_GAP_MS) return false;                // overlap guard
         if (OwnPoolStore.all(ctx).isEmpty()) return false;              // LP nodes only
         lastPassMs = now;
-        readCustody(ctx);                                               // a take-back stops Dexicon's keeper in this pass
+        // a take-back stops Dexicon's keeper in this pass: custody is re-read OFF the main thread, then the pass runs
+        readCustodyAsync(ctx, () -> runPass(ctx, dex));
+        return true;
+    }
+
+    private static void runPass(Context ctx, com.eurobuddha.dexicon.NodeApi dex) {
         final NodeApi n = new NodeApi(dex);
         StrandingWatch.createChannel(ctx);
         try {
@@ -348,7 +405,6 @@ public final class DexiconPools {
                         new CollectSweeper(ctx, sweepNode(ctx, dex)).run((cleared, pending, stranded) -> {});
                     }));
         } catch (Throwable ignored) { }
-        return true;
     }
 
     /** The stranding notification's Re-publish action (PoolKeepAliveService.republishOne): every signing guard still applies.

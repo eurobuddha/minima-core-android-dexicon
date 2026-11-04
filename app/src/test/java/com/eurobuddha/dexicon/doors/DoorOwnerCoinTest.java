@@ -37,7 +37,8 @@ public class DoorOwnerCoinTest {
     private Application app;
     private NodeApi dex;
     private com.eurobuddha.comms.NodeApi shim;
-    private final List<String> sends = new ArrayList<>();
+    private final List<String> sends = new ArrayList<>(), coinReads = new ArrayList<>();
+    private String coinsError;
 
     @Before public void up() throws Exception {
         app = RuntimeEnvironment.getApplication();
@@ -50,8 +51,9 @@ public class DoorOwnerCoinTest {
         Answer<Object> node = inv -> {
             Object[] a = inv.getArguments();
             String c = (String) a[0]; NodeApi.Cb cb = (NodeApi.Cb) a[a.length - 1];
-            if (c.startsWith("coins")) cb.onResult(new JSONObject().put("status", true).put("response", c.contains("tokenid:" + MINIMA)
-                    ? new JSONArray().put(coin("0x" + "01".repeat(32), OWNER)).put(coin("0x" + "02".repeat(32), WALLET)) : new JSONArray()));
+            if (c.startsWith("coins") && coinsError != null) { coinReads.add(c); cb.onError(coinsError); }
+            else if (c.startsWith("coins")) { coinReads.add(c); cb.onResult(new JSONObject().put("status", true).put("response", c.contains("tokenid:" + MINIMA)
+                    ? new JSONArray().put(coin("0x" + "01".repeat(32), OWNER)).put(coin("0x" + "02".repeat(32), WALLET)) : new JSONArray())); }
             else if (c.equals("keys")) cb.onResult(new JSONObject().put("status", true).put("response", new JSONObject().put("keys", new JSONArray())));   // the owner key is not held
             else if (c.startsWith("send") || c.startsWith("consolidate")) { sends.add(c); cb.onResult(new JSONObject().put("status", true).put("response", new JSONObject().put("txpowid", "0x" + "ee".repeat(32)))); }
             else cb.onError("unexpected " + c);
@@ -91,6 +93,30 @@ public class DoorOwnerCoinTest {
         Got c = new Got();
         shim.cmd("consolidate tokenid:" + MINIMA + " coinage:3 maxcoins:20 maxsigs:5", c);
         assertNotNull(c.error);
+        assertTrue(sends.isEmpty());
+    }
+
+    /** 0.1.81: the guard reads each owner address on its own (bounded — never the whole fragmented wallet) and refuses
+     *  whenever a coin of the token sits there, whoever keeps the pool and whether or not its key can sign; the refusal
+     *  names the address in full. */
+    @Test public void theGuardReadsOnlyOwnerAddressesAndRefusesAnyOwnerCoin() {
+        Got g = new Got();
+        shim.cmd("send amount:5 address:0x" + "ab".repeat(32) + " tokenid:" + MINIMA, g);
+        assertTrue(g.error, g.error.startsWith(DexiconPools.REFUSED));
+        assertTrue("the owner address in full", g.error.contains(OWNER.toLowerCase()));
+        assertTrue(sends.isEmpty());
+        assertFalse(coinReads.isEmpty());
+        for (String c : coinReads) assertTrue("bounded read: " + c, c.contains(" address:" + OWNER.toLowerCase()));
+    }
+
+    /** 0.1.81: a guard refusal never reached the node — even one whose coin read "didn't respond" is not an uncertain
+     *  write, so the door forward is not marked UNCERTAIN. */
+    @Test public void aGuardRefusalIsNeverAnUncertainForward() {
+        coinsError = "Minima Core didn't respond. Is it installed, running and enabled?";
+        final Object[] out = new Object[2];
+        DoorHost.signedSend(shim, "send amount:5 address:0x" + "ab".repeat(32) + " tokenid:" + OTHER, (err, tx, uncertain) -> { out[0] = err; out[1] = uncertain; });
+        assertTrue(String.valueOf(out[0]), String.valueOf(out[0]).startsWith(DexiconPools.REFUSED));
+        assertEquals(Boolean.FALSE, out[1]);
         assertTrue(sends.isEmpty());
     }
 

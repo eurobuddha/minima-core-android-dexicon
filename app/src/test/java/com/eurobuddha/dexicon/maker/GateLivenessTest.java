@@ -58,7 +58,9 @@ public class GateLivenessTest {
         s.queueRepublish(pool);
         android.content.SharedPreferences p = s.getSharedPreferences(MakerService.PREFS_REPUBLISH, android.content.Context.MODE_PRIVATE);
         assertTrue("persisted in full", p.getStringSet("pending", new java.util.HashSet<>()).contains(pool));
+        com.eurobuddha.pandapools.DexiconPools.custodyExecutorForTest(Runnable::run);
         s.runPendingRepublish();   // no recipe for it here: DexiconPools.republish signs nothing
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();   // custody is read first, then the queue drains
         assertFalse(p.contains("pending"));
     }
 
@@ -73,6 +75,7 @@ public class GateLivenessTest {
         MakerService s = Robolectric.buildService(MakerService.class).get();
         s.queueRepublish(pool.address);
         s.runPendingRepublish();
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
         android.content.SharedPreferences p = s.getSharedPreferences(MakerService.PREFS_REPUBLISH, android.content.Context.MODE_PRIVATE);
         assertTrue("not run, so not forgotten", p.getStringSet("pending", new java.util.HashSet<>()).contains(pool.address));
         com.eurobuddha.dexicon.CustodyFake.install(app, com.eurobuddha.dexicon.CustodyFake.Install.NONE, 0);
