@@ -302,10 +302,10 @@ public final class DexiconPools {
             boolean unsure = pandaPoolsInstalled(ctx) && stale(ctx, k, CUSTODY_SIGN_MAX_AGE_MS);   // a failed read leaves an old cache
             for (Pool p : pools.get())
                 if (unsure || keptBy(ctx, k, p.address)) {
-                    String who = unsure ? "Dexicon could not confirm right now which app keeps (try again in a moment)"
-                            : k == null || k.keptHere == null ? "PandaPools may still keep (it is installed and could not say which pools it keeps)"
-                            : "standalone PandaPools still keeps";
-                    cb.accept(REFUSED + OWNER_COINS + low(p.oadr) + "\nof the pool\n" + low(p.address) + "\nwhich " + who
+                    String who = unsure ? "whose keeper Dexicon could not confirm just now (try again in a moment)"
+                            : k == null || k.keptHere == null ? "which PandaPools may still keep (it is installed and could not say which pools it keeps)"
+                            : "which standalone PandaPools still keeps";
+                    cb.accept(REFUSED + OWNER_COINS + low(p.oadr) + "\nof the pool\n" + low(p.address) + "\n" + who
                             + ", so Dexicon never signs with its owner key. Collect them in PandaPools (or hand the pool over), then try again.");
                     return;
                 }
