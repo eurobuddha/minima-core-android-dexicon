@@ -1129,11 +1129,9 @@ public final class DoorHost {
     // ------------------------------------------------------------------ door swaps (SwapDb is the source of truth)
 
     /** Every swap this node started (INITIATOR), newest first. */
-    public List<SwapDb.Swap> swaps() {
-        List<SwapDb.Swap> out = new ArrayList<>();
-        for (SwapDb.Swap s : db.allSwaps()) if ("INITIATOR".equals(s.role)) out.add(s);
-        return out;
-    }
+    /** Every AtomiX swap on this node: mine as taker AND my market's fills as maker (AtomiX mySwapsList shows both; this
+     *  was taker-only from phase 1, before Dexicon could make a market, so maker fills were never shown — 0.1.96). */
+    public List<SwapDb.Swap> swaps() { return new ArrayList<>(db.allSwaps()); }
     public List<SwapDb.Event> events(String hash) { return db.getEvents(hash); }
     public JSONObject forward(String hash) { return DoorForwards.get(prefs, hash); }
     public void retryForward(String hash) { DoorForwards.retry(prefs, hash); changed(); }

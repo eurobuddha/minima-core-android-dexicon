@@ -305,4 +305,27 @@ public class LedgerTest {
         assertNull(Ledger.keysOf("0x" + box));
         assertNull(Ledger.keysOf(null));
     }
+
+    /** 0.1.96: a fill of MY market (RESPONDER) is shown, from the maker's chair, with no refund button. */
+    @Test public void aMakerFillHasItsOwnCard() {
+        com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap();
+        s.hash = "0x" + "ab".repeat(32); s.role = "RESPONDER"; s.direction = "ERC20_TO_MINIMA";
+        s.sellToken = "MxUSD"; s.sellAmount = "5"; s.buyToken = "USDT"; s.buyAmount = "5";
+        s.status = com.eurobuddha.atomix.swap.SwapDb.ST_LOCKED; s.counterparty = "0x" + "cd".repeat(32);
+        s.created = 1_700_000_000_000L; s.updated = s.created;
+        com.eurobuddha.atomix.swap.SwapDb.Event e = new com.eurobuddha.atomix.swap.SwapDb.Event();
+        e.event = com.eurobuddha.atomix.swap.SwapDb.EV_CPSENT; e.note = "0x" + "ef".repeat(32); e.date = s.created + 60_000;
+        Ledger.Item it = Ledger.swap(s, java.util.Collections.singletonList(e), null, s.created / 1000 + 120, 100, "0x" + "12".repeat(20), null, java.util.TimeZone.getTimeZone("UTC"));
+        assertEquals("AtomiX · your market filled", it.title);
+        assertTrue(it.sub, it.sub.contains("waiting for the taker to claim"));
+        assertTrue(it.live);
+        assertNull("my own lock refunds itself: no button", it.refundLabel);
+        assertTrue(it.steps.toString(), it.steps.toString().contains("A taker bought 5 MxUSD from your market for 5 USDT"));
+        assertTrue(it.steps.toString().contains("You locked 5 MxUSD"));
+        assertTrue("the taker's key, in full", it.proof.toString().contains("Taker key=" + s.counterparty));
+        assertTrue("my lock, in full", it.proof.toString().contains("=" + e.note));
+        s.status = com.eurobuddha.atomix.swap.SwapDb.ST_COMPLETE;
+        it = Ledger.swap(s, java.util.Collections.singletonList(e), null, s.created / 1000 + 120, 100, "0x" + "12".repeat(20), null, java.util.TimeZone.getTimeZone("UTC"));
+        assertTrue(it.sub, it.sub.contains("paid · USDT at your Ethereum address"));
+    }
 }

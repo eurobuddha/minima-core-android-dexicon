@@ -258,7 +258,8 @@ public final class Ledger {
         it.live = running || fwdOpen;
         it.ticking = SwapDb.ST_STARTED.equals(st);
         it.retryForward = DoorForwards.FAILED.equals(fs) || DoorForwards.UNCERTAIN.equals(fs);
-        it.title = "ERC20_TO_MINIMA".equals(s.direction) ? "AtomiX entry" : "AtomiX exit";
+        boolean maker = "RESPONDER".equals(s.role);   // a taker filled MY published market (or an OTC deal I accepted)
+        it.title = maker ? "AtomiX · your market filled" : "ERC20_TO_MINIMA".equals(s.direction) ? "AtomiX entry" : "AtomiX exit";
         it.amount = s.sellAmount + " " + sell + " → " + s.buyAmount + " " + buy;
         String pill = DoorForwards.pill(s, fwd);
         it.chip = running ? "LIVE" : error ? "FAILED" : pill;
@@ -278,7 +279,12 @@ public final class Ledger {
                 : DoorForwards.UNCERTAIN.equals(fs) ? "the forward is unconfirmed" : DoorForwards.SENT.equals(fs) ? "forwarded"
                 : complete ? ("USDT".equals(buy) ? "at your Ethereum address" : "in your wallet")
                 : refunded ? "maker didn't lock · " + sell + " back" + (refundAt > 0 ? " " + hm(refundAt, tz) : "") : error ? "failed" : st;
+        if (maker) outcome = complete ? ("USDT".equals(buy) ? "paid · USDT at your Ethereum address" : "paid · in your wallet")
+                : SwapDb.ST_CLAIMING.equals(st) ? "claiming your payment" : running ? "you locked · waiting for the taker to claim"
+                : refunded ? "the taker never claimed · " + sell + " back" : error ? "failed" : st;
         it.sub = dayTime(s.created, tz) + " · " + outcome;
+
+        if (maker) { makerSteps(it, s, events, sell, buy, st, claimAt, tz); proofs(it, s, events, sell, null, ethAddress, refunded, fwd, true); return it; }
 
         // ---- steps
         DoorStatus.Card card = DoorStatus.build(s, events, nowSec, block, answer, tz);
@@ -305,14 +311,42 @@ public final class Ledger {
         }
         if (error) it.step(Mark.WARN, hms(s.updated, tz), "Failed — see the recorded transactions; the counterparty took the leg you paid or refunded theirs.");
 
-        // ---- proof: each id once, in full
+        proofs(it, s, events, sell, makerId, ethAddress, refunded, fwd, false);
+        return it;
+    }
+
+    /** AtomiX's maker side, from the maker's chair: a buy request arrived, I locked, the taker claims (that reveals the
+     *  secret), I claim my payment. No refund button: my own lock refunds itself after its timelock (engine). */
+    private static void makerSteps(Item it, SwapDb.Swap s, List<SwapDb.Event> events, String sell, String buy, String st, long claimAt, TimeZone tz) {
+        long lockedAt = 0, declinedAt = 0; String declined = null;
+        if (events != null) for (SwapDb.Event e : events) {
+            if (SwapDb.EV_CPSENT.equals(e.event)) lockedAt = e.date;
+            else if (SwapDb.EV_DECLINED.equals(e.event)) { declinedAt = e.date; declined = e.note; }
+        }
+        boolean usdtIn = "USDT".equals(buy);
+        it.step(Mark.OK, hms(s.created, tz), "A taker bought " + s.sellAmount + " " + sell + " from your market for " + s.buyAmount + " " + buy);
+        if (declined != null) it.step(Mark.WARN, hms(declinedAt, tz), "Not locked: " + declined);
+        if (lockedAt > 0 || !SwapDb.ST_STARTED.equals(st)) it.step(Mark.OK, lockedAt > 0 ? hms(lockedAt, tz) : "", "You locked " + s.sellAmount + " " + sell);
+        if (SwapDb.ST_STARTED.equals(st) || SwapDb.ST_LOCKED.equals(st))
+            it.step(Mark.WAIT, "", "Waiting for the taker to claim — that reveals the secret that pays you. If they never do, your " + sell + " comes back after the timelock.");
+        if (SwapDb.ST_CLAIMING.equals(st)) it.step(Mark.WAIT, "", (usdtIn ? "Withdrawing your " : "Claiming your ") + s.buyAmount + " " + buy + " now");
+        if (SwapDb.ST_COMPLETE.equals(st)) {
+            if (claimAt > 0) it.step(Mark.OK, hms(claimAt, tz), usdtIn ? "Withdrew your USDT on Ethereum" : "Claimed into your wallet");
+            it.step(Mark.OK, hms(s.updated, tz), "Done — you were paid " + s.buyAmount + " " + buy + (usdtIn ? ", at this node’s Ethereum address" : ", in your wallet"));
+        }
+        if (SwapDb.ST_REFUNDED.equals(st)) it.step(Mark.WARN, hms(s.updated, tz), "The taker never claimed — your " + s.sellAmount + " " + sell + " came back.");
+        if (SwapDb.ST_ERROR.equals(st)) it.step(Mark.WARN, hms(s.updated, tz), "Failed — see the recorded transactions below.");
+    }
+
+    /** Every id once, in full (RULE 1). {@code maker}: the counterparty is the taker, and my lock is the second leg. */
+    private static void proofs(Item it, SwapDb.Swap s, List<SwapDb.Event> events, String sell, String makerId, String ethAddress, boolean refunded, JSONObject fwd, boolean maker) {
         it.proof("Swap", s.hash);
         List<SwapDb.Event> oldest = new ArrayList<>();
         if (events != null) for (SwapDb.Event e : events) oldest.add(0, e);
-        for (SwapDb.Event e : oldest) if (SwapDb.EV_STARTED.equals(e.event) && isTx(e.note))
+        for (SwapDb.Event e : oldest) if ((SwapDb.EV_STARTED.equals(e.event) || SwapDb.EV_CPSENT.equals(e.event)) && isTx(e.note))
             it.proof("Your " + sell + " lock (" + (s.myLegIsMinima ? "Minima txpow" : "Ethereum tx") + ")", e.note);
         it.proof("Ethereum contract", s.contractId);
-        it.proof("Maker key", s.counterparty);
+        it.proof(maker ? "Taker key" : "Maker key", s.counterparty);
         it.proof("Maker ID (who was told)", makerId);
         for (SwapDb.Event e : oldest) {
             if (!isTx(e.note)) continue;
@@ -326,7 +360,6 @@ public final class Ledger {
         }
         if (refunded && !s.myLegIsMinima) it.proof("Refunded to", ethAddress);
         if (fwd != null) { it.proof("Forward to", fwd.optString("to")); it.proof("Forward tx", fwd.optString("tx")); }
-        return it;
     }
 
     /** A finished swap as a HISTORY line: "Swapped X → Y" (or a muted "Refunded X"), with facts. */
