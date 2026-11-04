@@ -105,6 +105,29 @@ public final class AssetsTab extends LinearLayout {
         c.addView(row, Ui.wide(act, 4, 0));
         Ui.info(row, c, "info_assets_eth", "ERC20 USDT and a little ETH for gas. This wallet is derived from this node's seed — the same address as the ATOMIX tab and the AtomiX app — and is never stored.");
         c.addView(a != null ? full("Ethereum address", a) : Ui.para(act, host.bootNote().isEmpty() ? "deriving…" : host.bootNote()), Ui.wide(act, 6, 0));
+        if (a == null) return;
+        // AtomiX's Wallet actions, its 2 × 2 grid and labels: refresh, fund (QR), send ETH / USDT, export the key
+        WalletActions w = new WalletActions(act);
+        TextView refresh = Design.pill(act, "↻  Refresh", Design.SURFACE2(), Design.TEXT());
+        refresh.setOnClickListener(v -> { act.toast("Refreshing balances…"); ethReadMs = System.currentTimeMillis(); host.readBalances(() -> act.repaint()); });
+        TextView fund = Design.pill(act, "⤓  Fund / QR", Design.SURFACE2(), Design.TEXT());
+        fund.setOnClickListener(v -> w.receive());
+        TextView send = Design.pill(act, "↑  Send", Design.SURFACE2(), Design.TEXT());
+        send.setOnClickListener(v -> w.send());
+        TextView export = Design.pill(act, "🔑  Export key", Design.SURFACE2(), Design.DIM());
+        export.setOnClickListener(v -> w.exportKey());
+        LinearLayout grid = new LinearLayout(act); grid.setOrientation(VERTICAL);
+        for (TextView[] pair : new TextView[][]{{refresh, fund}, {send, export}}) {
+            LinearLayout line = new LinearLayout(act);
+            for (TextView b : pair) {
+                b.setMinimumHeight(Design.dp(act, 48)); b.setGravity(Gravity.CENTER); Design.pressable(b);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+                lp.setMargins(Design.dp(act, 2), Design.dp(act, 3), Design.dp(act, 2), Design.dp(act, 3));
+                line.addView(b, lp);
+            }
+            grid.addView(line);
+        }
+        c.addView(grid, Ui.wide(act, 10, 0));
     }
 
     /** YOUR TRADING ID: what it is in plain words; the full id and its two keys folded. */

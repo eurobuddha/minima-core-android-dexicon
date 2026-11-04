@@ -479,6 +479,9 @@ public final class DoorHost {
     public boolean ready() { return wallet.ready() && minima.ready() && keysLoaded && ids.size() == MARKETS.length; }
     public String bootNote() { return ready() ? "" : bootNote; }
     public String ethAddress() { return wallet.address(); }
+    /** AtomiX's Wallet (send / export key) works on the same node-derived wallet and connection the swaps use. */
+    public EthWallet wallet() { return wallet; }
+    public EthRpc rpc() { return rpc; }
     public String myPublicId(TradingContext m) { CommsIdentity i = ids.get(m); return i == null ? null : i.publicId(); }
     public Map<String, Order> book(TradingContext m) { return books.get(m); }
     public String coinBalance(TradingContext m) { return coinBal.get(m); }

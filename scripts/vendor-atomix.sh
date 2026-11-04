@@ -24,7 +24,7 @@ com/eurobuddha/atomix/eth/PendingTokenDebits.java com/eurobuddha/minimaapi/ether
 com/eurobuddha/comms/CommsIdentity.java com/eurobuddha/comms/CommsTransport.java com/eurobuddha/comms/CommsScanner.java
 com/eurobuddha/comms/CryptoProvider.java com/eurobuddha/comms/LocalEcCryptoProvider.java com/eurobuddha/comms/Hex.java
 com/eurobuddha/comms/Hkdf.java com/eurobuddha/comms/Sodium.java com/eurobuddha/comms/Opened.java com/eurobuddha/comms/WriteSafety.java
-com/eurobuddha/comms/SignGate.java
+com/eurobuddha/comms/SignGate.java com/eurobuddha/comms/QrUtil.java
 com/eurobuddha/atomix/Handover.java com/eurobuddha/atomix/CcyRing.java com/eurobuddha/atomix/MarketDraft.java
 com/eurobuddha/atomix/swap/PriceOracle.java com/eurobuddha/atomix/swap/OtcBook.java com/eurobuddha/atomix/swap/SwapVisibility.java"
 # AtomiX's own JVM tests for those classes, ported with them (same header rule). Tests of classes NOT vendored
