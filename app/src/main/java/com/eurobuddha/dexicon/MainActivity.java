@@ -581,9 +581,11 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 // the one node-picked-spend guard (as ASSETS › CONSOLIDATE): the node picks the coins
                 com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(node, token, blocked -> {
                     if (blocked != null) { setStage(""); explain("Nothing consolidated", blocked + "\n\n" + why); return; }
+                    Runnable unlock = WalletLock.take(token);   // never merge a coin an AtomiX swap is locking
+                    if (unlock == null) { setStage(""); explain("Nothing consolidated", WalletLock.BUSY + "\n\n" + why); return; }
                     SignGate.submit(release -> node.cmdR("consolidate tokenid:" + token, new NodeApi.Cb() {
-                        public void onResult(JSONObject x) { release.free(); waitThenRetry(buy, amount, price, token, need, chainBlock, true); }
-                        public void onError(String m) { release.free(); setStage(""); toast("Could not consolidate " + name + ": " + m + " — " + why); }
+                        public void onResult(JSONObject x) { release.free(); unlock.run(); waitThenRetry(buy, amount, price, token, need, chainBlock, true); }
+                        public void onError(String m) { release.free(); unlock.run(); setStage(""); toast("Could not consolidate " + name + ": " + m + " — " + why); }
                     }));
                 });
             }

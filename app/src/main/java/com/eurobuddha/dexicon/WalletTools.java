@@ -32,7 +32,7 @@ final class WalletTools {
                 .setPositiveButton("Consolidate", (d, w) -> com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(act.nodeApi(), tokenid, error -> {
                     // the one node-picked-spend guard: never let the node pick a pool owner coin it must not sign
                     if (error != null) message(act, "Nothing consolidated", error);
-                    else run(act, "consolidate tokenid:" + tokenid, "Consolidate " + name);
+                    else run(act, tokenid, "consolidate tokenid:" + tokenid, "Consolidate " + name);
                 })).show();
     }
 
@@ -50,22 +50,24 @@ final class WalletTools {
                 .setPositiveButton("Split", (d, w) -> com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(act.nodeApi(), tokenid, error -> {
                     // a self-send lets the node pick the coins too: the same guard applies
                     if (error != null) message(act, "Nothing split", error);
-                    else run(act, cmd, "Split " + name);
+                    else run(act, tokenid, cmd, "Split " + name);
                 })).show();
     }
 
-    private static void run(MainActivity act, String cmd, String label) {
+    private static void run(MainActivity act, String tokenid, String cmd, String label) {
+        Runnable unlock = WalletLock.take(tokenid);   // the node picks the coins: never one an AtomiX swap is locking
+        if (unlock == null) { message(act, "Nothing sent", WalletLock.BUSY); return; }
         act.toast(label + " — signing…");
         SignGate.submit(release -> act.nodeApi().cmdR(cmd, new NodeApi.Cb() {
             public void onResult(JSONObject j) {
-                release.free();
+                release.free(); unlock.run();
                 JSONObject r = j.optJSONObject("response");
                 String id = r == null ? "" : r.optString("txpowid", r.optJSONObject("txpow") == null ? "" : r.optJSONObject("txpow").optString("txpowid", ""));
                 act.refreshBalances();
                 message(act, label + " submitted", "It is final after the next block; ASSETS updates when it confirms."
                         + (id.isEmpty() ? "" : "\n\ntxpow " + id));
             }
-            public void onError(String m) { release.free(); message(act, label + " failed", m); }
+            public void onError(String m) { release.free(); unlock.run(); message(act, label + " failed", m); }
         }));
     }
 

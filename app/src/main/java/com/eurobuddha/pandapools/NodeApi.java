@@ -183,14 +183,12 @@ public class NodeApi {
 
     private void send(String command, Cb cb) {
         if (isConsolidate(command)) {
-            if (!com.eurobuddha.atomix.swap.SwapEngine.beginConsolidate()) {
-                if (cb != null) cb.onError("Wallet busy — an AtomiX swap is locking coins or a consolidation is running. Nothing was sent; try again in a moment.");
-                return;
-            }
+            final Runnable unlock = com.eurobuddha.dexicon.WalletLock.take(com.eurobuddha.dexicon.WalletLock.tokenOf(command));
+            if (unlock == null) { if (cb != null) cb.onError(com.eurobuddha.dexicon.WalletLock.BUSY); return; }
             final Cb inner = cb;
-            cb = new Cb() {
-                public void onResult(JSONObject j) { com.eurobuddha.atomix.swap.SwapEngine.endConsolidate(); if (inner != null) inner.onResult(j); }
-                public void onError(String m) { com.eurobuddha.atomix.swap.SwapEngine.endConsolidate(); if (inner != null) inner.onError(m); }
+            cb = new Cb() {   // released once, even if the callback throws and the error path runs too
+                public void onResult(JSONObject j) { unlock.run(); if (inner != null) inner.onResult(j); }
+                public void onError(String m) { unlock.run(); if (inner != null) inner.onError(m); }
             };
         }
         sendUnlocked(command, cb);
