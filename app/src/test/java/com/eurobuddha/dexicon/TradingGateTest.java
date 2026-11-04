@@ -166,4 +166,17 @@ public class TradingGateTest {
         assertNull("process death lost the Remove intent: no uninstall", next(a));
         assertTrue("but the answer is shown on the card", TradingGate.lastAnswerOk(app, TradingGate.ATOMIX));
     }
+
+    /** E (0.1.75): MakerService's change broadcast applies the gate at once — no wait for a MiniHub read. */
+    @Test public void theActivityFollowsAGateChangeTheServiceBroadcasts() {
+        MainActivity a = DoorsTabSmokeTest.launch();
+        assertNull(PoolsRoomSmokeTest.containing(a.getWindow().getDecorView(), "One trading app per phone"));
+        PackageInfo pi = new PackageInfo(); pi.packageName = TradingGate.ATOMIX;
+        Shadows.shadowOf(app.getPackageManager()).installPackage(pi);
+        a.sendBroadcast(new Intent(com.eurobuddha.dexicon.maker.MakerService.ACTION_CHANGED).setPackage(a.getPackageName()));
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertNotNull(PoolsRoomSmokeTest.containing(a.getWindow().getDecorView(), "One trading app per phone"));
+        assertNotNull("the gate says what was withdrawn", PoolsRoomSmokeTest.containing(a.getWindow().getDecorView(), "were withdrawn, so no one can hit them"));
+        Shadows.shadowOf(app.getPackageManager()).removePackage(TradingGate.ATOMIX);
+    }
 }

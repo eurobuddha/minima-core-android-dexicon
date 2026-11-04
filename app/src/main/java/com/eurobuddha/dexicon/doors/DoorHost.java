@@ -110,7 +110,7 @@ public final class DoorHost {
     private final Map<TradingContext, String> coinBal = new EnumMap<>(TradingContext.class);
     private final Map<TradingContext, CommsScanner> noticeScanners = new EnumMap<>(TradingContext.class);
     private final OtcDb otcDb;
-    private final OtcController otc;
+    private OtcController otc;   // rebuilt on every market selection: the vendored controller pins TradingContext.active() at construction
     private CommsScanner otcScanner;
     private TradingContext otcScannerMarket;
     private boolean incomingLoaded;
@@ -151,13 +151,18 @@ public final class DoorHost {
         });
         otcDb = new OtcDb(app);
         engine.setOtcDb(otcDb);
-        otc = new OtcController(node, otcDb, engine, new OtcController.Ui() {
-            @Override public void onDealsChanged() { changed(); }
-            @Override public void note(String title, String body) { Notifier.alert(app, mx("AtomiX OTC · " + title), mx(body)); }
-        });
         for (TradingContext m : MARKETS) { books.put(m, Collections.emptyMap()); coinBal.put(m, null); }
         market = TradingContext.load(prefs);   // AtomiX's own key + default (MxUSD)
         select(market);
+        otc = newOtc();   // AFTER the saved market is active (OtcController captures TradingContext.active())
+    }
+
+    /** A controller for the market that is active NOW (the vendored OtcController captures it at construction). */
+    private OtcController newOtc() {
+        return new OtcController(node, otcDb, engine, new OtcController.Ui() {
+            @Override public void onDealsChanged() { changed(); }
+            @Override public void note(String title, String body) { Notifier.alert(app, mx("AtomiX OTC · " + title), mx(body)); }
+        });
     }
 
     /** The Minima dollar token is MxUSD in everything Dexicon shows (the vendored engine still says mxUSDT). */
@@ -199,16 +204,31 @@ public final class DoorHost {
     private void withdrawalLanded(TradingContext m) { prefs.edit().remove("withdraw_pending_" + m.key).apply(); }
     public boolean withdrawalPending(TradingContext m) { return prefs.getBoolean("withdraw_pending_" + m.key, false); }
 
-    /** Re-send the ACTIVE market's unconfirmed withdrawal (each pass) until it lands; a live re-publish supersedes it. */
+    /** Re-send an unconfirmed withdrawal (each pass) until it lands; a live re-publish of the ACTIVE market supersedes it.
+     *  The OTHER market's (a switch whose tombstone never confirmed) goes out under that market's own identity. */
     private void flushWithdrawal() {
-        if (!withdrawalPending(market) || !makerReady()) return;
-        if (prefs.getBoolean("auto_publish", false)) { withdrawalLanded(market); return; }
-        if (!PublishGate.tryAcquire(PublishGate.ORDER)) return;
-        final TradingContext m0 = market;
-        SwapOrderBook.publish(node, ls(), ids.get(market), tombstone(), new CommsTransport.SendCb() {
-            @Override public void onSent(String txpowid) { PublishGate.release(PublishGate.ORDER); withdrawalLanded(m0); changed(); }
-            @Override public void onFailed(String message) { PublishGate.release(PublishGate.ORDER); }
-        });
+        if (switching || !makerReady()) return;
+        if (withdrawalPending(market) && prefs.getBoolean("auto_publish", false)) withdrawalLanded(market);
+        for (TradingContext m : MARKETS) {
+            if (!withdrawalPending(m) || ids.get(m) == null) continue;
+            if (!PublishGate.tryAcquire(PublishGate.ORDER)) return;
+            Order t = m == market ? tombstone() : parkedTombstone(m);
+            tombstones.send(ids.get(m), t, new CommsTransport.SendCb() {
+                @Override public void onSent(String txpowid) { PublishGate.release(PublishGate.ORDER); withdrawalLanded(m); changed(); }
+                @Override public void onFailed(String message) { PublishGate.release(PublishGate.ORDER); }
+            });
+            return;   // one per pass (one ORDER publish at a time)
+        }
+    }
+
+    /** A tombstone for a market that is not active: its parked config (or an empty order), every pair off, my keys. */
+    private Order parkedTombstone(TradingContext m) {
+        Order o;
+        try { o = Order.fromConfigJson(new JSONObject(prefs.getString("market_" + m.key, "{}")).optString("order_config", "")); }
+        catch (Exception e) { o = Order.fromConfigJson(""); }
+        for (Order.Pair p : o.pairs.values()) p.enable = false;
+        o.minimaPublicKey = myPk(); o.ethAddress = wallet.address();
+        return o;
     }
 
     /** The ACTIVE market has a maker side configured or kept live: a liquid saved order (it arms the responder), the
@@ -256,6 +276,7 @@ public final class DoorHost {
         if (busy || scanning) return "An AtomiX swap is starting or the book is being read — try again in a moment.";
         final TradingContext current = market;
         switching = true;
+        com.eurobuddha.atomix.swap.PublishGate.bumpGen();   // void queued publications NOW, before the tombstone (and again at the flip)
         final boolean[] ran = {false};
         final Runnable[] watchdog = new Runnable[1];
         final Runnable proceed = () -> {
@@ -266,6 +287,7 @@ public final class DoorHost {
             market = target;
             TradingContext.setActive(target, prefs);
             select(target);
+            otc = newOtc();   // the old controller still pins the leaving market
             prefs.edit().remove("order_config").putBoolean("auto_publish", false)
                     .putBoolean(com.eurobuddha.atomix.swap.PriceOracle.P_ENABLE, false)
                     .putBoolean(com.eurobuddha.atomix.swap.PriceOracle.P_WITHDRAWN, true)
@@ -434,6 +456,7 @@ public final class DoorHost {
         if (!com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) {
             loadIncoming();
             armMaker();   // re-arm the responder guard from the PERSISTED config on every pass, before poll()
+            withdrawOnConflict();
             boolean live = prefs.getBoolean("auto_publish", false);
             if (prefs.getBoolean(PriceOracle.P_ENABLE, false) && live) { PriceOracle.refreshAsync(); maybePegWithdraw(); }
             engine.poll();
@@ -453,7 +476,7 @@ public final class DoorHost {
      *  block instead of a 90 s poll. MakerService drives it between polls. */
     public void discover() {
         if (!dnode.isEnabled() || !ready()) return;
-        if (!com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) armMaker();   // the gate / halt as of NOW, not the last poll
+        if (!com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) { armMaker(); withdrawOnConflict(); }   // the gate / halt as of NOW
         scanTake();
         scanOtc();
     }
@@ -542,7 +565,7 @@ public final class DoorHost {
             String e = it.next(), x = hashOf(e), k = marketOf(e);
             SwapDb.Swap s = db.getSwap(x);
             if (s != null && com.eurobuddha.atomix.swap.SwapVisibility.isTerminal(s)) { it.remove(); pruned = true; }
-            else if (k.isEmpty() || k.equals(market.key)) engine.addIncomingHashlock(x);   // only the ACTIVE market's
+            else if (k.equals(market.key)) engine.addIncomingHashlock(x);   // only the ACTIVE market's; untagged = market unknown
         }
         if (pruned) prefs.edit().putString("incoming_hashlocks", android.text.TextUtils.join(",", set)).apply();
     }
@@ -562,7 +585,39 @@ public final class DoorHost {
 
     /** The responder guard: AtomiX's armSafe order (empty while a pegged order is withdrawn) — or EMPTY while gated or
      *  halted, so every take declines. */
-    Order armMaker() { Order o = gated() || IdentityWatch.halted() ? new Order() : PriceOracle.armSafe(loadOrder(), prefs); engine.setMyOrder(o); return o; }
+    public Order armMaker() { Order o = gated() || IdentityWatch.halted() ? new Order() : PriceOracle.armSafe(loadOrder(), prefs); engine.setMyOrder(o); return o; }
+
+    /** The Activity saw the gate open or shut: re-arm the responder guard and withdraw a live market NOW, not next pass. */
+    public void gateChanged() {
+        if (com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) return;
+        armMaker();
+        withdrawOnConflict();
+    }
+
+    /**
+     * AtomiX or PandaPools was FOUND (TradingGate.conflict — never a merely unread MiniHub): my live ① market is withdrawn
+     * AT ONCE — guard disarmed, auto-publish off, tombstoned now (the belt's hourly cap bypassed for this one) — and my OTC
+     * offer too, so no buyer locks USDT for 2 h against a maker that will decline. The user places them again once
+     * trading is back. An unconfirmed tombstone is re-sent by {@link #flushWithdrawal} every pass.
+     */
+    void withdrawOnConflict() {
+        if (!TradingGate.conflict(app) || switching) return;
+        if (prefs.getBoolean("auto_publish", false) && tombstones.ready(ids.get(market))) {
+            prefs.edit().putBoolean("auto_publish", false).apply();   // kill-safe first
+            PublishGate.bumpGen();            // an in-flight publish must not re-list it
+            engine.setMyOrder(new Order());   // disarm now, even if the tombstone fails
+            final TradingContext m0 = market;
+            markWithdrawal(m0);
+            lastReassertMs = System.currentTimeMillis();   // this is the belt's tombstone, sent now
+            tombstones.send(ids.get(m0), tombstone(), new CommsTransport.SendCb() {
+                @Override public void onSent(String txpowid) { withdrawalLanded(m0); changed(); }
+                @Override public void onFailed(String message) { /* flushWithdrawal re-sends it */ }
+            });
+            Notifier.alert(app, "AtomiX · market withdrawn", "AtomiX or PandaPools is on this phone, so your " + DoorPlan.coin(m0)
+                    + " market was taken off the book. Place it again once trading is back.");
+        }
+        if (prefs.getBoolean("otc_enable", false) || prefs.getBoolean("otc_auto", false)) withdrawOtcOffer(s -> {});
+    }
 
     /** What a confirmed publish may arm: the order, unless the gate shut or the keys were lost while it was in flight. */
     private Order armable(Order o) { return gated() || IdentityWatch.halted() ? new Order() : o; }
@@ -581,7 +636,7 @@ public final class DoorHost {
      *  or NOW when the pegged price moved past the threshold / the feed just recovered. Runs off {@code last_publish_ok}
      *  (stamped ONLY on a confirmed publish), so a failed attempt retries on the next pass. */
     private void maybeAutoRepublish() {
-        if (IdentityWatch.halted() || gated() || !makerReady()) return;
+        if (switching || IdentityWatch.halted() || gated() || !makerReady()) return;
         if (!prefs.getBoolean("auto_publish", false)) return;
         long okStamp = prefs.getLong("last_publish_ok", 0);
         boolean reprice = PriceOracle.shouldReprice(prefs, okStamp);
@@ -675,7 +730,10 @@ public final class DoorHost {
         prefs.edit().putBoolean("auto_publish", true).apply();   // opt in to keep it live + fresh
         st.say("Publishing your order…");
         final CommsIdentity id = ids.get(market);
-        engine.ensureLadderCoins(o, !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE, () -> engine.publishFresh(ls(), id, o, gen, new CommsTransport.SendCb() {
+        engine.ensureLadderCoins(o, !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE, () -> {
+            String late = makerBlock();   // the gate may have shut (or the keys gone) during the coin reads
+            if (late != null) { st.say(late); return; }
+            engine.publishFresh(ls(), id, o, gen, new CommsTransport.SendCb() {
             @Override public void onSent(String txpowid) {
                 if (gen != PublishGate.gen()) return;
                 prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).apply();
@@ -689,7 +747,8 @@ public final class DoorHost {
                 h.postDelayed(() -> scanBooks(DoorHost.this::changed), 2000);
             }
             @Override public void onFailed(String message) { st.say("Publish failed: " + mx(message)); }
-        }));
+            });
+        });
     }
 
     /** AtomiX pushOrderEdit: a saved edit reaches the book NOW. A liquid order re-publishes; an emptied/disabled one goes
@@ -724,7 +783,11 @@ public final class DoorHost {
             }
             @Override public void onFailed(String message) { st.say((live ? "Update" : "Withdraw") + " failed: " + mx(message)); }
         };
-        if (live) engine.ensureLadderCoins(o, !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE, () -> engine.publishFresh(ls(), id, o, gen, cb));
+        if (live) engine.ensureLadderCoins(o, !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE, () -> {
+            String late = makerBlock();   // the gate may have shut during the coin reads: a live order is not published
+            if (late != null) { st.say("Saved. " + late); return; }
+            engine.publishFresh(ls(), id, o, gen, cb);
+        });
         else SwapOrderBook.publish(node, ls(), id, o, cb);   // tombstone: no coins/balance read needed
     }
 
@@ -818,7 +881,7 @@ public final class DoorHost {
 
     /** SwapService.maybeRepublishOtc: the OTC offer ages off the board (~1 h) exactly like the order. */
     private void maybeRepublishOtc() {
-        if (IdentityWatch.halted() || gated() || !makerReady()) return;
+        if (switching || IdentityWatch.halted() || gated() || !makerReady()) return;
         if (!prefs.getBoolean("otc_auto", false)) return;
         long okStamp = prefs.getLong("otc_last_publish_ok", 0);
         long interval = otcMisses >= 2 ? 60 * 60_000 : REPUBLISH_INTERVAL_MS;
@@ -883,10 +946,23 @@ public final class DoorHost {
             otcScanner = new CommsScanner(node, crypto.get(market), new CommsScanner.MetaStore() {
                 @Override public String getMeta(String k, String def) { return prefs.getString("otcmeta_" + k, def); }
                 @Override public void setMeta(String k, String v) { prefs.edit().putString("otcmeta_" + k, v).apply(); }
-            }, OtcMessage.address(), otc::route, (ok, n) -> {});
+            }, OtcMessage.address(), this::routeOtc, (ok, n) -> {});
         }
         otcScanner.scan(0);
         otc.expireStale(System.currentTimeMillis());
+    }
+
+    /** OTC routing (SwapService's otc::route) — except, while gated or halted, a message that STARTS execution (an ACCEPT,
+     *  on which an instigator locks leg 1; an EXECUTE, on which an LP locks its counter-leg) is not routed. Deals already
+     *  EXECUTING with a hash keep settling (the engine's poll, not these messages, does that). */
+    boolean routeOtc(String coinid, Opened opened, JSONObject coin) {
+        if ((gated() || IdentityWatch.halted()) && startsExecution(opened)) return false;
+        return otc.route(coinid, opened, coin);
+    }
+
+    static boolean startsExecution(Opened opened) {
+        OtcMessage m = opened == null ? null : OtcMessage.fromWire(opened.plaintext);
+        return m != null && (OtcMessage.ACCEPT.equals(m.type) || OtcMessage.EXECUTE.equals(m.type));
     }
 
     /**
@@ -904,7 +980,7 @@ public final class DoorHost {
             if (m != market) return;
             Order mine = book.get(me);
             boolean autoPub = prefs.getBoolean("auto_publish", false), withdrawn = prefs.getBoolean(PriceOracle.P_WITHDRAWN, false);
-            if (autoPub && !withdrawn && !gated()) checkPresence(mine == null ? 0 : mine.ts, "last_publish_ok", true);
+            if (autoPub && !withdrawn && !TradingGate.conflict(app)) checkPresence(mine == null ? 0 : mine.ts, "last_publish_ok", true);
             else if (mine != null && mine.hasLiquidity() && genAtScan == PublishGate.gen()) reassertTombstone();
         }, err -> {});
         if (prefs.getBoolean("otc_auto", false)) OtcBook.scan(node, ls(), book -> {
@@ -1032,6 +1108,7 @@ public final class DoorHost {
     private void fireLeg(TradingContext market, DoorPlan.Plan plan, String to, int i, int ok, Progress pr) {
         final int total = plan.legs.size();
         if (i >= total) { endTake(pr, "AtomiX: " + ok + "/" + total + " part" + (total == 1 ? "" : "s") + (plan.sell ? " locked" : " sent") + " — settlement continues in the background.", false); return; }
+        if (gated()) { endTake(pr, "Stopped at part " + (i + 1) + ": trading is off (one trading app per phone). Nothing more was started.", true); return; }
         final DoorPlan.Leg leg = plan.legs.get(i);
         final String coin = DoorPlan.coin(market);
         if (!SwapOrderBook.makerLive(books.get(market).get(leg.maker.signerPk), DoorPlan.SYM, plan.sell)) {

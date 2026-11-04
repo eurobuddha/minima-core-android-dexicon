@@ -208,7 +208,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         if (getIntent() != null && getIntent().getIntExtra(EXTRA_POOLS_PAGE, -1) >= 0) goToTab(getIntent().getIntExtra(EXTRA_POOLS_PAGE, -1));   // a pool notification
         applyGate();
 
-        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { followTake(); settleStage(); repaint(); retryIfDue(); restIfDue(); warmWallet(); } };
+        changedReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { applyGate(); followTake(); settleStage(); repaint(); retryIfDue(); restIfDue(); warmWallet(); } };
         ContextCompat.registerReceiver(this, changedReceiver, new IntentFilter(MakerService.ACTION_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
         nodeReceiver = new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { if (paired) { readBalances(); readBlock(); } } };
         ContextCompat.registerReceiver(this, nodeReceiver, new IntentFilter(NodeTransportService.EVENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
@@ -1309,6 +1309,10 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     void applyGate() {
         if (closed || chromeRoot == null) return;
         boolean blocked = TradingGate.blocked(this);
+        if (lastBlocked == null || lastBlocked != blocked) {   // the gate moved: the DOORS responder guard and a live ① market follow NOW
+            lastBlocked = blocked;
+            try { com.eurobuddha.dexicon.doors.DoorHost.get(this).gateChanged(); } catch (RuntimeException e) { android.util.Log.w("Dexicon", "gate → doors: " + e); }
+        }
         if (blocked) {
             if (!Boolean.TRUE.equals(gateShown)) { haltTrading(); gate = new GateView(this); setContentView(gate); gateShown = true; }
             gate.render();
@@ -1329,7 +1333,10 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         stopCcyGlow();
     }
 
-    void recheckGate() { if (node != null && paired) TradingGate.checkMiniHub(this, node, this::applyGate); else applyGate(); }
+    private Boolean lastBlocked;
+
+    /** Apply what is known NOW (an app just installed / removed), then re-read the MiniHub and apply again. */
+    void recheckGate() { applyGate(); if (node != null && paired) TradingGate.checkMiniHub(this, node, this::applyGate); }
 
     /** Opens the app's own "Hand over to Dexicon" step; it answers only to Dexicon (it checks the calling package).
      *  {@code remove}: on a FRESH yes for the installed version, uninstall at once — nothing is stored to replay. */

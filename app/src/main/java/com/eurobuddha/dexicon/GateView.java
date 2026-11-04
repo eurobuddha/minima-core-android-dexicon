@@ -55,7 +55,9 @@ final class GateView extends ScrollView {
         warn.addView(step("1", "Two AtomiX makers on one wallet.", "Both could offer, and lock, the same coins. A swap could stall halfway and have to wait for its timelock refund."));
         warn.addView(step("2", "Two keepers for the same pool.", "Each one rebuilds the pool's reserves every ~900 blocks, and they would spend the same coins and reject each other's transactions. Traders would see a dead pool."));
         warn.addView(step("3", "Two records of every trade.", "A swap started in one app can't be seen or refunded from the other, so you could lose track of it."));
-        warn.addView(para("To keep your funds safe, Dexicon won't trade until the others are gone. Nothing has been touched: your wallet, swaps and pools are exactly as they were. Anything Dexicon already had in flight keeps settling in the background."));
+        warn.addView(para("To keep your funds safe, Dexicon won't trade until the others are gone. Your open ③ orders and your ① AtomiX market "
+                + "(and OTC offer) were withdrawn, so no one can hit them while trading is off: place them again when trading is back. "
+                + "Your wallet, swaps and pools are untouched, and anything Dexicon already had in flight keeps settling in the background."));
 
         body.addView(Ui.text(act, "Move to Dexicon. Each remove button unlocks only when nothing you own could be lost.", 12.5f, Design.DIM(), Design.sans()), Ui.wide(act, 4, 12));
 

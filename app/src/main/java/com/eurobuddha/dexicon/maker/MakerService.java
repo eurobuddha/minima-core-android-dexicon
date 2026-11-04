@@ -425,10 +425,11 @@ public class MakerService extends Service {
     }
     private void unlockCoins(List<String> ids) { for (String id : ids) coinLocks.remove(id); }
 
-    private void handleTake(JSONObject take, Runnable next) {
+    void handleTake(JSONObject take, Runnable next) {
         final String taker = take.optString("_from", ""), orderId = take.optString("orderId", ""), hex = take.optString("txn", "");
         // a peer's txn goes into txnview/txnimport: bounded hex only (security review 30 Oct)
         if (taker.isEmpty() || orderId.isEmpty() || !hex.matches("(0x)?[0-9A-Fa-f]{2,200000}")) { next.run(); return; }
+        if (com.eurobuddha.dexicon.TradingGate.blocked(this)) { reply(taker, refused(orderId, PAUSED)); next.run(); return; }   // the gate shut mid-batch
         final MyOrder o = db.myOrder(orderId);
         if (o == null || !o.live()) { reply(taker, refused(orderId, "order not live")); next.run(); return; }
         if (!lockCoins(o.coins)) { reply(taker, refused(orderId, "taken")); next.run(); return; }
