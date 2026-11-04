@@ -51,6 +51,8 @@ public final class Ledger {
         public boolean live, usd, header, ticking, retryForward, refundEnabled;
         /** AtomiX's "Check now": a swap not yet COMPLETE or REFUNDED can be inspected live on both chains. */
         public boolean checkable;
+        /** AtomiX's ✕: the live lists offer to hide this card (set by the list, never by History). */
+        public boolean hideable;
         public String refundLabel;
         public long sortMs;
         public final List<Step> steps = new ArrayList<>();

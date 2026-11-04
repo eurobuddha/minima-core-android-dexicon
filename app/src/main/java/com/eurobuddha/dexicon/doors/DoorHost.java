@@ -1142,6 +1142,25 @@ public final class DoorHost {
     /** Every AtomiX swap on this node: mine as taker AND my market's fills as maker (AtomiX mySwapsList shows both; this
      *  was taker-only from phase 1, before Dexicon could make a market, so maker fills were never shown — 0.1.96). */
     public List<SwapDb.Swap> swaps() { return new ArrayList<>(db.allSwaps()); }
+
+    /** AtomiX dismissedSwaps (same pref key): cards the user hid from the LIVE lists. UI only — the engine keeps driving
+     *  the swap, so funds actually locked on-chain still auto-refund at their timelock. History still lists them. */
+    public java.util.Set<String> dismissed() {
+        java.util.Set<String> set = new java.util.HashSet<>();
+        for (String h : prefs.getString("dismissed_swaps", "").split(",")) if (!h.isEmpty()) set.add(h);
+        return set;
+    }
+    public void dismiss(String hash) {
+        java.util.Set<String> set = dismissed(); set.add(hash);
+        prefs.edit().putString("dismissed_swaps", android.text.TextUtils.join(",", set)).apply();
+    }
+    /** Every swap the live lists show (Swap, Activity): all but the ones the user hid. */
+    public List<SwapDb.Swap> liveListSwaps() {
+        java.util.Set<String> hidden = dismissed();
+        List<SwapDb.Swap> out = new ArrayList<>();
+        for (SwapDb.Swap s : db.allSwaps()) if (!hidden.contains(s.hash)) out.add(s);
+        return out;
+    }
     public List<SwapDb.Event> events(String hash) { return db.getEvents(hash); }
     public JSONObject forward(String hash) { return DoorForwards.get(prefs, hash); }
     public void retryForward(String hash) { DoorForwards.retry(prefs, hash); changed(); }

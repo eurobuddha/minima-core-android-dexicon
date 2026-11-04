@@ -31,6 +31,8 @@ public final class LedgerView extends LinearLayout {
         void retry(String id);
         /** AtomiX's "Check now" (only items marked checkable): advance it and show the live on-chain report. */
         default void check(String id) {}
+        /** AtomiX's ✕ (only items marked hideable): hide the card from the live lists. */
+        default void hide(String id) {}
     }
 
     private static final int USD_GREEN = 0xFF26A17B;   // AtomiX MxUSD market green (DoorsTab.USD_GREEN)
@@ -38,7 +40,7 @@ public final class LedgerView extends LinearLayout {
     private final MainActivity act;
     private final String prefix;
     private final Hooks hooks;
-    private final TextView icon, title, amount, sub, time, chev, stepsLabel, refund, retry, check, proofBtn;
+    private final TextView icon, title, amount, sub, time, chev, stepsLabel, refund, retry, check, hide, proofBtn;
     private final LinearLayout head, body, steps, facts, actions, proofBox, proofList;
     private TextView chip;
     private Ledger.Item item;
@@ -105,6 +107,9 @@ public final class LedgerView extends LinearLayout {
         check = Ui.button(act, "Check now");
         check.setOnClickListener(v -> { if (hooks != null && item != null) hooks.check(item.id); });
         actions.addView(check, new LayoutParams(bl));
+        hide = Ui.button(act, "Hide");
+        hide.setOnClickListener(v -> { if (hooks != null && item != null) hooks.hide(item.id); });
+        actions.addView(hide, new LayoutParams(bl));
         proofBtn = Ui.text(act, "", 12f, Design.DIM(), Design.sansBold());
         proofBtn.setMinHeight(Design.dp(act, 44)); proofBtn.setGravity(Gravity.CENTER_VERTICAL);
         proofBtn.setPadding(Design.dp(act, 4), 0, Design.dp(act, 4), 0);
@@ -173,6 +178,7 @@ public final class LedgerView extends LinearLayout {
         retry.setVisibility(it.retryForward ? VISIBLE : GONE);
         retry.setTextColor(liveColor());
         check.setVisibility(it.checkable ? VISIBLE : GONE);
+        hide.setVisibility(it.hideable ? VISIBLE : GONE);
         check.setTextColor(liveColor());
         paintFolds();
         if (it.ticking && !wasTicking && isAttachedToWindow()) { removeCallbacks(ticker); postDelayed(ticker, 1000); }

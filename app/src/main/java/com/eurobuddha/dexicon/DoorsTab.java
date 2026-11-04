@@ -641,7 +641,7 @@ public final class DoorsTab extends LinearLayout {
 
     private void paintStages() {
         StringBuilder sig = new StringBuilder();
-        List<SwapDb.Swap> all = host.swaps();
+        List<SwapDb.Swap> all = host.liveListSwaps();
         SwapDb.Swap sw = latestRelevant(all);
         boolean paired = act.paired();
         boolean coinOk = DoorPlan.parseD(host.coinBalance(route()), 0) > 0;
@@ -734,7 +734,7 @@ public final class DoorsTab extends LinearLayout {
     private void renderSwaps(LinearLayout into) {
         List<SwapDb.Swap> swaps = host.swaps();
         List<Ledger.Item> live = new java.util.ArrayList<>();
-        for (SwapDb.Swap s : swaps) { Ledger.Item it = hooks.item(s); if (it.live) live.add(it); }
+        for (SwapDb.Swap s : host.liveListSwaps()) { Ledger.Item it = hooks.item(s); it.hideable = true; if (it.live) live.add(it); }
         LedgerView.sync(act, into, live, "door", hooks);
         progressLabel.setVisibility(live.isEmpty() ? GONE : VISIBLE);
         finished.setText(swaps.isEmpty() ? "No AtomiX swaps yet. ENTRY brings ERC20 USDT in as " + coin() + "; EXIT takes it out as USDT. MINIMA and MxUSD holders need no AtomiX swap."
@@ -768,6 +768,17 @@ public final class DoorsTab extends LinearLayout {
             act.repaint();
             host.refundNow(s.hash, answer -> { ANSWERS.put(s.hash, answer); act.repaint(); });
         }
+        /** AtomiX dismissSwap / confirmHideSwap: a finished card hides at once; a still-open one asks first. */
+        @Override public void hide(String id) {
+            SwapDb.Swap s = byId.get(id);
+            if (s == null) return;
+            if (SwapVisibility.isTerminal(s)) { host.dismiss(s.hash); act.repaint(); return; }
+            act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Hide this swap?")
+                    .setMessage("This only removes the card. If any funds were locked on-chain they still auto-refund at the timelock — hiding doesn't touch them. It stays in History.")
+                    .setPositiveButton("Hide", (d, w) -> { host.dismiss(s.hash); act.repaint(); })
+                    .setNegativeButton("Cancel", null).show());
+        }
+
         @Override public void check(String id) { SwapDb.Swap s = byId.get(id); if (s != null) checkNow(act, host, s.hash); }
 
         /** AtomiX checkNow + showReport: "Swap status", the inspector's lines, Check again / Close. */

@@ -176,4 +176,30 @@ public class DoorsTabSmokeTest {
         find(root, "My activity").performClick();
         assertNull(PoolsRoomSmokeTest.containing(root, "No market trades observed yet") != null && PoolsRoomSmokeTest.containing(root, "No market trades observed yet").isShown() ? "shown" : null);
     }
+
+    /** 0.2.8 (AtomiX dismissSwap): a finished card hides at once, a live one asks first; only the card goes, never the swap. */
+    @Test public void aSwapCardCanBeHidden() {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        MainActivity a = launch();
+        com.eurobuddha.dexicon.doors.DoorHost host = com.eurobuddha.dexicon.doors.DoorHost.get(app);
+        DoorsTab.Swaps hooks = new DoorsTab.Swaps(a, host);
+        com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap();
+        s.hash = "0x" + "9c".repeat(32); s.role = "INITIATOR"; s.direction = "ERC20_TO_MINIMA";
+        s.sellToken = "USDT"; s.sellAmount = "1"; s.buyToken = "MxUSD"; s.buyAmount = "1"; s.created = System.currentTimeMillis(); s.updated = s.created;
+        try {
+            s.status = "STARTED";
+            Ledger.Item live = hooks.item(s);
+            hooks.hide(live.id);
+            android.app.AlertDialog d = (android.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            assertTrue("a live swap asks first", d.isShowing());
+            assertFalse(host.dismissed().contains(s.hash));
+            d.getButton(android.app.AlertDialog.BUTTON_NEGATIVE).performClick();
+            s.status = "COMPLETE";
+            Ledger.Item done = hooks.item(s);
+            hooks.hide(done.id);
+            assertTrue("a finished one hides at once", host.dismissed().contains(s.hash));
+        } finally { host.prefs().edit().remove("dismissed_swaps").apply(); }
+    }
 }
