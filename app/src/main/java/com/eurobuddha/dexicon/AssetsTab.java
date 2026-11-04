@@ -179,13 +179,24 @@ public final class AssetsTab extends LinearLayout {
         return r.isEmpty() || r.equals("-0") ? "0" : r;
     }
 
-    /** What AtomiX swaps are bringing in for this coin right now: the counterparty has locked and the collection is
-     *  under way (LOCKED / CLAIMING), until the swap completes. */
-    static BigDecimal atomixIncoming(java.util.List<com.eurobuddha.atomix.swap.SwapDb.Swap> swaps, String coin) {
+    /** What AtomiX swaps are bringing in for this coin that the node does NOT yet show: the counterparty has locked and
+     *  the collection is under way (LOCKED / CLAIMING). Once my claim is submitted the node's own "unconfirmed" carries
+     *  those coins, so they leave this sum (never counted twice); a maker's fill counts only once its own lock went out. */
+    static BigDecimal atomixIncoming(java.util.List<com.eurobuddha.atomix.swap.SwapDb.Swap> swaps, String coin,
+                                     java.util.function.Function<String, java.util.List<com.eurobuddha.atomix.swap.SwapDb.Event>> events) {
         BigDecimal sum = BigDecimal.ZERO;
         for (com.eurobuddha.atomix.swap.SwapDb.Swap s : swaps) {
             boolean coming = com.eurobuddha.atomix.swap.SwapDb.ST_LOCKED.equals(s.status) || com.eurobuddha.atomix.swap.SwapDb.ST_CLAIMING.equals(s.status);
-            if (coming && coin.equals(com.eurobuddha.dexicon.doors.DoorForwards.label(s.buyToken))) sum = sum.add(Util.dec(s.buyAmount));
+            if (!coming || !coin.equals(com.eurobuddha.dexicon.doors.DoorForwards.label(s.buyToken))) continue;
+            boolean claimed = false, myLock = false;
+            java.util.List<com.eurobuddha.atomix.swap.SwapDb.Event> ev = events.apply(s.hash);
+            if (ev != null) for (com.eurobuddha.atomix.swap.SwapDb.Event e : ev) {
+                if (com.eurobuddha.atomix.swap.SwapDb.EV_MINIMA_CLAIM_SUBMITTED.equals(e.event) || com.eurobuddha.atomix.swap.SwapDb.EV_COLLECT.equals(e.event)) claimed = true;
+                if (com.eurobuddha.atomix.swap.SwapDb.EV_CPSENT.equals(e.event)) myLock = true;
+            }
+            if (claimed) continue;                                       // already in the node's unconfirmed / sendable
+            if ("RESPONDER".equals(s.role) && !myLock) continue;         // a maker row saved before its lock was sent
+            sum = sum.add(Util.dec(s.buyAmount));
         }
         return sum;
     }
@@ -207,7 +218,8 @@ public final class AssetsTab extends LinearLayout {
         // A wallet shows what is arriving (owner, 4 Nov) — outside the fold, whenever there is something:
         // unconfirmed = the node's received-but-unconfirmed coins; settling = AtomiX collections under way + trades confirming
         BigDecimal unc = unconfirmed == null ? BigDecimal.ZERO : unconfirmed;
-        BigDecimal swapIn = atomixIncoming(com.eurobuddha.dexicon.doors.DoorHost.get(act).swaps(), name);
+        com.eurobuddha.dexicon.doors.DoorHost doors = com.eurobuddha.dexicon.doors.DoorHost.get(act);
+        BigDecimal swapIn = atomixIncoming(doors.swaps(), name, doors::events);
         BigDecimal trades = settling == null ? BigDecimal.ZERO : settling;
         if (unc.signum() > 0)
             c.addView(t("unconfirmed +" + bal(name, unc) + "  ·  received, waiting for confirmations", 0xFFE6A23C, 12f, Design.mono()), Ui.wide(act, 2, 0));

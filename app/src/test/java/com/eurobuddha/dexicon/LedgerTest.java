@@ -361,8 +361,17 @@ public class LedgerTest {
         java.util.List<com.eurobuddha.atomix.swap.SwapDb.Swap> l = new java.util.ArrayList<>();
         String[][] rows = {{"LOCKED", "MxUSD", "29.236826"}, {"CLAIMING", "MxUSD", "1"}, {"STARTED", "MxUSD", "5"}, {"COMPLETE", "MxUSD", "7"}, {"LOCKED", "USDT", "3"}, {"LOCKED", "MINIMA", "100"}};
         for (String[] r : rows) { com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap(); s.status = r[0]; s.buyToken = r[1]; s.buyAmount = r[2]; l.add(s); }
-        assertEquals(0, new java.math.BigDecimal("30.236826").compareTo(AssetsTab.atomixIncoming(l, "MxUSD")));
-        assertEquals(0, new java.math.BigDecimal("100").compareTo(AssetsTab.atomixIncoming(l, "MINIMA")));
+        java.util.Map<String, java.util.List<com.eurobuddha.atomix.swap.SwapDb.Event>> ev = new java.util.HashMap<>();
+        for (int i = 0; i < l.size(); i++) { l.get(i).hash = "h" + i; l.get(i).role = "INITIATOR"; }
+        assertEquals(0, new java.math.BigDecimal("30.236826").compareTo(AssetsTab.atomixIncoming(l, "MxUSD", ev::get)));
+        assertEquals(0, new java.math.BigDecimal("100").compareTo(AssetsTab.atomixIncoming(l, "MINIMA", ev::get)));
+        // 0.2.24: once my claim is submitted the node's own unconfirmed has it — never counted twice
+        com.eurobuddha.atomix.swap.SwapDb.Event claim = new com.eurobuddha.atomix.swap.SwapDb.Event(); claim.event = com.eurobuddha.atomix.swap.SwapDb.EV_MINIMA_CLAIM_SUBMITTED;
+        ev.put("h0", java.util.Collections.singletonList(claim));
+        assertEquals(0, java.math.BigDecimal.ONE.compareTo(AssetsTab.atomixIncoming(l, "MxUSD", ev::get)));
+        // a maker row saved LOCKED before its own lock was sent is not "collecting"
+        l.get(1).role = "RESPONDER";
+        assertEquals(0, java.math.BigDecimal.ZERO.compareTo(AssetsTab.atomixIncoming(l, "MxUSD", ev::get)));
     }
 
     /** 0.2.20 RULE 2: an engine note naming "mxUSDT" reaches the screen as MxUSD. */
