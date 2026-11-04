@@ -58,11 +58,12 @@ import java.util.concurrent.Executors;
  * {@link #poll()} every ~90 s with the app closed (claims, ETH withdraws, refunds, forwards); the DOORS tab drives it
  * too while open.
  *
- * BOTH AtomiX markets: the engine takes in {@link TradingContext#active()} only (and MinimaHtlc's active token), and its
- * book scan aborts if the selection changes mid-scan. So {@link #scanBooks} scans the MxUSD market then the MINIMA
- * market, each under its own selection, one after the other; {@link #take} selects the route's market and holds it — no
- * scan, no second take — until every part has called back. Settlement is market-agnostic (claims and refunds read each
- * coin's own token; SwapEngine.expectedTokenId attributes by the swap's recorded label), so one poll settles both.
+ * ONE AtomiX market at a time, exactly as in AtomiX (owner, 3 Nov 2026): {@link #market()} is USDT ⇄ MxUSD or
+ * USDT ⇄ MINIMA, persisted in this host's prefs under AtomiX's own key ({@link TradingContext#PREF_KEY}). Swaps, the
+ * book scan, the maker and OTC follow it; {@link #switchMarket} is AtomiX's doSwitchCurrency (park the leaving market's
+ * config, tombstone a live market, quiesce, restore the arriving market's config). Settlement is market-agnostic (claims
+ * and refunds read each coin's own token; SwapEngine.expectedTokenId attributes by the swap's recorded label), so one
+ * poll settles swaps of both markets.
  */
 public final class DoorHost {
 
@@ -98,6 +99,9 @@ public final class DoorHost {
     private final Map<TradingContext, String> coinBal = new EnumMap<>(TradingContext.class);
     private final Map<TradingContext, CommsScanner> noticeScanners = new EnumMap<>(TradingContext.class);
 
+    private TradingContext market;
+    /** Why this launch stayed in MINIMA mode (owner Q1, 4 Nov 2026), or null. Shown as a banner on ①. */
+    private String launchNote;
     private boolean walletDeriving, minimaSettingUp, keysLoaded, keysLoading, identityDeriving, scanning, busy, forwarding;
     private long lastRegisterMs;
     private String bootNote = "Waiting for the node…";
@@ -120,14 +124,141 @@ public final class DoorHost {
         rpc = new EthRpc(net.defaultRpc);
         engine.setNetwork(rpc, net);
         for (TradingContext m : MARKETS) { books.put(m, Collections.emptyMap()); coinBal.put(m, null); }
-        select(TradingContext.MXUSDT);
+        market = TradingContext.load(prefs);   // AtomiX's own key + default (MxUSD)
+        select(market);
     }
 
     /** Tell the Activity (its ACTION_CHANGED receiver repaints) that door state moved. */
     void changed() { try { app.sendBroadcast(new Intent(MakerService.ACTION_CHANGED).setPackage(app.getPackageName())); } catch (Exception ignored) {} }
 
-    /** The engine's market selection — TradingContext (AtomiX's own API, not persisted here) + the Minima token. */
+    /** The engine's market selection — TradingContext (AtomiX's own API) + the Minima token. */
     private void select(TradingContext m) { TradingContext.setActive(m, null); minima.setActiveToken(m.tokenId); }
+
+    // ------------------------------------------------------------------ the one active market (AtomiX's currency switch)
+
+    public TradingContext market() { return market; }
+    /** This host's prefs — AtomiX's keys for the ACTIVE market (order_config, auto_publish, peg_*, otc_*). */
+    public SharedPreferences prefs() { return prefs; }
+    public String launchNote() { return market == TradingContext.MINIMA ? launchNote : null; }
+
+    /** Is a swap of {@code m} (either role) still in flight — anything left to claim or refund? */
+    public boolean inFlight(TradingContext m) {
+        for (SwapDb.Swap s : db.allSwaps())
+            if (!com.eurobuddha.atomix.swap.SwapVisibility.isTerminal(s) && TradingContext.forSwap(s.sellToken, s.buyToken) == m) return true;
+        return false;
+    }
+
+    /** The ACTIVE market has a maker side configured or kept live: a liquid saved order (it arms the responder), the
+     *  order kept published, or an OTC offer. Read from the active prefs — they are always the active market's. */
+    public boolean makerLive() {
+        boolean liquid = false;
+        try { liquid = Order.fromConfigJson(prefs.getString("order_config", "")).hasLiquidity(); } catch (Exception ignored) {}
+        return liquid || prefs.getBoolean("auto_publish", false) || prefs.getBoolean("otc_enable", false) || prefs.getBoolean("otc_auto", false);
+    }
+
+    /**
+     * LAUNCH RULE (owner Q1, 4 Nov 2026): every launch opens in MxUSD mode — EXCEPT while a USDT ⇄ MINIMA swap is in
+     * flight or the MINIMA maker market is live: then it stays in MINIMA mode with a banner saying why. A live market is
+     * never flipped silently. Returns the banner text, or null.
+     */
+    public String applyLaunchRule() {
+        launchNote = null;
+        if (market != TradingContext.MINIMA) return null;
+        boolean swap = inFlight(TradingContext.MINIMA), live = makerLive();
+        if (swap || live) {
+            launchNote = "Opened in MINIMA mode: " + (swap && live ? "a USDT ⇄ MINIMA swap is in flight and your MINIMA market is live"
+                    : swap ? "a USDT ⇄ MINIMA swap is in flight" : "your MINIMA market is live")
+                    + ". Dexicon never switches a live market by itself. Use the ⇄ pill to go back to MxUSD when you are ready.";
+            return launchNote;
+        }
+        if (busy || scanning) return null;   // never re-select under a running take or scan
+        switchMarket(TradingContext.MXUSDT, null);   // nothing live: config parked, MxUSD config restored
+        return null;
+    }
+
+    /**
+     * AtomiX's doSwitchCurrency (apks/atomix MainActivity), on this host's prefs. Returns an error, or null when the
+     * switch is under way; {@code done} runs once it has happened.
+     *
+     * FUND-SAFETY (AtomiX's words): the priced market state (ladder, peg config, oracle price) is NOT per-currency, so
+     * the market is QUIESCED before flipping — otherwise the previous currency's ladder/price would bleed into the new
+     * currency's book at a ~100–200× mispriced rate. After a switch the market is OFF unless the arriving currency has a
+     * parked config of its own. A live leaving market is tombstoned first (current identity, current sentinel).
+     */
+    public String switchMarket(final TradingContext target, final Runnable done) {
+        if (target == market) { if (done != null) done.run(); return null; }
+        if (busy || scanning) return "An AtomiX swap is starting or the book is being read — try again in a moment.";
+        final TradingContext current = market;
+        snapshotMarket(prefs, current.key);
+        final boolean[] ran = {false};
+        final Runnable[] watchdog = new Runnable[1];
+        final Runnable proceed = () -> {
+            if (ran[0]) return; ran[0] = true;
+            if (watchdog[0] != null) h.removeCallbacks(watchdog[0]);
+            com.eurobuddha.atomix.swap.PublishGate.bumpGen();   // queued publications of the leaving market are void
+            market = target;
+            TradingContext.setActive(target, prefs);
+            select(target);
+            prefs.edit().remove("order_config").putBoolean("auto_publish", false)
+                    .putBoolean(com.eurobuddha.atomix.swap.PriceOracle.P_ENABLE, false)
+                    .putBoolean(com.eurobuddha.atomix.swap.PriceOracle.P_WITHDRAWN, true)
+                    .remove("last_publish_ok").putBoolean("otc_enable", false).putBoolean("otc_auto", false)
+                    .remove("otc_last_publish_ok").apply();
+            com.eurobuddha.atomix.swap.PriceOracle.resetForSwitch(prefs);
+            try { engine.setMyOrder(new Order()); } catch (Exception ignored) {}   // disarm now
+            restoreMarket(prefs, target.key);
+            for (TradingContext m : MARKETS) books.put(m, Collections.emptyMap());
+            launchNote = null;
+            changed();
+            if (done != null) done.run();
+        };
+        watchdog[0] = proceed;
+        CommsIdentity id = ids.get(current);
+        if (makerLive() && id != null && minima.ready() && wallet.ready()) {
+            try {
+                Order o = Order.fromConfigJson(prefs.getString("order_config", ""));
+                for (Order.Pair p : o.pairs.values()) p.enable = false;
+                o.minimaPublicKey = prefs.getString("swap_pk", "");
+                o.ethAddress = wallet.address();
+                SwapOrderBook.publish(node, ls(), id, o, new CommsTransport.SendCb() {
+                    @Override public void onSent(String txpowid) { h.post(proceed); }
+                    @Override public void onFailed(String message) { h.post(proceed); }   // it ages off the book (~1 h)
+                });
+                h.postDelayed(proceed, 4000);   // never block the switch on a hung post
+            } catch (Exception e) { proceed.run(); }
+        } else proceed.run();
+        return null;
+    }
+
+    // Per-currency market memory (AtomiX MainActivity.MKT_STR / MKT_BOOL): the active prefs are always the active
+    // currency's; on a switch the leaving config is PARKED under its own key and the arriving one RESTORED. Config only —
+    // runtime/price state starts fresh so the peg re-fetches the target currency's own price.
+    private static final String[] MKT_STR = { "order_config", com.eurobuddha.atomix.swap.PriceOracle.P_STEP, com.eurobuddha.atomix.swap.PriceOracle.P_SIZE,
+            com.eurobuddha.atomix.swap.PriceOracle.P_ASK_SIZE, com.eurobuddha.atomix.swap.PriceOracle.P_BID_SIZE, com.eurobuddha.atomix.swap.PriceOracle.P_BIAS,
+            com.eurobuddha.atomix.swap.PriceOracle.P_REPRICE, com.eurobuddha.atomix.swap.PriceOracle.P_LEVELS, "otc_sell_size", "otc_buy_size" };
+    private static final String[] MKT_BOOL = { "auto_publish", com.eurobuddha.atomix.swap.PriceOracle.P_ENABLE, "otc_enable", "otc_auto" };
+
+    static void snapshotMarket(SharedPreferences prefs, String curKey) {
+        try {
+            JSONObject j = new JSONObject();
+            for (String k : MKT_STR) { String v = prefs.getString(k, null); if (v != null) j.put(k, v); }
+            for (String k : MKT_BOOL) j.put(k, prefs.getBoolean(k, false));
+            prefs.edit().putString("market_" + curKey, j.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    static void restoreMarket(SharedPreferences prefs, String targetKey) {
+        String raw = prefs.getString("market_" + targetKey, null);
+        if (raw == null) return;
+        SharedPreferences.Editor e = prefs.edit();
+        try {
+            JSONObject j = new JSONObject(raw);
+            for (String k : MKT_STR) if (j.has(k)) e.putString(k, j.getString(k));
+            for (String k : MKT_BOOL) if (j.has(k)) e.putBoolean(k, j.getBoolean(k));
+            e.putBoolean(com.eurobuddha.atomix.swap.PriceOracle.P_WITHDRAWN, false).putBoolean(com.eurobuddha.atomix.swap.PriceOracle.P_TOMBSTONED, false);
+        } catch (Exception ignored) {}
+        e.apply();
+    }
 
     // ------------------------------------------------------------------ boot (AtomiX SwapService.ensureDerivations)
 
@@ -261,18 +392,13 @@ public final class DoorHost {
 
     // ------------------------------------------------------------------ reads
 
-    /** Both AtomiX books, one after the other, each under its own market selection. */
+    /** The ACTIVE market's AtomiX book. */
     public void scanBooks(Runnable done) {
         if (scanning || busy || !ready()) { if (done != null) done.run(); return; }
         scanning = true;
-        final TradingContext home = TradingContext.active();
-        scanOne(0, () -> { select(home); scanning = false; if (done != null) done.run(); });
-    }
-    private void scanOne(int i, Runnable done) {
-        if (i >= MARKETS.length) { done.run(); return; }
-        final TradingContext m = MARKETS[i];
-        select(m);
-        SwapOrderBook.scan(node, ls(), book -> { books.put(m, new LinkedHashMap<>(book)); scanOne(i + 1, done); }, err -> scanOne(i + 1, done));
+        final TradingContext m = market;
+        SwapOrderBook.scan(node, ls(), book -> { if (m == market) books.put(m, new LinkedHashMap<>(book)); scanning = false; if (done != null) done.run(); },
+                err -> { scanning = false; if (done != null) done.run(); });
     }
 
     /** ETH, USDT and gas from the ETH RPC (worker thread), MxUSD + MINIMA sendable from the node. */
@@ -329,6 +455,7 @@ public final class DoorHost {
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
         if (busy || scanning) return "An AtomiX swap is already starting — wait for it to finish.";
         if (plan == null || plan.legs.isEmpty()) return "Nothing to fill.";
+        if (market != this.market) return "The market was switched — review the swap again.";
         if (to != null && !to.trim().isEmpty() && (plan.sell ? !DoorForwards.isEthAddr(to) : !DoorForwards.isMxAddr(to))) return "Bad destination address.";
         busy = true;
         select(market);

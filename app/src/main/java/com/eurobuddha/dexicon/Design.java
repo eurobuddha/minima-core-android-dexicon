@@ -211,4 +211,47 @@ public final class Design {
             }
         });
     }
+
+    // ---- the ⇄ currency pill's glow (ported from apks/atomix Design: ccyRing / Glow / glow) ----
+
+    /** The moving ring for the active market, in the OTHER market's accent (it points at where a tap goes). */
+    public static com.eurobuddha.atomix.CcyRing ccyRing(Context c, int bodyColor, int otherAccent, boolean minimaActive) {
+        return new com.eurobuddha.atomix.CcyRing(bodyColor, otherAccent,
+                minimaActive ? com.eurobuddha.atomix.CcyRing.Style.SWEEP : com.eurobuddha.atomix.CcyRing.Style.ORBIT,
+                dp(c, 14), Math.max(2f, dp(c, 2)), Math.max(2.5f, dp(c, 3)));
+    }
+
+    /** How fast the ring travels. Cycled on the pill by long-press. */
+    public enum Glow {
+        OFF(0), CALM(4200), LIVELY(2400), INSISTENT(1300);
+        public final int periodMs;
+        Glow(int periodMs) { this.periodMs = periodMs; }
+        public Glow next() { return values()[(ordinal() + 1) % values().length]; }
+    }
+
+    public static Glow glowLevel(Context c) {
+        String v = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("ccyglow", Glow.LIVELY.name());
+        try { return Glow.valueOf(v); } catch (IllegalArgumentException e) { return Glow.LIVELY; }
+    }
+
+    public static Glow cycleGlow(Context c) {
+        Glow next = glowLevel(c).next();
+        c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("ccyglow", next.name()).apply();
+        return next;
+    }
+
+    /** Drive the ring; the CALLER must cancel the returned animator (onPause / onDestroy / rebuild). Null when OFF or
+     *  the system has animations disabled — then the ring is a full static rim, so the control is still marked. */
+    public static ValueAnimator glow(final TextView pill, final com.eurobuddha.atomix.CcyRing ring, Glow level) {
+        pill.setBackground(ring);
+        if (level == Glow.OFF || !ValueAnimator.areAnimatorsEnabled()) { ring.setPhase(0f, true); return null; }
+        ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
+        a.setDuration(level.periodMs);
+        a.setRepeatCount(ValueAnimator.INFINITE);
+        a.setRepeatMode(ValueAnimator.RESTART);
+        a.setInterpolator(new android.view.animation.LinearInterpolator());
+        a.addUpdateListener(an -> ring.setPhase((float) an.getAnimatedValue(), false));
+        a.start();
+        return a;
+    }
 }

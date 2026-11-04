@@ -21,7 +21,7 @@ public class DoorsTabSmokeTest {
         if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) { TextView t = find(((ViewGroup) v).getChildAt(i), text); if (t != null) return t; }
         return null;
     }
-    static String room(int r) { return MainActivity.ROOMS[r] + "\n" + MainActivity.ROOM_SUBS[r]; }
+    static String room(int r) { return MainActivity.ROOMS[r] + "\n" + MainActivity.ROOM_SUBS[r] + (r == 0 ? "MxUSD" : ""); }
 
     @Test public void doorsTabRendersBothRoutes() {
         // no node in a JVM test: the IPC transport's bindService must not deliver a null binder
@@ -38,14 +38,12 @@ public class DoorsTabSmokeTest {
         find(root, "Skip — go to the exchange →").performClick();
         assertTrue("Skip lands on ③", find(root, "TRADE").isShown());
         find(root, room(0)).performClick();
-        assertNotNull("ENTRY pane title", find(root, "ENTRY — USDT → MxUSD or MINIMA"));
-        assertNotNull("MxUSD route card", find(root, "● USDT → MxUSD"));
-        assertNotNull("MINIMA route card", find(root, "○ USDT → MINIMA"));
-        ((View) find(root, "○ USDT → MINIMA").getParent()).performClick();
-        assertNotNull("picking a route moves the selection", find(root, "● USDT → MINIMA"));
+        assertNotNull("ENTRY pane title", find(root, "ENTRY — USDT → MxUSD"));
+        assertNotNull("the active market's route card", find(root, "● USDT → MxUSD"));
+        assertNull("one market at a time — never both side by side", find(root, "○ USDT → MINIMA"));
         find(root, "EXIT").performClick();
-        assertNotNull(find(root, "○ MxUSD → USDT"));
-        assertNotNull(find(root, "AMOUNT · MINIMA"));
+        assertNotNull(find(root, "● MxUSD → USDT"));
+        assertNotNull(find(root, "AMOUNT · MxUSD"));
         find(root, "ACTIVITY").performClick();
     }
 

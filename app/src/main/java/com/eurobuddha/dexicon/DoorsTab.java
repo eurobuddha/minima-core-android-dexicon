@@ -34,8 +34,8 @@ import java.util.Locale;
 /**
  * DOORS tab — how ERC20 USDT users enter and leave Dexicon through the vendored AtomiX TAKER engine ({@link DoorHost}).
  * The same three panes as the MiniDapp (mds/dexicon ui/doors.js): ENTER (USDT in), EXIT (out to USDT, forwarded to a
- * typed Ethereum address), SWAP (either direction, delivered where the user says). Every pane quotes BOTH AtomiX
- * markets side by side — USDT ⇄ MxUSD and USDT ⇄ MINIMA — and the user taps the route to take. Settlement runs in the
+ * typed Ethereum address), SWAP (either direction, delivered where the user says). Every pane quotes the ONE active
+ * AtomiX market — USDT ⇄ MxUSD or USDT ⇄ MINIMA, picked with the ⇄ pill in the header (DoorHost.market). Settlement runs in the
  * background (MakerService → DoorHost.poll). The ETH deposit address and every id are shown in full, tap to copy.
  */
 @SuppressLint("ViewConstructor")
@@ -44,7 +44,7 @@ public final class DoorsTab extends LinearLayout {
     private static final long REFRESH_MS = 60_000;
     private final MainActivity act;
     private final DoorHost host;
-    private final TextView halt, ethAddr, bals, title, desc, details, review, amtLabel, toLabel, dirIn, dirOut;
+    private final TextView halt, launch, ethAddr, bals, title, desc, details, review, amtLabel, toLabel, dirIn, dirOut;
     private final TextView[] paneBtn = new TextView[3];
     private final LinearLayout dirRow, routes, list;
     private final TextView progressLabel, finished;
@@ -52,7 +52,6 @@ public final class DoorsTab extends LinearLayout {
     private final EditText amt, to;
     private String pane = "enter";
     private boolean inward = true;
-    private TradingContext route = TradingContext.MXUSDT;
     private long lastRefresh;
 
     public DoorsTab(MainActivity act) {
@@ -65,6 +64,11 @@ public final class DoorsTab extends LinearLayout {
 
         halt = t("", Design.RED(), 10.5f, Design.sansBold()); halt.setVisibility(GONE);
         addView(halt);
+        launch = t("", Design.TEXT(), 11f, Design.sansBold());
+        int lp = Design.dp(act, 10); launch.setPadding(lp, lp, lp, lp);
+        launch.setVisibility(GONE);
+        LayoutParams ll = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); ll.bottomMargin = Design.dp(act, 10);
+        addView(launch, ll);
 
         Ui.why(this, "WHY THIS STEP", "Dexicon's exchange (③) trades MINIMA against MxUSD, Minima's own dollar. If your dollars are USDT on "
                 + "Ethereum, swap them for MxUSD here first. Both sides lock their funds in a time-locked contract; if anything stalls, "
@@ -163,7 +167,7 @@ public final class DoorsTab extends LinearLayout {
         b.setOnClickListener(v -> on.run());
         return b;
     }
-    private void mark(TextView b, boolean on) { b.setTextColor(on ? ink(route) : Design.DIM()); b.setBackground(on ? Design.roundBg(getContext(), acc(route), 10) : null); }
+    private void mark(TextView b, boolean on) { b.setTextColor(on ? ink(route()) : Design.DIM()); b.setBackground(on ? Design.roundBg(getContext(), acc(route()), 10) : null); }
     private EditText input(String hint, boolean decimal) {
         EditText e = new EditText(getContext());
         e.setHint(hint); e.setTextColor(Design.TEXT()); e.setHintTextColor(Design.DIM2()); e.setTypeface(Design.mono()); e.setTextSize(12f);
@@ -184,9 +188,10 @@ public final class DoorsTab extends LinearLayout {
 
     // ------------------------------------------------------------------ state
 
+    private TradingContext route() { return host.market(); }
     private boolean sell() { return "exit".equals(pane) || ("swap".equals(pane) && !inward); }
     private boolean needTo() { return sell(); }
-    private String coin() { return DoorPlan.coin(route); }
+    private String coin() { return DoorPlan.coin(route()); }
     private static String trim6(double v) { return Double.isFinite(v) ? BigDecimal.valueOf(v).setScale(6, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString() : "0"; }
     private static String px(double v) { return Double.isFinite(v) && v > 0 ? new BigDecimal(v).round(new java.math.MathContext(6)).stripTrailingZeros().toPlainString() : "0"; }
     private static String eth(BigInteger wei) { return wei == null ? "?" : EthWallet.format(wei, 18, 6); }
@@ -204,7 +209,7 @@ public final class DoorsTab extends LinearLayout {
     public void render() {
         refresh(false);
         paintTop();
-        review.setBackground(cta(route)); review.setTextColor(ink(route));
+        review.setBackground(cta(route())); review.setTextColor(ink(route()));
         String[] keys = {"enter", "exit", "swap"};
         for (int i = 0; i < 3; i++) mark(paneBtn[i], keys[i].equals(pane));
         String c = coin();
@@ -212,16 +217,16 @@ public final class DoorsTab extends LinearLayout {
         dirIn.setText("USDT → " + c); dirOut.setText(c + " → USDT"); mark(dirIn, inward); mark(dirOut, !inward);
         switch (pane) {
             case "enter":
-                title.setText("ENTRY — USDT → MxUSD or MINIMA");
-                desc.setText("For ERC20 USDT holders. Both AtomiX markets are quoted side by side; tap the route you want. Your USDT locks on Ethereum first (2 h refund window); the maker locks the coin; this node claims it into its wallet automatically.");
+                title.setText("ENTRY — USDT → " + c);
+                desc.setText("For ERC20 USDT holders, on the active AtomiX market (the ⇄ pill above switches MxUSD / MINIMA). Your USDT locks on Ethereum first (2 h refund window); the maker locks the coin; this node claims it into its wallet automatically.");
                 break;
             case "exit":
-                title.setText("EXIT — MxUSD or MINIMA → USDT");
-                desc.setText("Both AtomiX markets, each quoted for the amount typed in its own coin; tap the route you want. Your coin locks on Minima (144-block refund window); the maker locks USDT; this node withdraws it and forwards it by one ERC20 transfer to the address you name (both gas fees are shown when you review).");
+                title.setText("EXIT — " + c + " → USDT");
+                desc.setText("The active AtomiX market, quoted for the amount typed in " + c + ". Your coin locks on Minima (144-block refund window); the maker locks USDT; this node withdraws it and forwards it by one ERC20 transfer to the address you name (both gas fees are shown when you review).");
                 break;
             default:
                 title.setText("SWAP — the pure lane");
-                desc.setText("USDT ⇄ MxUSD or MINIMA through AtomiX, delivered where you say: the coin to this node’s wallet or forwarded by one send to any Minima address (claimed amount less the 0.0001 notify output); USDT to any Ethereum address.");
+                desc.setText("USDT ⇄ " + c + " through AtomiX, delivered where you say: the coin to this node’s wallet or forwarded by one send to any Minima address (claimed amount less the 0.0001 notify output); USDT to any Ethereum address.");
         }
         amtLabel.setText("AMOUNT · " + (sell() ? c : "USDT (ERC20)"));
         boolean showTo = !"enter".equals(pane);
@@ -234,6 +239,9 @@ public final class DoorsTab extends LinearLayout {
     }
 
     private void paintTop() {
+        String ln = host.launchNote();
+        launch.setVisibility(ln == null ? GONE : VISIBLE);
+        if (ln != null) { launch.setText(ln); launch.setBackground(Design.roundBg(getContext(), soft(TradingContext.MINIMA), 10)); }
         boolean h = IdentityWatch.halted();
         halt.setVisibility(h ? VISIBLE : GONE);
         if (h) halt.setText(IdentityWatch.fgLine() + " — new AtomiX swaps are stopped; in-flight swaps keep settling. Rescue funds, then reinstall Dexicon.");
@@ -246,7 +254,7 @@ public final class DoorsTab extends LinearLayout {
     }
     private static String nz(String s) { return s == null ? "—" : s; }
 
-    // ------------------------------------------------------------------ quotes (both markets side by side)
+    // ------------------------------------------------------------------ quote (the active market)
 
     private DoorPlan.Route quoteFor(TradingContext m) {
         return DoorPlan.route(host.book(m), m, sell(), amt.getText().toString().trim(), host.myPublicId(m));
@@ -254,16 +262,8 @@ public final class DoorsTab extends LinearLayout {
 
     private void quote() {
         routes.removeAllViews();
-        DoorPlan.Route picked = null;
-        for (TradingContext m : DoorHost.MARKETS) {
-            DoorPlan.Route r = quoteFor(m);
-            if (m == route) picked = r;
-            LayoutParams lp = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f);
-            lp.rightMargin = m == DoorHost.MARKETS[0] ? Design.dp(getContext(), 4) : 0;
-            lp.leftMargin = m == DoorHost.MARKETS[0] ? 0 : Design.dp(getContext(), 4);
-            routes.addView(routeCard(r), lp);
-        }
-        if (picked == null) return;
+        DoorPlan.Route picked = quoteFor(route());
+        routes.addView(routeCard(picked), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         if (picked.plan == null) { details.setTextColor(picked.err == null ? Design.DIM() : Design.RED()); details.setText(picked.err == null ? "" : coin() + " route: " + picked.err); review.setAlpha(0.5f); return; }
         String v = validate(picked.plan);
         details.setTextColor(v.isEmpty() ? Design.TEXT() : Design.RED());
@@ -272,7 +272,7 @@ public final class DoorsTab extends LinearLayout {
     }
 
     private View routeCard(DoorPlan.Route r) {
-        boolean on = r.market == route, s = r.sell;
+        boolean on = r.market == route(), s = r.sell;
         LinearLayout c = new LinearLayout(getContext());
         c.setOrientation(VERTICAL);
         int p = Design.dp(getContext(), 9); c.setPadding(p, p, p, p);
@@ -289,8 +289,6 @@ public final class DoorsTab extends LinearLayout {
         }
         c.addView(t("ceiling ~" + trim6(r.depth) + " " + r.coin + " · " + r.makers + (r.makers == 1 ? " maker" : " makers"), Design.DIM2(), 9f, Design.mono()));
         if (s) c.addView(t("you hold " + nz(host.coinBalance(r.market)) + " " + r.coin, Design.DIM2(), 9f, Design.mono()));
-        c.setOnClickListener(v -> { route = r.market; render(); });
-        Design.pressable(c);
         return c;
     }
 
@@ -333,7 +331,7 @@ public final class DoorsTab extends LinearLayout {
         if (needTo() && dest.isEmpty()) return "Enter the destination address.";
         if (host.ethWei == null) return "Cannot read the ETH balance of the deposit address right now — try again shortly.";
         if (p.sell) {
-            String have = host.coinBalance(route);
+            String have = host.coinBalance(route());
             if (have == null) return "Cannot read your " + c + " balance right now.";
             if (p.filledMinima > Double.parseDouble(have) + 1e-9) return "You hold " + have + " " + c + " — reduce the amount.";
             BigInteger g = host.gasReserve(EthHtlc.GAS_WITHDRAW.add(dest.isEmpty() ? BigInteger.ZERO : EthSend.GAS_ERC20));
@@ -353,13 +351,13 @@ public final class DoorsTab extends LinearLayout {
 
     private void openReview() {
         if (!host.ready()) { act.toast("AtomiX not ready — " + host.bootNote()); return; }
-        DoorPlan.Route r = quoteFor(route);
+        DoorPlan.Route r = quoteFor(route());
         if (amt.getText().toString().trim().isEmpty()) { act.toast("Enter an amount first."); return; }
         if (r.plan == null) { act.toast(coin() + " route: " + r.err); return; }
         String v = validate(r.plan);
         if (!v.isEmpty()) { act.toast(v); return; }
         final DoorPlan.Plan plan = r.plan;
-        final TradingContext market = route;
+        final TradingContext market = route();
         final String dest = to.getText().toString().trim(), c = coin();
         String head = pane.toUpperCase(Locale.ROOT) + " — " + (plan.sell ? "sell " + trim6(plan.filledMinima) + " " + c + " for ≈ " + trim6(plan.totalUsdt) + " USDT"
                 : "buy " + trim6(plan.filledMinima) + " " + c + " for ≈ " + trim6(plan.totalUsdt) + " USDT");
@@ -388,7 +386,7 @@ public final class DoorsTab extends LinearLayout {
         for (SwapDb.Swap s : swaps) { Ledger.Item it = hooks.item(s); if (it.live) live.add(it); }
         LedgerView.sync(act, into, live, "door", hooks);
         progressLabel.setVisibility(live.isEmpty() ? GONE : VISIBLE);
-        finished.setText(swaps.isEmpty() ? "No AtomiX swaps yet. ENTRY brings ERC20 USDT in as MxUSD or MINIMA; EXIT takes either out as USDT. MINIMA and MxUSD holders need no AtomiX swap."
+        finished.setText(swaps.isEmpty() ? "No AtomiX swaps yet. ENTRY brings ERC20 USDT in as " + coin() + "; EXIT takes it out as USDT. MINIMA and MxUSD holders need no AtomiX swap."
                 : "Finished swaps are in History ›");
         finished.setTextColor(swaps.isEmpty() ? Design.DIM2() : Design.DIM());
     }

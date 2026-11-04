@@ -74,7 +74,7 @@ public class MainActivity extends AppCompatActivity {
     /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange. Each room's own pages
      *  sit in the row under the rail; ACTIVITY / ASSETS / SETTINGS are shared by all three at the bottom. */
     static final String[] ROOMS = {"① DOLLARS IN", "② POOLS", "③ EXCHANGE"};
-    static final String[] ROOM_SUBS = {"AtomiX · USDT ⇄ MxUSD", "optional", "MINIMA / MxUSD"};
+    static final String[] ROOM_SUBS = {"AtomiX · USDT ⇄ ", "optional", "MINIMA / MxUSD"};   // ① ends with the active market
     static final int[][] ROOM_PAGES = {{TAB_DOORS}, {TAB_POOLS}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
     private static final int[] SHARED = {TAB_ACTIVITY, TAB_ASSETS, TAB_RELAYS};
     private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS"};
@@ -128,7 +128,9 @@ public class MainActivity extends AppCompatActivity {
     private final TextView[] roomBtn = new TextView[3];
     private int room = 0;
     private final int[] roomLast = {TAB_DOORS, TAB_POOLS, TAB_TRADE};
-    private TextView pairPill, blockPill, stageTv;
+    private TextView pairPill, blockPill, stageTv, ccyPill;
+    /** The ⇄ pill's glow (AtomiX startCcyGlow): an Animator is not a Handler callback, so it is cancelled explicitly. */
+    private android.animation.ValueAnimator ccyGlowAnim;
     private int tab = TAB_DOORS, tab2 = -1;   // every launch opens on ① (owner, 4 Nov 2026)   // tab2: the right-hand page when two are open side by side (wide only)
     private int tabsDown; private int heldTab = -1; private boolean pairMade;
 
@@ -171,6 +173,7 @@ public class MainActivity extends AppCompatActivity {
             pendingCsv = null;
         });
         handover = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), r -> onHandover(r.getResultCode(), r.getData()));
+        com.eurobuddha.dexicon.doors.DoorHost.get(this).applyLaunchRule();   // MxUSD every launch, unless MINIMA is live (Q1)
         chromeRoot = buildChrome();
         selectTab(tab);
         applyGate();
@@ -930,7 +933,7 @@ public class MainActivity extends AppCompatActivity {
         header.addView(verPill, vp);
         TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾", Design.SURFACE2(), Design.DIM());
         themePill.setMinWidth(Design.dp(this, 48)); themePill.setMinHeight(Design.dp(this, 48));
-        themePill.setOnClickListener(v -> { Design.toggle(this); if (trade != null) trade.close(); chromeRoot = buildChrome(); setContentView(chromeRoot); showPages(tab, tab2); });
+        themePill.setOnClickListener(v -> { stopCcyGlow(); Design.toggle(this); if (trade != null) trade.close(); chromeRoot = buildChrome(); setContentView(chromeRoot); showPages(tab, tab2); });
         Design.pressable(themePill);
         header.addView(themePill);
         root.addView(header);
@@ -946,6 +949,21 @@ public class MainActivity extends AppCompatActivity {
             if (open != null) startActivity(open); else toast("Install or start your Minima node app first");
         });
         nodeRow.addView(pairPill, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        // The AtomiX currency switch (apks/atomix buildHeader): names the ACTIVE market; tap to switch, long-press cycles the glow.
+        ccyPill = Design.pill(this, "", Design.SURFACE2(), Design.TEXT());
+        ccyPill.setTextSize(12f); ccyPill.setTypeface(Design.sansBold());
+        ccyPill.setMinHeight(Design.dp(this, 48));
+        ccyPill.setOnClickListener(v -> switchCurrencyDialog());
+        ccyPill.setOnLongClickListener(v -> {
+            Design.Glow g = Design.cycleGlow(this);
+            toast("Pill glow: " + g.name().toLowerCase(java.util.Locale.ROOT));
+            startCcyGlow();
+            return true;
+        });
+        Design.pressable(ccyPill);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cp.leftMargin = Design.dp(this, 6);
+        nodeRow.addView(ccyPill, cp);
         blockPill = Design.pill(this, "# —", Design.SURFACE2(), Design.DIM());
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         bp.leftMargin = Design.dp(this, 6);
@@ -957,7 +975,7 @@ public class MainActivity extends AppCompatActivity {
         for (int r = 0; r < 3; r++) {
             final int rr = r;
             TextView b = new TextView(this);
-            b.setText(ROOMS[r] + "\n" + ROOM_SUBS[r]); b.setTextSize(10.5f); b.setTypeface(Design.sansBold()); b.setGravity(Gravity.CENTER);
+            b.setText(roomLabel(r)); b.setTextSize(10.5f); b.setTypeface(Design.sansBold()); b.setGravity(Gravity.CENTER);
             b.setMaxLines(2); b.setMinHeight(Design.dp(this, 48)); b.setPadding(Design.dp(this, 4), Design.dp(this, 6), Design.dp(this, 4), Design.dp(this, 6));
             androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(b, 7, 11, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
             b.setOnClickListener(v -> selectTab(roomLast[rr]));
@@ -1023,7 +1041,54 @@ public class MainActivity extends AppCompatActivity {
             (isShared(idx) ? tabBar : subBar).addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         }
         root.addView(tabBar);
+        paintCcy();
         return root;
+    }
+
+    // ---- the one active AtomiX market (⇄ pill) ----
+
+    String roomLabel(int r) {
+        return ROOMS[r] + "\n" + ROOM_SUBS[r] + (r == 0 ? com.eurobuddha.dexicon.doors.DoorPlan.coin(com.eurobuddha.dexicon.doors.DoorHost.get(this).market()) : "");
+    }
+
+    /** Label, accessibility text, room subtitle and glow for the active market. */
+    private void paintCcy() {
+        if (ccyPill == null) return;
+        com.eurobuddha.atomix.TradingContext m = com.eurobuddha.dexicon.doors.DoorHost.get(this).market();
+        String c = com.eurobuddha.dexicon.doors.DoorPlan.coin(m), o = com.eurobuddha.dexicon.doors.DoorPlan.coin(m.other());
+        ccyPill.setText("⇄  " + c);
+        ccyPill.setContentDescription("Trading " + c + ". Tap to switch to " + o + ".");
+        if (roomBtn[0] != null) roomBtn[0].setText(roomLabel(0));
+        startCcyGlow();
+    }
+
+    /** (Re)start the pill's glow, cancelling any previous one (AtomiX startCcyGlow). Never animates a hidden pill. */
+    private void startCcyGlow() {
+        stopCcyGlow();
+        if (ccyPill == null || !FOREGROUND) return;
+        com.eurobuddha.atomix.TradingContext m = com.eurobuddha.dexicon.doors.DoorHost.get(this).market();
+        ccyGlowAnim = Design.glow(ccyPill, Design.ccyRing(this, DoorsTab.soft(m), m.other().accent, m == com.eurobuddha.atomix.TradingContext.MINIMA), Design.glowLevel(this));
+    }
+
+    private void stopCcyGlow() { if (ccyGlowAnim != null) { ccyGlowAnim.cancel(); ccyGlowAnim = null; } }
+
+    /** AtomiX switchCurrencyDialog, worded for Dexicon's ① room. */
+    private void switchCurrencyDialog() {
+        com.eurobuddha.dexicon.doors.DoorHost host = com.eurobuddha.dexicon.doors.DoorHost.get(this);
+        final com.eurobuddha.atomix.TradingContext target = host.market().other();
+        String to = com.eurobuddha.dexicon.doors.DoorPlan.coin(target), from = com.eurobuddha.dexicon.doors.DoorPlan.coin(host.market());
+        new AlertDialog.Builder(this, Design.dialogTheme())
+                .setTitle("Switch to " + to + "?")
+                .setMessage("AtomiX publishes and market-makes in ONE currency at a time. Switching to " + to
+                        + " re-themes ① Dollars in and moves your swaps, order/market-making and OTC to the " + to + " book.\n\nYour current "
+                        + from + " orders simply stop being maintained (a live market is withdrawn from the book). Any in-flight swaps in "
+                        + "either currency keep settling safely in the background — switching never strands them.")
+                .setPositiveButton("Switch to " + to, (d, w) -> {
+                    String err = host.switchMarket(target, () -> { paintCcy(); repaint(); toast("Now on the " + to + " market"); });
+                    if (err != null) toast(err);
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     /** Switch to a tab (e.g. ATOMIX → "Finished swaps are in History ›"). */
@@ -1130,6 +1195,7 @@ public class MainActivity extends AppCompatActivity {
     @Override protected void onResume() {
         super.onResume();
         FOREGROUND = true;
+        startCcyGlow();   // the pill survived the pause; re-arm exactly one animator on it
         if (node != null && !paired) node.reRegister();   // back from the node app's Apps screen: re-ask at once
         applySettings();
         recheckGate();
@@ -1183,11 +1249,12 @@ public class MainActivity extends AppCompatActivity {
         new AlertDialog.Builder(this, Design.dialogTheme()).setTitle(title).setMessage(body).setPositiveButton("OK", null).show();
     }
 
-    @Override protected void onPause() { super.onPause(); FOREGROUND = false; }
+    @Override protected void onPause() { super.onPause(); FOREGROUND = false; stopCcyGlow(); }   // never animate a pill nobody sees
 
     @Override protected void onDestroy() {
         closed = true;
         ui.removeCallbacksAndMessages(null);
+        stopCcyGlow(); ccyPill = null;
         if (changedReceiver != null) try { unregisterReceiver(changedReceiver); } catch (Exception ignored) {}
         if (nodeReceiver != null) try { unregisterReceiver(nodeReceiver); } catch (Exception ignored) {}
         if (trade != null) trade.close();
