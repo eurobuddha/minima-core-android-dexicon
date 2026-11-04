@@ -232,4 +232,47 @@ public class DoorsTabSmokeTest {
             assertNotNull("still in History", PoolsRoomSmokeTest.containing(root, "1 USDT → 1 MxUSD"));
         } finally { host.prefs().edit().remove("dismissed_swaps").apply(); s.status = "COMPLETE"; db.upsertSwap(s); }
     }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<com.eurobuddha.atomix.TradingContext, java.util.Map<String, com.eurobuddha.atomix.swap.Order>> books(com.eurobuddha.dexicon.doors.DoorHost h) throws Exception {
+        java.lang.reflect.Field f = com.eurobuddha.dexicon.doors.DoorHost.class.getDeclaredField("books"); f.setAccessible(true);
+        return (java.util.Map<com.eurobuddha.atomix.TradingContext, java.util.Map<String, com.eurobuddha.atomix.swap.Order>>) f.get(h);
+    }
+    private static com.eurobuddha.atomix.swap.Order ask(double price) {
+        com.eurobuddha.atomix.swap.Order o = new com.eurobuddha.atomix.swap.Order();
+        o.signerPk = "0x" + "a1".repeat(32); o.commsPublicId = "0x" + "b2".repeat(64); o.minimaAvail = 1000; o.ts = System.currentTimeMillis();
+        com.eurobuddha.atomix.swap.Order.Pair p = new com.eurobuddha.atomix.swap.Order.Pair(true, price, 0, 0); p.asks.add(new com.eurobuddha.atomix.swap.Order.Level(price, 500));
+        com.eurobuddha.atomix.swap.Order.sanitize(p); o.pairs.put("USDT", p);
+        return o;
+    }
+
+    /** 0.2.21: the side you did not type follows the CURRENT best price; a market switch clears both (code review A1). */
+    @Test public void amountsFollowThePriceAndClearOnASwitch() throws Exception {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        MainActivity a = launch();
+        com.eurobuddha.dexicon.doors.DoorHost h = com.eurobuddha.dexicon.doors.DoorHost.get(app);
+        java.util.Map<com.eurobuddha.atomix.TradingContext, java.util.Map<String, com.eurobuddha.atomix.swap.Order>> b = books(h);
+        com.eurobuddha.atomix.TradingContext m = h.market();
+        java.util.Map<String, com.eurobuddha.atomix.swap.Order> before = b.get(m);
+        try {
+            DoorsTab d = new DoorsTab(a);
+            b.put(m, java.util.Collections.singletonMap("k", ask(1.0)));
+            java.lang.reflect.Field sf = DoorsTab.class.getDeclaredField("send"), rf = DoorsTab.class.getDeclaredField("recv");
+            sf.setAccessible(true); rf.setAccessible(true);
+            android.widget.EditText send = (android.widget.EditText) sf.get(d), recv = (android.widget.EditText) rf.get(d);
+            send.setText("10");                                  // Buy: 10 USDT at 1.00
+            assertEquals("10", recv.getText().toString());
+            b.put(m, java.util.Collections.singletonMap("k", ask(2.0)));   // the book moved
+            d.render();
+            assertEquals("the coin side follows the new price", "5", recv.getText().toString());
+            assertEquals("what you typed stays", "10", send.getText().toString());
+            java.lang.reflect.Field lm = DoorsTab.class.getDeclaredField("lastMarket"); lm.setAccessible(true);
+            lm.set(d, m.other());                                // as if the ⇄ pill had just switched
+            d.render();
+            assertEquals("a switch clears both", "", send.getText().toString());
+            assertEquals("", recv.getText().toString());
+        } finally { b.put(m, before); }
+    }
 }

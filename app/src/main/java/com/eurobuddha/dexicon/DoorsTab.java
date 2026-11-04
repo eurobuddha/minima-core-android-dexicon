@@ -66,6 +66,9 @@ public final class DoorsTab extends LinearLayout {
     private final EditText send, recv, to;
     private boolean sell = false;   // ① is "Dollars in": it opens on Buy
     private boolean syncing;
+    /** Which field the user typed last (null: neither) — the other follows the CURRENT best price on every re-quote. */
+    private Boolean typedSend;
+    private TradingContext lastMarket;
     private String stagesSig = "";
     private long lastRefresh;
 
@@ -210,8 +213,8 @@ public final class DoorsTab extends LinearLayout {
         addView(finished);
 
         // Either side can be typed (AtomiX): the other follows at the best price. The plan below re-quotes on every key.
-        send.addTextChangedListener(watcher(() -> { if (!syncing) mirror(true); quote(); }));
-        recv.addTextChangedListener(watcher(() -> { if (!syncing) mirror(false); quote(); }));
+        send.addTextChangedListener(watcher(() -> { if (!syncing) { typedSend = true; mirror(true); } quote(); }));
+        recv.addTextChangedListener(watcher(() -> { if (!syncing) { typedSend = false; mirror(false); } quote(); }));
         to.addTextChangedListener(watcher(this::quote));
     }
 
@@ -314,9 +317,12 @@ public final class DoorsTab extends LinearLayout {
 
     /** Sell / Buy (or ⇅): the amounts clear, as in AtomiX, so a number typed for one direction is never sent the other. */
     private void setSide(boolean s) {
-        if (sell != s) { sell = s; syncing = true; send.setText(""); recv.setText(""); syncing = false; }
+        if (sell != s) { sell = s; clearAmounts(); }
         render();
     }
+
+    /** Both amounts cleared (side or market changed): a number typed for one never carries over to the other. */
+    private void clearAmounts() { syncing = true; send.setText(""); recv.setText(""); syncing = false; typedSend = null; }
 
     /** The coin amount the swap is sized by (AtomiX: always the {coin} side — sent when selling, received when buying). */
     String coinAmount() { return (sell ? send : recv).getText().toString().trim(); }
@@ -328,8 +334,11 @@ public final class DoorsTab extends LinearLayout {
         boolean inIsCoin = fromSend == sell;   // selling: send is the coin; buying: receive is the coin
         if (in.isEmpty() || !(best > 0)) out = "";
         else out = inIsCoin ? DoorPlan.computeUsdt(in, best) : DoorPlan.computeMinima(in, best);
+        EditText other = fromSend ? recv : send;
+        String now = out == null ? "" : out;
+        if (now.equals(other.getText().toString())) return;   // unchanged: no needless edit (or re-quote)
         syncing = true;
-        (fromSend ? recv : send).setText(out == null ? "" : out);
+        other.setText(now);
         syncing = false;
     }
 
@@ -350,6 +359,7 @@ public final class DoorsTab extends LinearLayout {
 
     public void render() {
         refresh(false);
+        if (lastMarket != route()) { if (lastMarket != null) clearAmounts(); lastMarket = route(); }   // ⇄ switched: fresh amounts
         paintTop();
         String c = coin();
         head.setText("Swap " + c + " ⇄ USDT");
@@ -435,10 +445,22 @@ public final class DoorsTab extends LinearLayout {
     DoorPlan.Plan plan() {
         String amt = coinAmount();
         if (amt.isEmpty() || !DoorPlan.positiveSwapAmount(amt)) return null;
-        return DoorPlan.buildSweepPlan(book(), sell, amt, sell ? 0 : slippage(), me());
+        DoorPlan.Plan p = DoorPlan.buildSweepPlan(book(), sell, amt, sell ? 0 : slippage(), me());
+        // A buy sized by the USDT typed: each part locks ceil6(coin × price), so the total can overshoot what was typed by a
+        // micro-USDT per part — shave once, as DoorPlan.route does (typing your whole balance must not be refused).
+        if (!sell && Boolean.TRUE.equals(typedSend) && !p.legs.isEmpty()) {
+            double typed = DoorPlan.parseD(send.getText().toString(), 0), ask = DoorPlan.bestMakers(book(), me()).bestAsk;
+            if (typed > 0 && ask > 0 && p.totalUsdt > typed + 1e-9) {
+                String less = DoorPlan.legMinima(DoorPlan.parseD(amt, 0) - (p.totalUsdt - typed) / ask - 1e-6);
+                if (DoorPlan.positiveSwapAmount(less)) p = DoorPlan.buildSweepPlan(book(), false, less, slippage(), me());
+            }
+        }
+        return p;
     }
 
     private void quote() {
+        // the field the user did NOT type follows the current best price (a rescan moves it) — AtomiX recomputes per render
+        if (!syncing && typedSend != null) mirror(typedSend);
         String c = coin();
         DoorPlan.Best q = DoorPlan.bestMakers(book(), me());
         double best = sell ? q.bestBid : q.bestAsk, cap = sell ? q.bidCap : q.askCap, depth = DoorPlan.sweepDepthMinima(book(), sell, me());
