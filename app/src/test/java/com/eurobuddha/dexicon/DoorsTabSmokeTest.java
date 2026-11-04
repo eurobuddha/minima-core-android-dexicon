@@ -156,4 +156,24 @@ public class DoorsTabSmokeTest {
             assertNotNull("the sweep goes to the node's CURRENT wallet", find(send.getWindow().getDecorView(), now));
         } finally { watch("ethMismatch", false); watch("staleEth", ""); watch("nodeEth", ""); cf.set(w, null); }
     }
+
+    /** 0.2.6 (AtomiX marketView): Activity has My activity / Market history; the history is the active market's chart. */
+    @Test public void activityHasAtomixsMarketHistory() {
+        android.app.Application app = org.robolectric.RuntimeEnvironment.getApplication();
+        org.robolectric.Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
+        MainActivity a = launch();
+        View root = a.getWindow().getDecorView();
+        tab(root, "Activity").performClick();
+        assertNotNull(find(root, "⬇ Export CSV"));
+        find(root, "Market history").performClick();
+        boolean chart = false;
+        java.util.ArrayDeque<View> q = new java.util.ArrayDeque<>(); q.add(root);
+        while (!q.isEmpty()) { View v = q.poll(); if (v instanceof com.eurobuddha.atomix.MarketChartView && v.isShown()) chart = true;
+            if (v instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) q.add(((ViewGroup) v).getChildAt(i)); }
+        assertTrue("AtomiX's price chart", chart);
+        assertNotNull(PoolsRoomSmokeTest.containing(root, "No market trades observed yet"));
+        find(root, "My activity").performClick();
+        assertNull(PoolsRoomSmokeTest.containing(root, "No market trades observed yet") != null && PoolsRoomSmokeTest.containing(root, "No market trades observed yet").isShown() ? "shown" : null);
+    }
 }

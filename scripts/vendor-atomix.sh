@@ -7,6 +7,7 @@
 # NOT vendored — Dexicon-owned shims, because Dexicon has its own transport and host:
 #   com/eurobuddha/comms/NodeApi.java      adapter onto com.eurobuddha.dexicon.NodeApi (one IPC queue, one pairing)
 #   com/eurobuddha/atomix/MainActivity.java  host flag only (SWEEP_ACTIVE) that SwapEngine reads — not an Activity
+#   com/eurobuddha/atomix/Design.java        the three palette colours the vendored MarketChartView draws with
 # The Ethereum RPC endpoint list therefore lives ONLY in the vendored EthRpc.java / EthNet.java — AtomiX's bytes —
 # so Dexicon is never a fifth divergent copy (see CLAUDE.md).
 set -euo pipefail
@@ -24,7 +25,7 @@ com/eurobuddha/atomix/eth/PendingTokenDebits.java com/eurobuddha/minimaapi/ether
 com/eurobuddha/comms/CommsIdentity.java com/eurobuddha/comms/CommsTransport.java com/eurobuddha/comms/CommsScanner.java
 com/eurobuddha/comms/CryptoProvider.java com/eurobuddha/comms/LocalEcCryptoProvider.java com/eurobuddha/comms/Hex.java
 com/eurobuddha/comms/Hkdf.java com/eurobuddha/comms/Sodium.java com/eurobuddha/comms/Opened.java com/eurobuddha/comms/WriteSafety.java
-com/eurobuddha/comms/SignGate.java com/eurobuddha/comms/QrUtil.java
+com/eurobuddha/comms/SignGate.java com/eurobuddha/comms/QrUtil.java com/eurobuddha/atomix/MarketChartView.java
 com/eurobuddha/atomix/Handover.java com/eurobuddha/atomix/CcyRing.java com/eurobuddha/atomix/MarketDraft.java
 com/eurobuddha/atomix/swap/PriceOracle.java com/eurobuddha/atomix/swap/OtcBook.java com/eurobuddha/atomix/swap/SwapVisibility.java"
 # AtomiX's own JVM tests for those classes, ported with them (same header rule). Tests of classes NOT vendored

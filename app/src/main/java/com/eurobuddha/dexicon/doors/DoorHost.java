@@ -366,6 +366,9 @@ public final class DoorHost {
         @Override public void send(CommsIdentity id, Order o, CommsTransport.SendCb cb) { SwapOrderBook.publish(node, ls(), id, o, cb); }
     };
     SwapDb swapDb() { return db; }
+    /** AtomiX's Market history for the ACTIVE market (the engine's MarketCollector records prints network-wide). */
+    public List<SwapDb.MarketTrade> executedTrades(int n) { return db.executedTrades(n, market.tokenId); }
+    public List<SwapDb.MarketTrade> recentTrades(int n) { return db.recentTrades(n, market.tokenId); }
     OtcDb otcDb() { return otcDb; }
 
     // Per-currency market memory (AtomiX MainActivity.MKT_STR / MKT_BOOL): the active prefs are always the active
