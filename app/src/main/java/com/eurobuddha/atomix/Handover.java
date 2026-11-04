@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/Handover.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.92 app/src/main/java/com/eurobuddha/atomix/Handover.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix;
 
 import android.content.SharedPreferences;
@@ -9,6 +9,7 @@ import com.eurobuddha.atomix.swap.Order;
 import com.eurobuddha.atomix.swap.PriceOracle;
 import com.eurobuddha.atomix.swap.PublishGate;
 import com.eurobuddha.atomix.swap.SwapDb;
+import com.eurobuddha.atomix.swap.SwapEngine;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -112,12 +113,14 @@ public final class Handover {
      *  that never landed — or one that mined while its answer was lost. Neither chain read can rule the second out
      *  (the Minima lookup is depth-bounded; an empty ETH read can be RPC lag), so the row keeps its secret. */
     static String why(SwapDb.Swap s, SwapDb db, long nowMs) {
-        if (stuck(s, db, nowMs)) return " — AtomiX has tried to refund my Minima lock well past its timelock, and the lock"
-                + " is gone or was never seen (never sent, or already claimed by the counterparty). Save this swap's"
-                + " recovery record below; once it is saved and verified, this swap no longer blocks";
+        if (stuck(s, db, nowMs)) return " — AtomiX has tried to refund my Minima lock well past its timelock, and two"
+                + " chain reads at least six blocks apart found the lock spent (claimed by the counterparty, or already"
+                + " refunded) or never present (never sent). Save this swap's recovery record below; once it is saved"
+                + " and verified, this swap no longer blocks";
         if (SwapDb.ST_ERROR.equals(s.status)) return " — the trade failed, but my own lock has not been confirmed refunded yet";
         if (ownEthLock(s)) return " — if its Ethereum lock never landed, AtomiX clears this an hour after the lock's"
-                + " timelock, once two independent Ethereum endpoints both show no contract";
+                + " timelock, once two independent Ethereum endpoints both show no contract and nothing of this wallet's is pending on"
+                + " Ethereum";
         if (!SwapDb.ST_STARTED.equals(s.status) || db.hasEvent(s.hash, SwapDb.EV_STARTED)) return "";
         return " — its lock was never confirmed as sent. AtomiX cannot prove from the chain that it did not land, so"
                 + " this record and its secret stay, and it blocks the handover. If the lock truly never landed, it will"
@@ -153,9 +156,16 @@ public final class Handover {
     /** A Minima-leg row the engine can never clear from its own records — offered the recovery-record escape. ALL of:
      *  <ul><li>my leg is Minima and the row is not terminal (STARTED, LOCKED, CLAIMING or ERROR);</li>
      *  <li>the engine recorded a completed refund pass ({@link SwapDb#EV_REFUND_TRIED}) with the Minima chain at
-     *      least {@link #REFUND_MARGIN_BLOCKS} past myTimelock — read from the event, not the device clock;</li>
-     *  <li>if the lock coin was recorded, a read of it found it spent ({@link SwapDb#EV_LOCK_SPENT}) — so an unspent,
-     *      refundable lock never qualifies: it keeps blocking and the engine keeps refunding it;</li>
+     *      least {@link SwapEngine#refundEvidenceMargin} past myTimelock ({@link #REFUND_MARGIN_BLOCKS}; a RESPONDER
+     *      waits {@link SwapEngine#TIMELOCK_BLOCKS}, past the taker's Ethereum leg) — read from the event, not the
+     *      device clock;</li>
+     *  <li>a RESPONDER row owes no Ethereum collect: if I know the secret, my withdraw is recorded
+     *      ({@link SwapDb#haveCollect});</li>
+     *  <li>positive chain evidence about the lock, confirmed on two reads at least
+     *      {@link SwapEngine#LOCK_GONE_CONFIRM_BLOCKS} blocks apart: the recorded lock coin read spent
+     *      ({@link SwapDb#EV_LOCK_SPENT}), or — only when no coin is recorded — a depth-free read found no lock of
+     *      mine ({@link SwapDb#EV_LOCK_ABSENT}). A missing record is never evidence, and an unspent, refundable lock
+     *      never qualifies: it keeps blocking and the engine keeps refunding it;</li>
      *  <li>and, as an extra minimum only, the row is at least {@link #RECOVERY_AGE_MS} old.</li></ul>
      *  Not guessed: such a row stops blocking only once the user has saved and re-read its recovery record
      *  ({@link SwapDb#EV_RECOVERY_SAVED}). */
@@ -163,12 +173,13 @@ public final class Handover {
         if (s.hash == null || !s.myLegIsMinima || s.myTimelock <= 0 || s.created <= 0 || nowMs - s.created < RECOVERY_AGE_MS) return false;
         if (!(SwapDb.ST_STARTED.equals(s.status) || SwapDb.ST_LOCKED.equals(s.status)
                 || SwapDb.ST_CLAIMING.equals(s.status) || SwapDb.ST_ERROR.equals(s.status))) return false;
-        if (refundTriedAt(db, s.hash) < s.myTimelock + REFUND_MARGIN_BLOCKS) return false;
-        return db.rememberedLockCoin(s.hash) == null || db.hasEvent(s.hash, SwapDb.EV_LOCK_SPENT);
+        if (refundTriedAt(db, s.hash) < s.myTimelock + SwapEngine.refundEvidenceMargin(s)) return false;
+        if ("RESPONDER".equals(s.role) && db.getSecret(s.hash) != null && !db.haveCollect(s.hash)) return false;
+        return db.hasEvent(s.hash, db.rememberedLockCoin(s.hash) != null ? SwapDb.EV_LOCK_SPENT : SwapDb.EV_LOCK_ABSENT);
     }
 
     /** The highest Minima block a recorded refund pass saw, or -1. */
-    private static long refundTriedAt(SwapDb db, String hash) {
+    public static long refundTriedAt(SwapDb db, String hash) {
         long best = -1;
         List<SwapDb.Event> events = db.getEvents(hash);
         if (events != null) for (SwapDb.Event e : events) {
@@ -228,12 +239,14 @@ public final class Handover {
     }
 
     /** Shown in the record and on the screen that saves it: the file is a bearer credential for the swap. */
-    public static final String SECRET_WARNING = "This file contains the swap's secret. Anyone holding it can claim the"
-            + " Minima side of this swap. Keep it private: do not share, upload or sync it anywhere you do not control.";
+    public static final String SECRET_WARNING = "This file contains the swap's secret. The secret alone cannot move the"
+            + " Minima lock: a claim also needs the counterparty's signature. The real risk is the counterparty getting"
+            + " it: they could claim your Minima lock with it and still refund their own Ethereum lock, taking both legs"
+            + " of the swap. Keep it private: do not share, upload or sync it anywhere you do not control.";
 
     /** Swap rows persist the coin label current when written (older rows carry the legacy one); the token is MxUSD. */
     static String tokenLabel(String t) {
-        return t != null && t.equalsIgnoreCase(TradingContext.MXUSDT.coinLabel) ? "MxUSD" : t;
+        return TradingContext.forCoinLabel(t) == TradingContext.MXUSDT ? "MxUSD" : t;
     }
 
     private static String port(org.json.JSONObject coin, int port) {

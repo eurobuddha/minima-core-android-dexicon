@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.92 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.content.ContentValues;
@@ -48,7 +48,10 @@ public final class SwapDb {
     // Handover liveness (0.1.90):
     public static final String EV_NEVER_LOCKED = "ETH_NEVER_LOCKED";   // ETH-first initiator: two endpoints showed no contract past the timelock (note = evidence)
     public static final String EV_REFUND_TRIED = "MINIMA_REFUND_TRIED"; // my Minima lock: a refund sweep completed past myTimelock + margin (note = "minima block N")
-    public static final String EV_LOCK_SPENT = "MINIMA_LOCK_SPENT";     // my recorded Minima lock coin read as spent (note = evidence)
+    public static final String EV_LOCK_SPENT = "MINIMA_LOCK_SPENT";     // my recorded Minima lock coin read as spent on two passes ≥6 blocks apart (note = evidence)
+    public static final String EV_LOCK_ABSENT = "MINIMA_LOCK_ABSENT";   // no coin recorded; a depth-free relevant:true read found no lock of mine, twice ≥6 blocks apart (note = evidence)
+    public static final String EV_LOCK_GONE_SEEN = "MINIMA_LOCK_GONE_SEEN"; // first "spent"/"absent" observation, pending confirmation (note = "<event> minima block N")
+    public static final String EV_LOCK_PRESENT = "MINIMA_LOCK_PRESENT"; // a later read found the lock unspent — voids any pending GONE_SEEN (note = "minima block N")
     public static final String EV_RECOVERY_SAVED = "RECOVERY_SAVED";   // the user saved + re-read this swap's recovery record (note = size + SHA-256)
 
     // ---- UX swap status ----

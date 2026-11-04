@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.92 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -434,6 +434,19 @@ public final class MinimaHtlc {
             Object resp = r.opt("response");
             if (!(resp instanceof org.json.JSONArray)) { err.accept("coins: no coin list"); return; }
             ok.accept(((org.json.JSONArray) resp).length() > 0);
+        }, err);
+    }
+
+    /** My own lock(s) for one hashlock with NO depth window: {@code relevant:true} walks the node's relevant set, which
+     *  carries a coin holding my key forward at any age, and the server-side {@code state:} filter (a substring match
+     *  on any state port; the hash is unique) keeps the reply to this swap's coin(s). The caller re-checks owner and
+     *  state[5]. A non-list reply is an error, never "none". */
+    public void findMyLockByHash(String hash, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
+        if (!isHex(hash)) { err.accept("scan: non-hex hash"); return; }   // interpolated into the coins command
+        cmd("coins relevant:true simplestate:true address:" + HTLC_ADDRESS + " state:" + normKey(hash), r -> {
+            Object resp = r.opt("response");
+            if (!(resp instanceof org.json.JSONArray)) { err.accept("coins: no coin list"); return; }
+            ok.accept((org.json.JSONArray) resp);
         }, err);
     }
 

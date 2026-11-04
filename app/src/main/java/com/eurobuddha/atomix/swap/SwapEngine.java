@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.92 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -1201,23 +1201,102 @@ public final class SwapEngine {
     /** Past my Minima timelock by this many blocks (~1 h), a refund pass is evidence for the Dexicon handover. */
     static final int REFUND_EVIDENCE_MARGIN_BLOCKS = 72;
 
+    /** The refund-pass margin past myTimelock that counts as evidence. A RESPONDER's Minima lock times out at
+     *  block+36 while the taker's Ethereum leg — which I collect once the taker's claim reveals the secret — runs
+     *  ~2 h, so its evidence waits a full {@link #TIMELOCK_BLOCKS} past myTimelock, beyond that contract's life. */
+    public static int refundEvidenceMargin(SwapDb.Swap s) {
+        return "RESPONDER".equals(s.role) ? TIMELOCK_BLOCKS : REFUND_EVIDENCE_MARGIN_BLOCKS;
+    }
+
+    /** A "spent"/"absent" reading counts only when a second pass, at least this many blocks later, repeats it. */
+    public static final int LOCK_GONE_CONFIRM_BLOCKS = 6;
+
     /** Durable evidence for {@link com.eurobuddha.atomix.Handover#stuck}: a refund pass (scan + refund attempt) of my
-     *  Minima lock completed with the chain at {@code block}, at least {@link #REFUND_EVIDENCE_MARGIN_BLOCKS} past my
-     *  timelock ({@link SwapDb#EV_REFUND_TRIED}, once); and, for a recorded lock coin of MY key, whether it reads
-     *  spent ({@link SwapDb#EV_LOCK_SPENT}). An unspent coin writes nothing — the row keeps blocking and refunding. */
+     *  Minima lock completed with the chain at {@code block}, at least {@link #refundEvidenceMargin} past my timelock
+     *  ({@link SwapDb#EV_REFUND_TRIED}); then {@link #observeLock}. */
     private void noteRefundTried(SwapDb.Swap s, int block) {
         if (s.myTimelock <= 0 || block < s.myTimelock + REFUND_EVIDENCE_MARGIN_BLOCKS) return;
-        if (!db.hasEvent(s.hash, SwapDb.EV_REFUND_TRIED))
+        long need = s.myTimelock + refundEvidenceMargin(s);
+        if (block >= need && com.eurobuddha.atomix.Handover.refundTriedAt(db, s.hash) < need)
             db.logEvent(s.hash, SwapDb.EV_REFUND_TRIED, "minima", "", "minima block " + block);
+        observeLock(s, block);
+    }
+
+    /** Is my lock gone? Only from the node's CURRENT key set ({@code myPubkeys}, non-empty) and never while
+     *  IdentityWatch is halted — {@code relevant:true} sees only coins of keys the node holds now, so an orphaned
+     *  identity would read every lock as gone.
+     *  <ul><li>Recorded coin, owner key held: {@code coins relevant:true coinid:} — empty means spent
+     *      ({@link SwapDb#EV_LOCK_SPENT}).</li>
+     *  <li>No recorded coin, publish key held: one depth-free {@link MinimaHtlc#findMyLockByHash}. A lock of mine
+     *      found is recorded and refunded ({@link #checkExpiredMinima}); none means absent ({@link SwapDb#EV_LOCK_ABSENT}).
+     *      A missing record alone is never evidence.</li></ul>
+     *  Every "gone" reading goes through {@link #noteLockGone}; a read error writes nothing. */
+    private void observeLock(final SwapDb.Swap s, final int block) {
         final JSONObject coin = db.rememberedLockCoin(s.hash);
-        if (coin == null || db.hasEvent(s.hash, SwapDb.EV_LOCK_SPENT)) return;
-        final String owner = MinimaHtlc.stateAt(coin, 0), id = coin.optString("coinid", "");
-        if (!isMyOwnedKey(owner)) return;   // relevant:true only tracks a coin my node holds the key for
-        minima.lockCoinUnspent(id, unspent -> {
-            if (!unspent && !db.hasEvent(s.hash, SwapDb.EV_LOCK_SPENT))
-                db.logEvent(s.hash, SwapDb.EV_LOCK_SPENT, "minima", "", "coins relevant:true coinid:" + id
-                        + " returned no unspent coin at minima block " + block + " (owner " + owner + ")");
-        }, e -> SwapLog.w("lock coin read " + id + " ERR: " + e + " (unknown, not spent)"));
+        final String needed = coin != null ? SwapDb.EV_LOCK_SPENT : SwapDb.EV_LOCK_ABSENT;
+        if (db.hasEvent(s.hash, needed) || com.eurobuddha.atomix.IdentityWatch.halted() || myPubkeys.isEmpty()) return;
+        final String hash = s.hash;
+        if (coin != null) {
+            final String owner = MinimaHtlc.stateAt(coin, 0), id = coin.optString("coinid", "");
+            if (!myPubkeys.contains(MinimaHtlc.normKey(owner))) return;
+            minima.lockCoinUnspent(id, unspent -> {
+                if (unspent) noteLockPresent(hash, block);
+                else noteLockGone(hash, SwapDb.EV_LOCK_SPENT, "coins relevant:true coinid:" + id
+                        + " returned no unspent coin (owner " + owner + ")");
+            }, e -> SwapLog.w("lock coin read " + id + " ERR: " + e + " (unknown, not spent)"));
+        } else {
+            if (myMinimaPk == null || !myPubkeys.contains(MinimaHtlc.normKey(myMinimaPk))) return;
+            minima.findMyLockByHash(hash, coins -> {
+                for (int i = 0; i < coins.length(); i++) {
+                    JSONObject c = coins.optJSONObject(i);
+                    if (c != null && isMyOwnedKey(MinimaHtlc.stateAt(c, 0)) && sameHash(MinimaHtlc.stateAt(c, 5), hash)) {
+                        noteLockPresent(hash, block);
+                        checkExpiredMinima(c, block);   // records the coin, refunds it if past its timelock
+                        return;
+                    }
+                }
+                noteLockGone(hash, SwapDb.EV_LOCK_ABSENT, "coins relevant:true address:" + MinimaHtlc.HTLC_ADDRESS
+                        + " state:" + MinimaHtlc.normKey(hash) + " returned no lock of mine (keys " + myMinimaPk + ")");
+            }, e -> SwapLog.w("lock read " + hash + " ERR: " + e + " (unknown, not absent)"));
+        }
+    }
+
+    /** A "gone" reading counts only with a live tip read right after it (a node without a tip answers {@code coins}
+     *  with []). The first such reading is stored as a pending {@link SwapDb#EV_LOCK_GONE_SEEN}; {@code event} is
+     *  written once a later reading, at least {@link #LOCK_GONE_CONFIRM_BLOCKS} blocks on, repeats it with no
+     *  {@link SwapDb#EV_LOCK_PRESENT} in between. */
+    private void noteLockGone(final String hash, final String event, final String evidence) {
+        minima.currentBlock(new MinimaHtlc.BlockCb() {
+            @Override public void ok(int tip) {
+                if (tip <= 0 || com.eurobuddha.atomix.IdentityWatch.halted() || db.hasEvent(hash, event)) return;
+                long first = pendingLockGone(db, hash, event);
+                if (first < 0) db.logEvent(hash, SwapDb.EV_LOCK_GONE_SEEN, "minima", "", event + " minima block " + tip);
+                else if (tip >= first + LOCK_GONE_CONFIRM_BLOCKS)
+                    db.logEvent(hash, event, "minima", "", evidence + "; read at minima blocks " + first + " and " + tip);
+            }
+            @Override public void err(String m) { SwapLog.w("lock read " + hash + ": no tip (" + m + ") — reading not counted"); }
+        });
+    }
+
+    /** The lock read unspent/present: void any pending "gone" reading. */
+    private void noteLockPresent(String hash, int block) {
+        for (SwapDb.Event e : db.getEvents(hash)) {
+            if (SwapDb.EV_LOCK_PRESENT.equals(e.event)) return;
+            if (SwapDb.EV_LOCK_GONE_SEEN.equals(e.event)) { db.logEvent(hash, SwapDb.EV_LOCK_PRESENT, "minima", "", "minima block " + block); return; }
+        }
+    }
+
+    /** The block of the earliest pending {@code event} reading since the last {@link SwapDb#EV_LOCK_PRESENT}, or -1. */
+    static long pendingLockGone(SwapDb db, String hash, String event) {
+        long first = -1;
+        String prefix = event + " minima block ";
+        for (SwapDb.Event e : db.getEvents(hash)) {   // newest first
+            if (SwapDb.EV_LOCK_PRESENT.equals(e.event)) break;
+            if (SwapDb.EV_LOCK_GONE_SEEN.equals(e.event) && e.note != null && e.note.startsWith(prefix)
+                    && e.note.substring(prefix.length()).matches("\\d{1,18}"))
+                first = Long.parseLong(e.note.substring(prefix.length()));
+        }
+        return first;
     }
 
     /**

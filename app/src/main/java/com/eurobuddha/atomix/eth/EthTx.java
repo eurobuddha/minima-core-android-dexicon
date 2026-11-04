@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/eth/EthTx.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.92 app/src/main/java/com/eurobuddha/atomix/eth/EthTx.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.eth;
 
 import org.json.JSONArray;
