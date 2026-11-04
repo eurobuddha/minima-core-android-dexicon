@@ -236,7 +236,7 @@ public final class MarketTab extends LinearLayout {
         box.addView(info);
         final EditText amt = new EditText(act);
         amt.setHint(c + " to " + (sell ? "sell" : "buy"));
-        amt.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        decimalInput(amt, false);
         amt.setTextColor(Design.TEXT()); amt.setHintTextColor(Design.DIM2()); amt.setTextSize(16f); amt.setTypeface(Design.mono());
         box.addView(amt);
         final TextView out = Ui.text(act, "", 14f, DoorsTab.acc(market), Design.sans());

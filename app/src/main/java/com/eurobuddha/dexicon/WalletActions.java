@@ -136,7 +136,7 @@ final class WalletActions {
 
         LinearLayout amtRow = new LinearLayout(act); amtRow.setGravity(Gravity.CENTER_VERTICAL);
         final EditText amtE = new EditText(act);
-        amtE.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        MarketTab.decimalInput(amtE, false);   // AtomiX decimalInput: Samsung keyboards drop "." on a number field
         amtE.setHint("0.00"); amtE.setTextColor(Design.TEXT()); amtE.setHintTextColor(Design.DIM2()); amtE.setTextSize(17f); amtE.setTypeface(Design.mono());
         TextView maxB = Design.pill(act, "Max", Design.SURFACE2(), Design.TEXT());
         maxB.setOnClickListener(v -> {
@@ -199,7 +199,7 @@ final class WalletActions {
                         if (!c.current() || eth != ethSel[0] || !to.equals(toE.getText().toString().trim()) || !amt.equals(amtE.getText().toString().trim())) {
                             act.toast("Wallet session changed. Review again."); return;
                         }
-                        reviewing.set(true); d.dismiss(); review(c, eth, to, amount, fee, gasPrice);
+                        reviewing.set(true); d.dismiss(); review(c, eth, to, amount, fee, gasPrice, prefillTo);
                     });
                 } catch (Exception e) { ui.post(() -> {
                     if (d.isShowing()) { d.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true); act.toast(c.current() ? e.getMessage() : "Wallet session changed. Review again."); }
@@ -208,7 +208,7 @@ final class WalletActions {
         });
     }
 
-    private void review(SendContext c, boolean eth, String to, String amt, String feeEth, BigInteger gasPrice) {
+    private void review(SendContext c, boolean eth, String to, String amt, String feeEth, BigInteger gasPrice, String prefillTo) {
         if (!c.current()) { act.toast("Wallet session changed. Review again."); return; }
         final AtomicBoolean submitted = new AtomicBoolean();
         String sym = eth ? "ETH" : "USDT";
@@ -235,7 +235,7 @@ final class WalletActions {
                     });
                 })
                 .setOnDismissListener(ignored -> { if (!submitted.get()) c.cancel(); })
-                .setNegativeButton("Back", (dd, w) -> send())
+                .setNegativeButton("Back", (dd, w) -> send(prefillTo))   // the rescue's recipient survives Back
                 .show());
     }
 
@@ -256,7 +256,8 @@ final class WalletActions {
         box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(20), dp(12), dp(20), dp(4));
         TextView warn = text("⚠ Keep this secret.", Design.RED(), 12.5f); warn.setPadding(0, 0, 0, dp(10));
         box.addView(warn);
-        TextView key = text(pk, Design.TEXT(), 13f); key.setTypeface(Design.mono()); key.setTextIsSelectable(true);
+        // not selectable: the system copy bar would skip the sensitive-clip flag — "Copy key" is the one way to copy it
+        TextView key = text(pk, Design.TEXT(), 13f); key.setTypeface(Design.mono());
         box.addView(key);
         AlertDialog secret = dialog().setTitle("ETH private key").setView(wrap(box))
                 .setPositiveButton("Copy key", (d, w) -> copySecret(pk)).setNegativeButton("Close", null).create();

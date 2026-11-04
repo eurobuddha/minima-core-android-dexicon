@@ -250,7 +250,7 @@ public final class DoorsTab extends LinearLayout {
     private EditText input(String hint, boolean decimal) {
         EditText e = new EditText(getContext());
         e.setHint(hint); e.setTextColor(Design.TEXT()); e.setHintTextColor(Design.DIM2()); e.setTypeface(Design.mono()); e.setTextSize(12f);
-        e.setInputType(decimal ? InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        if (decimal) MarketTab.decimalInput(e, false); else e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         e.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 8));
         int p = Design.dp(getContext(), 9); e.setPadding(p, p, p, p);
         return e;
@@ -258,7 +258,7 @@ public final class DoorsTab extends LinearLayout {
     /** AtomiX's big amount field: 26sp mono, right-aligned, no box. */
     private EditText bigInput(int color) {
         EditText e = new EditText(getContext());
-        e.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        MarketTab.decimalInput(e, false);   // AtomiX decimalInput: Samsung keyboards drop "." on a number field
         e.setHint("0.00"); e.setHintTextColor(Design.DIM2());
         e.setTextColor(color); e.setTextSize(26f); e.setTypeface(Design.monoBold());
         e.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
