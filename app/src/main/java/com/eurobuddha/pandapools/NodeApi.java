@@ -177,7 +177,26 @@ public class NodeApi {
         });
     }
 
+    /** A node-picked consolidate (PandaPools' Wallet: any token) takes AtomiX's wallet lock first, as AtomiX's own
+     *  consolidate does: the node picks the coins, and it must never merge one an AtomiX swap is locking (re-audit, 0.2.16). */
+    static boolean isConsolidate(String command) { return command != null && command.trim().toLowerCase(java.util.Locale.ROOT).startsWith("consolidate"); }
+
     private void send(String command, Cb cb) {
+        if (isConsolidate(command)) {
+            if (!com.eurobuddha.atomix.swap.SwapEngine.beginConsolidate()) {
+                if (cb != null) cb.onError("Wallet busy — an AtomiX swap is locking coins or a consolidation is running. Nothing was sent; try again in a moment.");
+                return;
+            }
+            final Cb inner = cb;
+            cb = new Cb() {
+                public void onResult(JSONObject j) { com.eurobuddha.atomix.swap.SwapEngine.endConsolidate(); if (inner != null) inner.onResult(j); }
+                public void onError(String m) { com.eurobuddha.atomix.swap.SwapEngine.endConsolidate(); if (inner != null) inner.onError(m); }
+            };
+        }
+        sendUnlocked(command, cb);
+    }
+
+    private void sendUnlocked(String command, Cb cb) {
         final Write w = new Write(command);
         node.cmd(command, w::admit, timeoutFor(command), new com.eurobuddha.dexicon.NodeApi.Cb() {
             @Override public void onResult(JSONObject reply) {

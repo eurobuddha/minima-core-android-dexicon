@@ -162,4 +162,29 @@ public class DexiconNodeApiShimTest {
         assertEquals(0, NodeApi.timeoutFor("balance"));
         verifyNoInteractions(dex);
     }
+
+    /** 0.2.16: PandaPools' node-picked consolidate takes AtomiX's wallet lock — refused while a swap locks coins, released after. */
+    @Test public void aConsolidateWaitsForAtomixsWalletLock() throws Exception {
+        NodeApi n = new NodeApi(dex);
+        nextReply = new JSONObject().put("status", true);
+        assertTrue("an AtomiX lock / consolidation is running", com.eurobuddha.atomix.swap.SwapEngine.beginConsolidate());
+        try {
+            Box busy = new Box();
+            n.cmd("consolidate tokenid:0x00", busy);
+            org.robolectric.shadows.ShadowLooper.idleMainLooper();
+            assertNotNull(busy.error);
+            assertTrue(busy.error, busy.error.contains("Nothing was sent"));
+            assertFalse("never reached the node", sent.contains("consolidate tokenid:0x00"));
+        } finally { com.eurobuddha.atomix.swap.SwapEngine.endConsolidate(); }
+        Box ok = new Box();
+        n.cmd("consolidate tokenid:0x00", ok);
+        org.robolectric.shadows.ShadowLooper.idleMainLooper();
+        assertNotNull("free: it runs", ok.result);
+        assertTrue("and gives the lock back", com.eurobuddha.atomix.swap.SwapEngine.beginConsolidate());
+        com.eurobuddha.atomix.swap.SwapEngine.endConsolidate();
+        Box other = new Box();
+        n.cmd("balance", other);
+        org.robolectric.shadows.ShadowLooper.idleMainLooper();
+        assertNotNull("other commands never touch the lock", other.result);
+    }
 }
