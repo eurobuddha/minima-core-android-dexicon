@@ -9,12 +9,14 @@ public final class R {
     private R() {}
     public static final class layout {
         public static final int view_activity = com.eurobuddha.dexicon.R.layout.view_activity;
+        public static final int view_balances = com.eurobuddha.dexicon.R.layout.view_balances;
         public static final int view_mylp = com.eurobuddha.dexicon.R.layout.view_mylp;
         public static final int view_pools = com.eurobuddha.dexicon.R.layout.view_pools;
         public static final int view_swap = com.eurobuddha.dexicon.R.layout.view_swap;
     }
     public static final class id {
         public static final int actContainer = com.eurobuddha.dexicon.R.id.actContainer;
+        public static final int balancesContainer = com.eurobuddha.dexicon.R.id.balancesContainer;
         public static final int actGlobal = com.eurobuddha.dexicon.R.id.actGlobal;
         public static final int actPersonal = com.eurobuddha.dexicon.R.id.actPersonal;
         public static final int actRefresh = com.eurobuddha.dexicon.R.id.actRefresh;
@@ -50,5 +52,11 @@ public final class R {
         public static final int swapStatus = com.eurobuddha.dexicon.R.id.swapStatus;
         public static final int swapToCard = com.eurobuddha.dexicon.R.id.swapToCard;
         public static final int swapToTok = com.eurobuddha.dexicon.R.id.swapToTok;
+    }
+    public static final class drawable {
+        public static final int ic_coin_placeholder = com.eurobuddha.dexicon.R.drawable.ic_coin_placeholder;
+    }
+    public static final class raw {
+        public static final int minima_icon = com.eurobuddha.dexicon.R.raw.minima_icon;
     }
 }

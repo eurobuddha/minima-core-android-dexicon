@@ -98,7 +98,9 @@ public class DoorsTabSmokeTest {
 
         tab(root, "Assets").performClick();
         assertNotNull(find(root, "YOUR TRADING ID"));
-        assertNotNull(find(root, "RECEIVE MINIMA OR MxUSD"));
+        assertNotNull("PandaPools' wallet tab lives on Assets (0.2.0)", find(root, "WALLET · ALL TOKENS"));
+        assertTrue("its own content, hosted in the page (one scroll)", a.findViewById(R.id.balancesContainer).isShown());
+        assertFalse("not inside a second ScrollView", a.findViewById(R.id.balancesContainer).getParent() instanceof android.widget.ScrollView);
 
         find(root, room(0)).performClick();
         assertNotNull(find(root, "Swap MxUSD ⇄ USDT"));

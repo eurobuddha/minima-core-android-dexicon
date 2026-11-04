@@ -1,6 +1,7 @@
 package com.eurobuddha.dexicon;
 
 import android.annotation.SuppressLint;
+import android.view.View;
 import android.view.Gravity;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -25,10 +26,19 @@ public final class AssetsTab extends LinearLayout {
 
     private final MainActivity act;
     private final LinearLayout body;
+    private final com.eurobuddha.pandapools.WalletView wallet;
+    private final View walletBox;
 
-    public AssetsTab(MainActivity act) {
+    /** {@code wallet}: PandaPools' own Wallet tab (vendored WalletView): every token and NFT with its detail screen and
+     *  coins, the receive address, consolidate, Check node connection, Resolve interrupted write (owner, 4 Nov: parity).
+     *  Its content is hosted here; its own ScrollView is left out so the page scrolls as one. */
+    public AssetsTab(MainActivity act, com.eurobuddha.pandapools.WalletView wallet) {
         super(act);
         this.act = act;
+        this.wallet = wallet;
+        android.view.ViewGroup scroll = (android.view.ViewGroup) wallet.getRoot();
+        walletBox = scroll.getChildAt(0);
+        scroll.removeView(walletBox);
         setOrientation(VERTICAL);
         int pad = Design.dp(act, 12);
         setPadding(pad, pad, pad, pad);
@@ -49,16 +59,20 @@ public final class AssetsTab extends LinearLayout {
         return v;
     }
 
+    /** Assets came into view: PandaPools' wallet reads the address and balances (as its tab does). */
+    void shown() { wallet.onShown(); }
+
     public void render() {
         body.removeAllViews();
         Funds f = Funds.of(act);   // the same numbers the TRADE funds panel shows
         assetCard("MINIMA", Tokens.MINIMA, act.minimaCoins, f.minimaAvailable, act.minimaConfirmed(), f.minimaInOrders, f.minimaSettling);
         assetCard("MxUSD", Tokens.MXUSD(), act.mxusdCoins, f.mxusdAvailable, act.mxusdConfirmed(), f.mxusdInOrders, f.mxusdSettling);
 
-        LinearLayout recv = card();
-        String addr = act.receiveAddress();
-        recv.addView(Ui.copyRow(act, "RECEIVE MINIMA OR MxUSD", "Address", () -> addr));
-        recv.addView(addr.isEmpty() ? Ui.para(act, act.paired() ? "Reading from the node…" : "Pair with Minima Core first") : full("Address", addr), Ui.wide(act, 6, 0));
+        TextView all = Ui.label(act, "WALLET · ALL TOKENS");
+        all.setPadding(Design.dp(act, 4), Design.dp(act, 12), 0, Design.dp(act, 6));
+        body.addView(all);
+        if (walletBox.getParent() != null) ((android.view.ViewGroup) walletBox.getParent()).removeView(walletBox);
+        body.addView(walletBox);
 
         ethCard();
         identityCard();

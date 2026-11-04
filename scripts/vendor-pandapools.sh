@@ -15,7 +15,8 @@
 #   tests DexiconPoolsKeepAliveTest / DexiconNodeApiShimTest / OwnerCoinGuardTest  Dexicon's own tests of those shims
 # --check also FAILS on any other file in that package (main or test) that carries no vendored header.
 # NOT vendored at all: BootReceiver, HeartbeatReceiver, PoolWatchWorker (MakerService already keeps the process alive),
-# MainPager, NodeTransport(+Service), HandoverActivity, WalletView, Identicon (PandaPools' own app shell / wallet tab).
+# MainPager, NodeTransport(+Service), HandoverActivity (PandaPools' own app shell). WalletView + Identicon ARE vendored
+# since Dexicon 0.2.0: PandaPools' Wallet tab is hosted on Dexicon's ASSETS (owner, 4 Nov: full parity).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=../pandapools/app/src
@@ -29,7 +30,7 @@ for c in ActivityLog ActivityTimeline ActivityView ArchiveNode BackupCheck Backu
   MegaArchive MegaArchiveProofs MyLpView NetFetch NodeBackupCapture OwnerKeyRecovery OwnPoolStore PandaAddrBook PendingCollect Pool \
   PoolActivity PoolBackupBundle PoolBook PoolCalc PoolCalcDialog PoolCovenant PoolHistorySync PoolManager PoolRefresher PoolRepository \
   PoolRouter PoolStatement PoolsView PoolTxn PriceOracle ReAnnouncer ReceiptRecovery Recovery ReserveRecovery RestoreExit SerialQueue \
-  StrandingWatch SwapView TokenBalance TokenMeta TrackHygiene TxClassifier TxPost Ui Util VirtualCurve WalletTools WebValidate; do
+  StrandingWatch SwapView TokenBalance TokenMeta TrackHygiene TxClassifier TxPost Ui Util VirtualCurve WalletTools WalletView Identicon WebValidate; do
   FILES="$FILES $P/$c.java"
 done
 # The Maxima wire codecs PandaPools' ReceiptRecovery reuses (its own copy, under their own package).
@@ -50,6 +51,8 @@ done
 # Byte-for-byte (no header): the four pool screens' layouts, the receipt fixture, and the pinned Minima codecs jar.
 RAW="main/res/layout/view_mylp.xml:app/src/main/res/layout/view_mylp.xml main/res/layout/view_swap.xml:app/src/main/res/layout/view_swap.xml
 main/res/layout/view_pools.xml:app/src/main/res/layout/view_pools.xml main/res/layout/view_activity.xml:app/src/main/res/layout/view_activity.xml
+main/res/layout/view_balances.xml:app/src/main/res/layout/view_balances.xml main/res/drawable/ic_coin_placeholder.xml:app/src/main/res/drawable/ic_coin_placeholder.xml
+main/res/raw/minima_icon.svg:app/src/main/res/raw/minima_icon.svg
 test/resources/receipt-consolidation-header.json:app/src/test/resources/receipt-consolidation-header.json
 ../libs/minima.jar:app/libs/minima.jar"
 VER=$(grep -E 'versionName' ../pandapools/app/build.gradle | head -1 | grep -oE '"[^"]+"' | tr -d '"')

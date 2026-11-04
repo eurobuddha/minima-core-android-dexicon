@@ -1058,7 +1058,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         content = new LinearLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); assetsTab = new AssetsTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); poolSwapTab = new PoolSwapTab(this, track(new com.eurobuddha.pandapools.SwapView(this))); poolsTab = new PoolsTab(this, track(new com.eurobuddha.pandapools.PoolsView(this))); myPoolsTab = new MyPoolsTab(this, track(new com.eurobuddha.pandapools.MyLpView(this)), track(new com.eurobuddha.pandapools.ActivityView(this))); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
+        trade = new TradeView(this); activityTab = new ActivityTab(this); ordersTab = new OrdersTab(this); historyTab = new HistoryTab(this); doorsTab = new DoorsTab(this); relaysTab = new RelaysTab(this); poolsDestroy(); assetsTab = new AssetsTab(this, track(new com.eurobuddha.pandapools.WalletView(this))); poolSwapTab = new PoolSwapTab(this, track(new com.eurobuddha.pandapools.SwapView(this))); poolsTab = new PoolsTab(this, track(new com.eurobuddha.pandapools.PoolsView(this))); myPoolsTab = new MyPoolsTab(this, track(new com.eurobuddha.pandapools.MyLpView(this)), track(new com.eurobuddha.pandapools.ActivityView(this))); marketTab = new MarketTab(this); otcTab = new OtcTab(this);
         View[] tv = tabViews();
         panes = new ScrollView[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
@@ -1332,6 +1332,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     }
 
     private void poolPageShown(int t) {
+        if (t == TAB_ASSETS) assetsTab.shown();   // PandaPools' wallet lives on ASSETS
         if (t == TAB_PSWAP) poolSwapTab.shown();
         if (t == TAB_POOLS) poolsTab.shown();
         if (t == TAB_PMINE) myPoolsTab.shown();
