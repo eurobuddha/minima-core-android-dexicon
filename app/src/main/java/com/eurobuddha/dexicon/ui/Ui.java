@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.graphics.Typeface;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -110,7 +111,18 @@ public final class Ui {
         TextView p = para(c, body);
         card.addView(head); card.addView(p);
         String foldedKey = "why_closed_" + title;   // stored true = FOLDED (the key name is kept so upgrades keep their folds)
-        Runnable paint = () -> { boolean folded = prefs(c).getBoolean(foldedKey, startFolded); p.setVisibility(folded ? View.GONE : View.VISIBLE); head.setText(title + (folded ? "  ▸" : "  ▾")); };
+        // Folded it is ONE slim tappable line, no card around it (owner, 4 Nov: the folded card was far too thick); open, a card.
+        final int pad = Design.dp(c, 12);
+        final android.graphics.drawable.Drawable bg = card.getBackground();
+        Runnable paint = () -> {
+            boolean folded = prefs(c).getBoolean(foldedKey, startFolded);
+            p.setVisibility(folded ? View.GONE : View.VISIBLE);
+            head.setText(title + (folded ? "  ▸" : "  ▾"));
+            card.setBackground(folded ? null : bg);
+            card.setPadding(folded ? Design.dp(c, 4) : pad, folded ? 0 : pad, pad, folded ? 0 : pad);
+            ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) card.getLayoutParams();
+            if (lp != null) { lp.bottomMargin = Design.dp(c, folded ? 2 : 10); card.setLayoutParams(lp); }
+        };
         head.setOnClickListener(v -> { prefs(c).edit().putBoolean(foldedKey, !prefs(c).getBoolean(foldedKey, startFolded)).apply(); paint.run(); });
         paint.run();
         return card;
