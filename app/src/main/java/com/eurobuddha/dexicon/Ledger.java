@@ -330,8 +330,11 @@ public final class Ledger {
         }
         boolean usdtIn = "USDT".equals(buy);
         it.step(Mark.OK, hms(s.created, tz), "A taker bought " + s.sellAmount + " " + sell + " from your market for " + s.buyAmount + " " + buy);
-        if (declined != null) it.step(Mark.WARN, hms(declinedAt, tz), "Not locked: " + com.eurobuddha.dexicon.doors.DoorHost.mx(declined));
-        if (lockedAt > 0 || !SwapDb.ST_STARTED.equals(st)) it.step(Mark.OK, lockedAt > 0 ? hms(lockedAt, tz) : "", "You locked " + s.sellAmount + " " + sell);
+        // a decline a later, successful lock superseded is history, not the state (events persist across retries)
+        if (declined != null && (lockedAt == 0 || declinedAt > lockedAt)) it.step(Mark.WARN, hms(declinedAt, tz), "Not locked: " + com.eurobuddha.dexicon.doors.DoorHost.mx(declined));
+        // "You locked" only once the lock was SENT: the row is saved LOCKED before the broadcast (record-before-broadcast)
+        if (lockedAt > 0) it.step(Mark.OK, hms(lockedAt, tz), "You locked " + s.sellAmount + " " + sell);
+        else if (!SwapDb.ST_STARTED.equals(st) && !SwapDb.ST_REFUNDED.equals(st) && !SwapDb.ST_ERROR.equals(st)) it.step(Mark.WAIT, "", "Locking your " + s.sellAmount + " " + sell + "…");
         if (SwapDb.ST_STARTED.equals(st) || SwapDb.ST_LOCKED.equals(st))
             it.step(Mark.WAIT, "", "Waiting for the taker to claim — that reveals the secret that pays you. If they never do, your " + sell + " comes back after the timelock.");
         if (SwapDb.ST_CLAIMING.equals(st)) it.step(Mark.WAIT, "", (usdtIn ? "Withdrawing your " : "Claiming your ") + s.buyAmount + " " + buy + " now");

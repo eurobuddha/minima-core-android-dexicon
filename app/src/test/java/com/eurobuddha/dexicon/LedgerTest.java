@@ -385,4 +385,20 @@ public class LedgerTest {
         Ledger.Item it = Ledger.swap(s, java.util.Collections.singletonList(e), null, 0, 0, null, null, java.util.TimeZone.getTimeZone("UTC"));
         assertFalse(it.steps.toString(), it.steps.toString().contains("mxUSDT"));
     }
+
+    /** 0.2.25: the maker card says "You locked" only once the lock was sent; a superseded decline is not the state. */
+    @Test public void aMakerCardTellsTheTruth() {
+        com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap();
+        s.hash = "ab".repeat(32); s.role = "RESPONDER"; s.direction = "MINIMA_TO_ERC20"; s.status = "LOCKED";
+        s.sellToken = "MxUSD"; s.sellAmount = "5"; s.buyToken = "USDT"; s.buyAmount = "5"; s.created = 1_700_000_000_000L; s.updated = s.created;
+        java.util.TimeZone tz = java.util.TimeZone.getTimeZone("UTC");
+        Ledger.Item before = Ledger.swap(s, new java.util.ArrayList<>(), null, 0, 0, null, null, tz);
+        assertFalse("saved LOCKED, not yet sent", before.steps.toString().contains("You locked"));
+        assertTrue(before.steps.toString().contains("Locking your 5 MxUSD"));
+        com.eurobuddha.atomix.swap.SwapDb.Event dec = new com.eurobuddha.atomix.swap.SwapDb.Event(); dec.event = com.eurobuddha.atomix.swap.SwapDb.EV_DECLINED; dec.note = "busy"; dec.date = s.created + 1000;
+        com.eurobuddha.atomix.swap.SwapDb.Event cp = new com.eurobuddha.atomix.swap.SwapDb.Event(); cp.event = com.eurobuddha.atomix.swap.SwapDb.EV_CPSENT; cp.note = "0x" + "ef".repeat(32); cp.date = s.created + 5000;
+        Ledger.Item after = Ledger.swap(s, java.util.Arrays.asList(cp, dec), null, 0, 0, null, null, tz);
+        assertTrue(after.steps.toString().contains("You locked 5 MxUSD"));
+        assertFalse("the retry superseded the decline", after.steps.toString().contains("Not locked"));
+    }
 }
