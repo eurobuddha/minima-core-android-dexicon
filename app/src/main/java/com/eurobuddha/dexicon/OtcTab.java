@@ -167,7 +167,7 @@ public final class OtcTab extends LinearLayout {
                 LinearLayout row = new LinearLayout(act); row.setPadding(0, Design.dp(act, 8), 0, 0);
                 LayoutParams m = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT); m.rightMargin = Design.dp(act, 8);
                 row.addView(pill("Accept", true, () -> {
-                    if (host.gated()) { act.toast("One trading app per phone — remove AtomiX / PandaPools first."); return; }
+                    if (refuse()) return;
                     String fundErr = host.otcCheckFunds(d.role, d.side, d.amount, d.price);
                     if (fundErr != null) { act.toast(fundErr); return; }
                     host.otc().accept(d, res("Accepted"));
@@ -205,6 +205,7 @@ public final class OtcTab extends LinearLayout {
 
     /** Amount + price entry (AtomiX otcProposeDialog / otcCounterDialog share it). */
     private void terms(String title, String amountLabel, String amount, String price, String ok, java.util.function.BiConsumer<Double, Double> send) {
+        final com.eurobuddha.atomix.TradingContext m = host.market();
         LinearLayout box = new LinearLayout(act); box.setOrientation(VERTICAL);
         int p = Design.dp(act, 20); box.setPadding(p, Design.dp(act, 8), p, 0);
         box.addView(Ui.label(act, amountLabel));
@@ -213,6 +214,7 @@ public final class OtcTab extends LinearLayout {
         EditText prE = input(); prE.setText(price); box.addView(prE);
         act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle(title).setView(box)
                 .setPositiveButton(ok, (dg, w) -> {
+                    if (refuse() || host.market() != m) { if (host.market() != m) act.toast("The market was switched — nothing was sent."); return; }
                     double a = MarketTab.parseD(amtE.getText().toString(), 0), pr = MarketTab.parseD(prE.getText().toString(), 0);
                     if (!(a > 0) || !(pr > 0) || !Double.isFinite(a) || !Double.isFinite(pr) || !OtcController.validTerms(DoorHost.plain(a), DoorHost.sig(pr))) { act.toast("Enter amount + price"); return; }
                     send.accept(a, pr);
@@ -222,8 +224,15 @@ public final class OtcTab extends LinearLayout {
                 .show());
     }
 
+    /** Nothing is agreed while the gate is shut or a ⇄ switch is under way. */
+    private boolean refuse() {
+        if (host.gated()) { act.toast("One trading app per phone — remove AtomiX / PandaPools first."); return true; }
+        if (host.switching()) { act.toast(DoorHost.SWITCHING); return true; }
+        return false;
+    }
+
     private void propose(OtcOffer lp, String dealSide) {
-        if (host.gated()) { act.toast("One trading app per phone — remove AtomiX / PandaPools first."); return; }
+        if (refuse()) return;
         final double cap = lp.capFor(dealSide);
         String c = ccy();
         terms(OtcOffer.LP_SELLS_MINIMA.equals(dealSide) ? "Buy " + c : "Sell " + c, c + " amount (≤ " + DoorHost.sig(cap) + ")", "", "", "Send offer", (a, pr) -> {
@@ -235,6 +244,7 @@ public final class OtcTab extends LinearLayout {
     }
 
     private void counter(OtcDb.Deal d) {
+        if (refuse()) return;
         if (!d.inActiveMarket()) { act.toast(DoorHost.mx(OtcController.MARKET_ERROR)); return; }
         terms("Counter-offer", ccy() + " amount", d.amount, d.price, "Send counter", (a, pr) -> {
             String fundErr = host.otcCheckFunds(d.role, d.side, DoorHost.plain(a), DoorHost.sig(pr));

@@ -274,6 +274,8 @@ public final class MarketTab extends LinearLayout {
     }
 
     void editOrderDialog() {
+        if (host.switching()) { act.toast(DoorHost.SWITCHING); return; }
+        final TradingContext mkt = host.market();   // the market this editor prices; Save refuses any other
         final android.content.SharedPreferences prefs = host.prefs();
         final Order o = host.loadOrder();
         final Order.Pair p = o.pairs.values().iterator().next();   // single pair (USDT) today
@@ -414,6 +416,7 @@ public final class MarketTab extends LinearLayout {
                 .setOnDismissListener(d -> { open[0] = false; removeCallbacks(tick[0]); act.repaint(); })
                 .show());
         editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            if (host.switching() || host.market() != mkt) { act.toast("The market was switched — nothing was saved. Open the editor again."); editor.dismiss(); return; }
             if (!paramsValid(params, pegSw.isChecked()) || !rowsValid(askRows, bidRows)) { invalid(pv); pv.post(() -> pv.requestRectangleOnScreen(new android.graphics.Rect(0, 0, pv.getWidth(), pv.getHeight()), true)); return; }
             p.enable = sw.isChecked();
             p.asks.clear(); p.bids.clear();
@@ -436,7 +439,7 @@ public final class MarketTab extends LinearLayout {
                     .putBoolean(PriceOracle.P_WITHDRAWN, pegOn && prefs.getBoolean(PriceOracle.P_WITHDRAWN, false))
                     .putBoolean(PriceOracle.P_TOMBSTONED, pegOn && prefs.getBoolean(PriceOracle.P_TOMBSTONED, false))
                     .apply();
-            host.saveOrder(o);
+            if (!host.saveOrder(o)) { act.toast(DoorHost.SWITCHING); editor.dismiss(); return; }
             act.toast(p.enable && p.asks.isEmpty() && p.bids.isEmpty() ? "Enabled, but no levels set — add a bid or ask to publish"
                     : Order.crossed(p) ? "⚠ Saved, but your best bid ≥ best ask (crossed market)" : "Ladder saved");
             if (prefs.getBoolean("auto_publish", false)) host.pushOrderEdit(o, this::say);   // a live order reflects the edit NOW

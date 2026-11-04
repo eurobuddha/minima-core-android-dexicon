@@ -138,7 +138,7 @@ public final class DoorHost {
         minima = new MinimaHtlc(node);
         db = new SwapDb(app);
         engine = new SwapEngine(node, minima, db, wallet, h, new SwapEngine.Notifier() {
-            @Override public void notify(String title, String body) { Notifier.alert(app, "AtomiX · " + title, mx(body)); }
+            @Override public void notify(String title, String body) { Notifier.alert(app, mx("AtomiX · " + title), mx(body)); }
             @Override public void onSwapsChanged() { changed(); }
         });
         rpc = new EthRpc(net.defaultRpc);
@@ -153,7 +153,7 @@ public final class DoorHost {
         engine.setOtcDb(otcDb);
         otc = new OtcController(node, otcDb, engine, new OtcController.Ui() {
             @Override public void onDealsChanged() { changed(); }
-            @Override public void note(String title, String body) { Notifier.alert(app, "AtomiX OTC · " + title, mx(body)); }
+            @Override public void note(String title, String body) { Notifier.alert(app, mx("AtomiX OTC · " + title), mx(body)); }
         });
         for (TradingContext m : MARKETS) { books.put(m, Collections.emptyMap()); coinBal.put(m, null); }
         market = TradingContext.load(prefs);   // AtomiX's own key + default (MxUSD)
@@ -172,6 +172,11 @@ public final class DoorHost {
     // ------------------------------------------------------------------ the one active market (AtomiX's currency switch)
 
     public TradingContext market() { return market; }
+    /** A ⇄ switch is under way (between the call and the flip, up to ~4 s): nothing may be saved, published or agreed,
+     *  or a ladder priced for one coin lands on the other (~200× mispriced). */
+    private boolean switching;
+    public boolean switching() { return switching; }
+    public static final String SWITCHING = "Switching markets — try again in a moment.";
     /** This host's prefs — AtomiX's keys for the ACTIVE market (order_config, auto_publish, peg_*, otc_*). */
     public SharedPreferences prefs() { return prefs; }
     public String launchNote() { return market == TradingContext.MINIMA ? launchNote : null; }
@@ -181,6 +186,29 @@ public final class DoorHost {
         for (SwapDb.Swap s : db.allSwaps())
             if (!com.eurobuddha.atomix.swap.SwapVisibility.isTerminal(s) && TradingContext.forSwap(s.sellToken, s.buyToken) == m) return true;
         return false;
+    }
+
+    /** An OTC deal of {@code m} that has not finished (OtcController settles a deal only while its market is active). */
+    public boolean otcOpen(TradingContext m) {
+        for (OtcDb.Deal d : otcDb.allDeals()) if (!OtcController.isTerminal(d.status) && d.market() == m) return true;
+        return false;
+    }
+
+    // A withdrawal (tombstone) of a market sent but not yet confirmed: the order is still on the book until it lands.
+    private void markWithdrawal(TradingContext m) { prefs.edit().putBoolean("withdraw_pending_" + m.key, true).apply(); }
+    private void withdrawalLanded(TradingContext m) { prefs.edit().remove("withdraw_pending_" + m.key).apply(); }
+    public boolean withdrawalPending(TradingContext m) { return prefs.getBoolean("withdraw_pending_" + m.key, false); }
+
+    /** Re-send the ACTIVE market's unconfirmed withdrawal (each pass) until it lands; a live re-publish supersedes it. */
+    private void flushWithdrawal() {
+        if (!withdrawalPending(market) || !makerReady()) return;
+        if (prefs.getBoolean("auto_publish", false)) { withdrawalLanded(market); return; }
+        if (!PublishGate.tryAcquire(PublishGate.ORDER)) return;
+        final TradingContext m0 = market;
+        SwapOrderBook.publish(node, ls(), ids.get(market), tombstone(), new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) { PublishGate.release(PublishGate.ORDER); withdrawalLanded(m0); changed(); }
+            @Override public void onFailed(String message) { PublishGate.release(PublishGate.ORDER); }
+        });
     }
 
     /** The ACTIVE market has a maker side configured or kept live: a liquid saved order (it arms the responder), the
@@ -199,10 +227,12 @@ public final class DoorHost {
     public String applyLaunchRule() {
         launchNote = null;
         if (market != TradingContext.MINIMA) return null;
-        boolean swap = inFlight(TradingContext.MINIMA), live = makerLive();
+        // an open OTC deal counts as in flight (the engine settles OTC legs only in the ACTIVE market), and so does a
+        // withdrawal whose tombstone has not landed (the order is still on the book until it does)
+        boolean swap = inFlight(TradingContext.MINIMA) || otcOpen(TradingContext.MINIMA), live = makerLive() || withdrawalPending(TradingContext.MINIMA);
         if (swap || live) {
-            launchNote = "Opened in MINIMA mode: " + (swap && live ? "a USDT ⇄ MINIMA swap is in flight and your MINIMA market is live"
-                    : swap ? "a USDT ⇄ MINIMA swap is in flight" : "your MINIMA market is live")
+            launchNote = "Opened in MINIMA mode: " + (swap && live ? "a USDT ⇄ MINIMA swap or OTC deal is in flight and your MINIMA market is live"
+                    : swap ? "a USDT ⇄ MINIMA swap or OTC deal is in flight" : "your MINIMA market is live or its withdrawal has not landed yet")
                     + ". Dexicon never switches a live market by itself. Use the ⇄ pill to go back to MxUSD when you are ready.";
             return launchNote;
         }
@@ -221,15 +251,17 @@ public final class DoorHost {
      * parked config of its own. A live leaving market is tombstoned first (current identity, current sentinel).
      */
     public String switchMarket(final TradingContext target, final Runnable done) {
+        if (switching) return SWITCHING;
         if (target == market) { if (done != null) done.run(); return null; }
         if (busy || scanning) return "An AtomiX swap is starting or the book is being read — try again in a moment.";
         final TradingContext current = market;
-        snapshotMarket(prefs, current.key);
+        switching = true;
         final boolean[] ran = {false};
         final Runnable[] watchdog = new Runnable[1];
         final Runnable proceed = () -> {
             if (ran[0]) return; ran[0] = true;
             if (watchdog[0] != null) h.removeCallbacks(watchdog[0]);
+            snapshotMarket(prefs, current.key);   // the leaving config as it is NOW (nothing could change it while switching)
             com.eurobuddha.atomix.swap.PublishGate.bumpGen();   // queued publications of the leaving market are void
             market = target;
             TradingContext.setActive(target, prefs);
@@ -245,19 +277,22 @@ public final class DoorHost {
             for (TradingContext m : MARKETS) books.put(m, Collections.emptyMap());
             otcScanner = null; otcScannerMarket = null; orderMisses = 0; otcMisses = 0;
             launchNote = null;
+            dropIncoming(current);
+            switching = false;
             changed();
             if (done != null) done.run();
         };
         watchdog[0] = proceed;
         CommsIdentity id = ids.get(current);
-        if (makerLive() && id != null && minima.ready() && wallet.ready()) {
+        if (makerLive() && tombstones.ready(id)) {
             try {
                 Order o = Order.fromConfigJson(prefs.getString("order_config", ""));
                 for (Order.Pair p : o.pairs.values()) p.enable = false;
                 o.minimaPublicKey = prefs.getString("swap_pk", "");
                 o.ethAddress = wallet.address();
-                SwapOrderBook.publish(node, ls(), id, o, new CommsTransport.SendCb() {
-                    @Override public void onSent(String txpowid) { h.post(proceed); }
+                markWithdrawal(current);
+                tombstones.send(id, o, new CommsTransport.SendCb() {
+                    @Override public void onSent(String txpowid) { withdrawalLanded(current); h.post(proceed); }
                     @Override public void onFailed(String message) { h.post(proceed); }   // it ages off the book (~1 h)
                 });
                 h.postDelayed(proceed, 4000);   // never block the switch on a hung post
@@ -265,6 +300,16 @@ public final class DoorHost {
         } else proceed.run();
         return null;
     }
+
+    /** The switch's tombstone path: can the leaving market be signed for, and send it. A field only so a test can
+     *  stand in for the chain (the real one is AtomiX's SwapOrderBook.publish). */
+    interface Tombstones { boolean ready(CommsIdentity id); void send(CommsIdentity id, Order o, CommsTransport.SendCb cb); }
+    Tombstones tombstones = new Tombstones() {
+        @Override public boolean ready(CommsIdentity id) { return id != null && minima.ready() && wallet.ready(); }
+        @Override public void send(CommsIdentity id, Order o, CommsTransport.SendCb cb) { SwapOrderBook.publish(node, ls(), id, o, cb); }
+    };
+    SwapDb swapDb() { return db; }
+    OtcDb otcDb() { return otcDb; }
 
     // Per-currency market memory (AtomiX MainActivity.MKT_STR / MKT_BOOL): the active prefs are always the active
     // currency's; on a switch the leaving config is PARKED under its own key and the arriving one RESTORED. Config only —
@@ -377,7 +422,11 @@ public final class DoorHost {
 
     /** One settlement pass: boot steps, then the engine's poll (claims / withdraws / refunds), maker notices, forwards.
      *  With the node unpaired (or not booted yet) it falls back to {@link #pollEthOnly}: an ETH refund needs no node. */
+    private long lastPollMs;
     public void poll() {
+        long now = System.currentTimeMillis();
+        if (now - lastPollMs < 30_000) return;   // SwapService.tickPass's overlap guard: DOORS tab + MakerService both drive this
+        lastPollMs = now;
         ensure();
         if (!dnode.isEnabled() || !ready()) { engine.pollEthOnly(); return; }
         // SwapService.tickPass, minus its FOREGROUND stand-down: Dexicon has ONE engine. Mid-sweep the sweep owns the
@@ -388,6 +437,7 @@ public final class DoorHost {
             boolean live = prefs.getBoolean("auto_publish", false);
             if (prefs.getBoolean(PriceOracle.P_ENABLE, false) && live) { PriceOracle.refreshAsync(); maybePegWithdraw(); }
             engine.poll();
+            flushWithdrawal();   // a withdrawal, allowed even while gated
             if (!gated()) {
                 maybeAutoRepublish();
                 maybeRepublishOtc();
@@ -403,6 +453,7 @@ public final class DoorHost {
      *  block instead of a 90 s poll. MakerService drives it between polls. */
     public void discover() {
         if (!dnode.isEnabled() || !ready()) return;
+        if (!com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) armMaker();   // the gate / halt as of NOW, not the last poll
         scanTake();
         scanOtc();
     }
@@ -446,15 +497,33 @@ public final class DoorHost {
             if (hash.isEmpty() || me == null || !me.equals(to)) return false;
             if (opened.fromPublicId == null || !opened.fromPublicId.equals(from)) return false;
             if (j.has("notice")) return engine.onMakerNotice(hash, from, j.optString("notice"), j.optString("reason"));
-            if (m != market) return false;
+            if (m != market || switching) return false;
             java.util.Set<String> set = incomingHashlocks();
-            boolean isNew = set.add(hash);
-            if (isNew) prefs.edit().putString("incoming_hashlocks", android.text.TextUtils.join(",", set)).apply();
+            boolean isNew = true;
+            for (String e : set) if (hashOf(e).equals(hash)) { isNew = false; break; }
+            if (isNew) { set.add(hash + "|" + market.key); prefs.edit().putString("incoming_hashlocks", android.text.TextUtils.join(",", set)).apply(); }
             engine.addIncomingHashlock(hash, from);
-            if (isNew && !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) engine.checkBuyNow(hash);   // act now, not at the next poll
-            if (isNew) Notifier.alert(app, "AtomiX · Buy request received", "A buyer wants your " + DoorPlan.coin(market) + " — finding their USDT lock, then locking.");
+            if (isNew && !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) { armMaker(); engine.checkBuyNow(hash); }   // act now, on the guard as of now
+            if (isNew && !gated() && !IdentityWatch.halted())   // gated / halted: the guard declines it, so promise no lock
+                Notifier.alert(app, "AtomiX · Buy request received", "A buyer wants your " + DoorPlan.coin(market) + " — finding their USDT lock, then locking.");
             return isNew;
         } catch (Exception e) { return false; }
+    }
+
+    /** incoming_hashlocks entries are "hash|market" (0.1.67); a bare hash is from before the tag. */
+    private static String hashOf(String e) { int i = e.indexOf('|'); return i < 0 ? e : e.substring(0, i); }
+    private static String marketOf(String e) { int i = e.indexOf('|'); return i < 0 ? "" : e.substring(i + 1); }
+
+    /** The leaving market's persisted buy requests are dropped, so a restart never re-arms them under the other market
+     *  (untagged legacy ones too: their market is unknown). The engine's in-memory set has no remove API — see report. */
+    private void dropIncoming(TradingContext leaving) {
+        java.util.Set<String> set = incomingHashlocks();
+        boolean changed = false;
+        for (java.util.Iterator<String> it = set.iterator(); it.hasNext(); ) {
+            String k = marketOf(it.next());
+            if (k.isEmpty() || k.equals(leaving.key)) { it.remove(); changed = true; }
+        }
+        if (changed) prefs.edit().putString("incoming_hashlocks", android.text.TextUtils.join(",", set)).apply();
     }
 
     private java.util.Set<String> incomingHashlocks() {
@@ -470,10 +539,10 @@ public final class DoorHost {
         java.util.Set<String> set = incomingHashlocks();
         boolean pruned = false;
         for (java.util.Iterator<String> it = set.iterator(); it.hasNext(); ) {
-            String x = it.next();
+            String e = it.next(), x = hashOf(e), k = marketOf(e);
             SwapDb.Swap s = db.getSwap(x);
             if (s != null && com.eurobuddha.atomix.swap.SwapVisibility.isTerminal(s)) { it.remove(); pruned = true; }
-            else engine.addIncomingHashlock(x);
+            else if (k.isEmpty() || k.equals(market.key)) engine.addIncomingHashlock(x);   // only the ACTIVE market's
         }
         if (pruned) prefs.edit().putString("incoming_hashlocks", android.text.TextUtils.join(",", set)).apply();
     }
@@ -494,6 +563,9 @@ public final class DoorHost {
     /** The responder guard: AtomiX's armSafe order (empty while a pegged order is withdrawn) — or EMPTY while gated or
      *  halted, so every take declines. */
     Order armMaker() { Order o = gated() || IdentityWatch.halted() ? new Order() : PriceOracle.armSafe(loadOrder(), prefs); engine.setMyOrder(o); return o; }
+
+    /** What a confirmed publish may arm: the order, unless the gate shut or the keys were lost while it was in flight. */
+    private Order armable(Order o) { return gated() || IdentityWatch.halted() ? new Order() : o; }
 
     /** The saved order with my identities attached and every pair disabled: a tombstone (freshest-per-signer wins). */
     Order tombstone() {
@@ -536,7 +608,7 @@ public final class DoorHost {
                     if (gen != PublishGate.gen()) { PublishGate.release(PublishGate.ORDER); return; }
                     prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).apply();
                     if (peg == PriceOracle.PEG_APPLIED || wide) PriceOracle.commitPeg(prefs, pegMid, wide);   // baseline moves only on a CONFIRMED publish
-                    engine.setMyOrder(o);
+                    engine.setMyOrder(armable(o));
                     PublishGate.release(PublishGate.ORDER);
                     changed();
                     if (restored && peg == PriceOracle.PEG_APPLIED && o.hasLiquidity())
@@ -554,6 +626,7 @@ public final class DoorHost {
 
     /** Why nothing may be published right now, or null. */
     private String makerBlock() {
+        if (switching) return SWITCHING;
         if (gated()) return "One trading app per phone: AtomiX or PandaPools is present, so Dexicon publishes nothing.";
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
         if (!ready() || !makerReady()) return "Still connecting to your node… " + bootNote();
@@ -561,9 +634,11 @@ public final class DoorHost {
     }
 
     /** Save the editor's order and arm the responder guard with it at once (AtomiX saveOrder). */
-    public void saveOrder(Order o) {
+    public boolean saveOrder(Order o) {
+        if (switching) return false;
         prefs.edit().putString("order_config", Order.toConfigJson(o)).apply();
         armMaker();
+        return true;
     }
 
     /** AtomiX publishOrder: a pegged order grabs a live price first so a tapped Publish never quotes a stale one. */
@@ -605,7 +680,7 @@ public final class DoorHost {
                 if (gen != PublishGate.gen()) return;
                 prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).apply();
                 if (peg == PriceOracle.PEG_APPLIED || wide) PriceOracle.commitPeg(prefs, pegMid, wide);
-                engine.setMyOrder(o);
+                engine.setMyOrder(armable(o));
                 st.say(!o.hasLiquidity() ? "✓ Order withdrawn — removed from the book" : wide
                         ? "✓ Order live — pegged to " + PriceOracle.source() + " (feed stale — defensive spread; auto-tightens when it recovers)"
                         : peg == PriceOracle.PEG_APPLIED ? "✓ Order live — pegged to " + PriceOracle.source() + ", auto-reprices"
@@ -620,6 +695,7 @@ public final class DoorHost {
     /** AtomiX pushOrderEdit: a saved edit reaches the book NOW. A liquid order re-publishes; an emptied/disabled one goes
      *  out as a TOMBSTONE and stops auto-publishing. Withdrawing is allowed even while gated. */
     public void pushOrderEdit(final Order o, Status st) {
+        if (switching) { st.say(SWITCHING); return; }
         final boolean live = o.hasLiquidity();
         if (!live) prefs.edit().putBoolean("auto_publish", false).apply();   // first, kill-safe
         if (live) { String no = makerBlock(); if (no != null) { st.say("Saved. " + no); return; } }
@@ -633,12 +709,15 @@ public final class DoorHost {
         final long gen = PublishGate.gen();
         st.say(live ? "Updating your order…" : "Withdrawing your order…");
         final CommsIdentity id = ids.get(market);
+        final TradingContext m0 = market;
+        if (!live) markWithdrawal(m0);
         final CommsTransport.SendCb cb = new CommsTransport.SendCb() {
             @Override public void onSent(String txpowid) {
                 if (gen != PublishGate.gen()) return;
                 prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).apply();
                 if (peg == PriceOracle.PEG_APPLIED || wide) PriceOracle.commitPeg(prefs, pegMid, wide);
-                engine.setMyOrder(live ? o : new Order());
+                engine.setMyOrder(live ? armable(o) : new Order());
+                if (!live) withdrawalLanded(m0);
                 st.say(live ? "✓ Order updated" : "✓ Order withdrawn — removed from the book");
                 changed();
                 h.postDelayed(() -> scanBooks(DoorHost.this::changed), 2000);
@@ -651,6 +730,7 @@ public final class DoorHost {
 
     /** Withdraw my market: the saved order disabled, armed empty at once, tombstoned on the book. */
     public void withdrawOrder(Status st) {
+        if (switching) { st.say(SWITCHING); return; }
         Order o = loadOrder();
         for (Order.Pair p : o.pairs.values()) p.enable = false;
         saveOrder(o);
@@ -678,6 +758,7 @@ public final class DoorHost {
 
     /** AtomiX publishOtcOffer: go live (or update) for OTC with these sizes; the background keeps it on the board. */
     public void publishOtcOffer(double sell, double buy, Status st) {
+        if (switching) { st.say(SWITCHING); return; }
         if (!Double.isFinite(sell) || !Double.isFinite(buy) || sell < 0 || buy < 0 || (sell <= 0 && buy <= 0)) { st.say("Enter a sell and/or buy size"); return; }
         String no = makerBlock();
         if (no != null) { st.say(no); return; }
@@ -776,8 +857,10 @@ public final class DoorHost {
         if (first) prefs.edit().putBoolean(PriceOracle.P_WITHDRAWN, true).putBoolean(PriceOracle.P_TOMBSTONED, false).apply();   // kill-safe
         PublishGate.bumpGen();            // an in-flight auto publish must not re-arm the ladder
         engine.setMyOrder(new Order());   // disarm NOW, even if the publish fails
+        final TradingContext m0 = market;
+        markWithdrawal(m0);
         SwapOrderBook.publish(node, ls(), ids.get(market), tombstone(), new CommsTransport.SendCb() {
-            @Override public void onSent(String txpowid) { prefs.edit().putBoolean(PriceOracle.P_TOMBSTONED, true).apply(); changed(); }
+            @Override public void onSent(String txpowid) { prefs.edit().putBoolean(PriceOracle.P_TOMBSTONED, true).apply(); withdrawalLanded(m0); changed(); }
             @Override public void onFailed(String message) { /* retried next pass */ }
         });
         if (first) Notifier.alert(app, "AtomiX · " + PriceOracle.source() + " price feed lost",
@@ -921,6 +1004,7 @@ public final class DoorHost {
      * A forward is queued per part when {@code to} is set. Returns an error message, or null when started.
      */
     public String take(TradingContext market, DoorPlan.Plan plan, String to, Progress pr) {
+        if (switching) return SWITCHING;
         if (!ready()) return "AtomiX not ready — " + bootNote();
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
         if (gated()) return "Trading is off: one trading app per phone.";

@@ -64,4 +64,21 @@ public class MarketTabSmokeTest {
         assertEquals(1.02, p.asks.get(0).price, 1e-12);
         assertEquals(25, p.asks.get(0).amount, 1e-12);
     }
+
+    @Test public void anEditorOpenedForOneMarketNeverSavesIntoTheOther() {
+        MainActivity a = DoorsTabSmokeTest.launch();
+        View root = a.getWindow().getDecorView();
+        DoorsTabSmokeTest.find(root, "MARKET").performClick();
+        DoorsTabSmokeTest.find(root, "Edit my order").performClick();
+        AlertDialog d = (AlertDialog) ShadowDialog.getLatestDialog();
+        android.view.ViewGroup a1 = (android.view.ViewGroup) DoorsTabSmokeTest.find(d.getWindow().getDecorView(), "A1").getParent();
+        ((android.widget.EditText) a1.getChildAt(1)).setText("1.02");
+        ((android.widget.EditText) a1.getChildAt(2)).setText("25");
+        host.switchMarket(TradingContext.MINIMA, null);   // a MxUSD ladder must not land on MINIMA (~200x mispriced)
+        try {
+            d.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            assertFalse("refused and closed", d.isShowing());
+            assertFalse("nothing saved into MINIMA", host.loadOrder().hasLiquidity());
+        } finally { host.switchMarket(TradingContext.MXUSDT, null); }
+    }
 }

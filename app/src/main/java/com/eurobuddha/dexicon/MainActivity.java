@@ -1126,8 +1126,12 @@ public class MainActivity extends AppCompatActivity {
                         + from + " orders simply stop being maintained (a live market is withdrawn from the book). Any in-flight swaps in "
                         + "either currency keep settling safely in the background — switching never strands them.")
                 .setPositiveButton("Switch to " + to, (d, w) -> {
-                    String err = host.switchMarket(target, () -> { paintCcy(); repaint(); toast("Now on the " + to + " market"); });
-                    if (err != null) toast(err);
+                    if (host.makerLive()) setStage("Withdrawing your " + from + " market…");   // AtomiX shows the wait too
+                    String err = host.switchMarket(target, () -> {
+                        dismissDialogs();   // an editor / offer opened for the leaving market must not save into the new one
+                        setStage(""); paintCcy(); repaint(); toast("Now on the " + to + " market");
+                    });
+                    if (err != null) { setStage(""); toast(err); }
                 })
                 .setNegativeButton("Cancel", null)
                 .show());
