@@ -74,6 +74,7 @@ public final class AssetsTab extends LinearLayout {
         TextView all = Ui.label(act, "WALLET · ALL TOKENS");
         all.setPadding(Design.dp(act, 4), Design.dp(act, 12), 0, Design.dp(act, 6));
         body.addView(all);
+        body.addView(act.consolidateMxUsdLink());   // next to the wallet's own "Consolidate MINIMA coins" (owner, 4 Nov)
         if (walletBox.getParent() != null) ((android.view.ViewGroup) walletBox.getParent()).removeView(walletBox);
         body.addView(walletBox);
 

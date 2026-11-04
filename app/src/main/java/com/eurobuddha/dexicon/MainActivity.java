@@ -1090,6 +1090,13 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         View[] tv = tabViews();
         panes = new android.view.ViewGroup[tv.length];   // each page scrolls on its own, so two side by side never drag each other
         for (int i = 0; i < tv.length; i++) {
+            if (i == TAB_PWALLET) {   // PandaPools' Wallet, plus the MxUSD twin of its "Consolidate MINIMA coins" (owner, 4 Nov)
+                LinearLayout host = new LinearLayout(this); host.setOrientation(LinearLayout.VERTICAL);
+                host.addView(consolidateMxUsdLink(), new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                host.addView(tv[i], new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+                panes[i] = host;
+                continue;
+            }
             if (roomOf(i) == 1) {   // PandaPools' screens scroll themselves (their own NestedScrollView / list): hosted as they are
                 FrameLayout host = new FrameLayout(this);
                 host.addView(tv[i], new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
@@ -1377,6 +1384,20 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
      *  migrate, backup password) painted white with white text. Dexicon handles uiMode itself (manifest), so no recreate. */
     private void nightModeFollowsDesign() {
         getDelegate().setLocalNightMode(Design.isDark() ? androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES : androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO);
+    }
+
+    /** "Consolidate MxUSD coins": the node's own `consolidate tokenid:<MxUSD>`, as PandaPools' "Consolidate MINIMA coins" is
+     *  for MINIMA — through Dexicon's consolidate (confirm, pool owner-coin guard, AtomiX's wallet lock, the signing queue).
+     *  Coins AtomiX delivered before 0.2.36 carry swap state; one consolidate makes them plain, spendable by a pool. */
+    TextView consolidateMxUsdLink() {
+        TextView t = new TextView(this);
+        t.setText("Consolidate MxUSD coins");
+        t.setTextColor(com.eurobuddha.pandapools.Design.accent()); t.setTextSize(14f); t.setTypeface(android.graphics.Typeface.create(Design.mono(), android.graphics.Typeface.BOLD));
+        int p = Design.dp(this, 16); t.setPadding(p, Design.dp(this, 12), p, Design.dp(this, 12));
+        t.setMinHeight(Design.dp(this, 48)); t.setGravity(Gravity.CENTER_VERTICAL);
+        t.setOnClickListener(v -> WalletTools.consolidate(this, Tokens.MXUSD(), "MxUSD", mxusdCoins));
+        Design.pressable(t);
+        return t;
     }
 
     /** PandaPools' onPageSelected: the page coming into view refreshes (views[position].onShown()). */

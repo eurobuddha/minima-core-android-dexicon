@@ -122,4 +122,20 @@ public class PoolsRoomSmokeTest {
         c.restart().start().resume();
         assertFalse("resumed on My pools: it runs again", (boolean) stopped.get(lp));
     }
+
+    /** 0.2.40 (owner): ② Wallet has a "Consolidate MxUSD coins" beside PandaPools' MINIMA one — `consolidate tokenid:<MxUSD>`. */
+    @Test public void walletConsolidatesMxUsd() {
+        MainActivity a = DoorsTabSmokeTest.launch();
+        a.mxusdCoins = 10;
+        try { java.lang.reflect.Field pf = MainActivity.class.getDeclaredField("paired"); pf.setAccessible(true); pf.set(a, true); }
+        catch (Exception e) { throw new AssertionError(e); }
+        a.showTab(MainActivity.TAB_PWALLET);
+        View root = a.getWindow().getDecorView();
+        TextView link = shownTab(root, "Consolidate MxUSD coins");
+        assertNotNull("on ② Wallet", link);
+        link.performClick();
+        android.app.Dialog d = org.robolectric.shadows.ShadowDialog.getLatestDialog();
+        assertNotNull(d);
+        assertNotNull("the node's own command, the token id in full", containing(d.getWindow().getDecorView(), "consolidate tokenid:" + com.eurobuddha.dexicon.fill.Tokens.MXUSD()));
+    }
 }
