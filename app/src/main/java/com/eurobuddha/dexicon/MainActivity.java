@@ -71,13 +71,16 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
     public static final int TAB_TRADE = 0, TAB_ACTIVITY = 1, TAB_ORDERS = 2, TAB_HISTORY = 3, TAB_ASSETS = 4, TAB_DOORS = 5, TAB_RELAYS = 6, TAB_POOLS = 7, TAB_MARKET = 8, TAB_OTC = 9, TAB_PSWAP = 10, TAB_PMINE = 11;
-    /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange. Each room's own pages
-     *  sit in the row under the rail; ACTIVITY / ASSETS / SETTINGS are shared by all three at the bottom. */
-    static final String[] ROOMS = {"① DOLLARS IN", "② POOLS", "③ EXCHANGE"};
-    static final String[] ROOM_SUBS = {"AtomiX · USDT ⇄ ", "optional", "MINIMA / MxUSD"};   // ① ends with the active market
+    /** The journey (owner, 3 Nov 2026): ① dollars in (AtomiX) → ② pools (optional) → ③ exchange, picked in a one-line
+     *  switcher at the top. ONE bottom bar, AtomiX's own (icon over label): the room's three pages, then ACTIVITY /
+     *  ASSETS / SETTINGS shared by all three — six tabs, nothing to tap above AND below (owner, 4 Nov). */
+    static final String[] ROOMS = {"① Dollars in", "② Pools", "③ Exchange"};
     static final int[][] ROOM_PAGES = {{TAB_DOORS, TAB_MARKET, TAB_OTC}, {TAB_PSWAP, TAB_POOLS, TAB_PMINE}, {TAB_TRADE, TAB_ORDERS, TAB_HISTORY}};
     private static final int[] SHARED = {TAB_ACTIVITY, TAB_ASSETS, TAB_RELAYS};
-    private static final String[] TAB_NAMES = {"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SWAP", "SETTINGS", "POOLS", "MARKET", "OTC", "SWAP", "MY POOLS"};
+    static final String[] TAB_NAMES = {"Trade", "Activity", "Orders", "History", "Assets", "Swap", "Settings", "Pools", "Market", "OTC", "Swap", "My pools"};
+    private static final int[] TAB_ICONS = {R.drawable.ic_tab_trade, R.drawable.ic_tab_activity, R.drawable.ic_tab_orders, R.drawable.ic_tab_history,
+            R.drawable.ic_tab_wallet, R.drawable.ic_tab_swap, R.drawable.ic_tab_settings, R.drawable.ic_tab_pools, R.drawable.ic_tab_market,
+            R.drawable.ic_tab_otc, R.drawable.ic_tab_swap, R.drawable.ic_tab_mypools};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
@@ -134,7 +137,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private OtcTab otcTab;
     private LinearLayout content;          // the visible page(s): one, or two side by side on a wide screen
     private ScrollView[] panes;
-    private LinearLayout tabBar, rail, subBar;
+    private LinearLayout tabBar, rail;
+    private final LinearLayout[] tabCell = new LinearLayout[TAB_NAMES.length];
+    private final android.widget.ImageView[] tabIcon = new android.widget.ImageView[TAB_NAMES.length];
     private final TextView[] tabBtn = new TextView[TAB_NAMES.length];
     private final TextView[] roomBtn = new TextView[3];
     private int room = 0;
@@ -204,6 +209,13 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         poolRepo.subscribe((pools, syncing) -> repaint());
         initPools(node);
         chromeRoot = buildChrome();
+        // AtomiX: Back from any other page returns to Swap; from Swap it leaves as usual.
+        getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
+            @Override public void handleOnBackPressed() {
+                if (!Boolean.TRUE.equals(gateShown) && (tab != TAB_DOORS || tab2 >= 0)) { selectTab(TAB_DOORS); return; }
+                setEnabled(false); getOnBackPressedDispatcher().onBackPressed(); setEnabled(true);
+            }
+        });
         selectTab(tab);
         if (getIntent() != null && getIntent().getIntExtra(EXTRA_POOLS_PAGE, -1) >= 0) goToTab(getIntent().getIntExtra(EXTRA_POOLS_PAGE, -1));   // a pool notification
         applyGate();
@@ -1023,14 +1035,15 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         nodeRow.addView(blockPill, bp);
         root.addView(nodeRow);
 
+        // One slim segmented row (was two-line 48 dp pills plus a second row of page pills): the room, nothing else.
         rail = new LinearLayout(this);
         rail.setPadding(pad, 0, pad, Design.dp(this, 6));
         for (int r = 0; r < 3; r++) {
             final int rr = r;
             TextView b = new TextView(this);
-            b.setText(roomLabel(r)); b.setTextSize(10.5f); b.setTypeface(Design.sansBold()); b.setGravity(Gravity.CENTER);
-            b.setMaxLines(2); b.setMinHeight(Design.dp(this, 48)); b.setPadding(Design.dp(this, 4), Design.dp(this, 6), Design.dp(this, 4), Design.dp(this, 6));
-            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(b, 7, 11, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+            b.setText(roomLabel(r)); b.setTextSize(12f); b.setTypeface(Design.sansBold()); b.setGravity(Gravity.CENTER);
+            b.setMaxLines(1); b.setMinHeight(Design.dp(this, 36)); b.setPadding(Design.dp(this, 4), 0, Design.dp(this, 4), 0);
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(b, 8, 12, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
             // two-finger side by side includes ① and ②: a room button pairs as its room's current page
             b.setOnClickListener(v -> { if (!pairMade) selectTab(roomLast[rr]); });
             Design.pressable(b, (v, e) -> pairTouch(e, roomLast[rr]));
@@ -1040,9 +1053,6 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             roomBtn[r] = b;
         }
         root.addView(rail);
-        subBar = new LinearLayout(this);
-        subBar.setPadding(pad, 0, pad, Design.dp(this, 4));
-        root.addView(subBar);
 
         content = new LinearLayout(this);
         root.addView(content, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
@@ -1076,22 +1086,36 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         stageTv.setOnLongClickListener(v -> { copy("Status", stageTv.getText().toString()); return true; });
         root.addView(stageTv);
 
+        // AtomiX's bottom bar (apks/atomix buildTabBar): icon over label, a soft accent tile on the selected tab. The
+        // room's three pages first, then the three shared pages; other rooms' pages are hidden, so it always shows six.
         tabBar = new LinearLayout(this);
         tabBar.setBackgroundColor(Design.SURFACE());
-        for (int i = 0; i < TAB_NAMES.length; i++) {
-            final int idx = i;
+        tabBar.setPadding(Design.dp(this, 6), Design.dp(this, 7), Design.dp(this, 6), Design.dp(this, 9));
+        java.util.List<Integer> order = new java.util.ArrayList<>();
+        for (int[] pages : ROOM_PAGES) for (int t : pages) order.add(t);
+        for (int t : SHARED) order.add(t);
+        for (int idx : order) {
+            LinearLayout cell = new LinearLayout(this);
+            cell.setOrientation(LinearLayout.VERTICAL); cell.setGravity(Gravity.CENTER);
+            cell.setPadding(0, Design.dp(this, 6), 0, Design.dp(this, 5)); cell.setMinimumHeight(Design.dp(this, 48));
+            android.widget.ImageView ic = new android.widget.ImageView(this);
+            ic.setImageResource(TAB_ICONS[idx]);
+            cell.addView(ic, new LinearLayout.LayoutParams(Design.dp(this, 22), Design.dp(this, 22)));
             TextView t = new TextView(this);
-            tabBtn[i] = t;
-            t.setText(TAB_NAMES[i]); t.setTextSize(10f); t.setTypeface(Design.sansBold()); t.setGravity(Gravity.CENTER); t.setMaxLines(1);
-            // Seven tabs: a narrow phone (and the Fold's cover screen) shrinks the labels to fit (min 6sp); wide screens keep 10sp.
-            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(t, 6, 10, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
-            t.setPadding(0, Design.dp(this, 11), 0, Design.dp(this, 11)); t.setMinHeight(Design.dp(this, 48));
+            t.setText(TAB_NAMES[idx]); t.setTextSize(10.5f); t.setTypeface(Design.sans()); t.setGravity(Gravity.CENTER); t.setMaxLines(1);
+            t.setPadding(0, Design.dp(this, 4), 0, 0);
+            // the Fold's cover screen with six tabs: labels shrink to fit rather than wrap
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(t, 7, 11, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+            cell.addView(t, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            cell.setContentDescription(TAB_NAMES[idx]);
             // Wide screen (owner 2026-10-26): one tap = that page alone; a second finger on another tab while one is held
             // (or both tapped together) = the two pages side by side, first touched on the left.
-            t.setOnTouchListener((v, e) -> pairTouch(e, idx));
-            t.setOnClickListener(v -> { if (!pairMade) selectTab(idx); });
-            // the room's own pages go in the row under the rail; the shared pages in the bottom bar
-            (isShared(idx) ? tabBar : subBar).addView(t, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            cell.setOnClickListener(v -> { if (!pairMade) selectTab(idx); });
+            Design.pressable(cell, (v, e) -> pairTouch(e, idx));   // the press feel AND the pairing (pressable owns the touch listener)
+            tabCell[idx] = cell; tabIcon[idx] = ic; tabBtn[idx] = t;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            lp.leftMargin = Design.dp(this, 3); lp.rightMargin = Design.dp(this, 3);
+            tabBar.addView(cell, lp);
         }
         root.addView(tabBar);
         paintCcy();
@@ -1116,7 +1140,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     // ---- the one active AtomiX market (⇄ pill) ----
 
     String roomLabel(int r) {
-        return ROOMS[r] + "\n" + ROOM_SUBS[r] + (r == 0 ? com.eurobuddha.dexicon.doors.DoorPlan.coin(com.eurobuddha.dexicon.doors.DoorHost.get(this).market()) : "");
+        return ROOMS[r];
     }
 
     /** Label, accessibility text, room subtitle and glow for the active market. */
@@ -1191,18 +1215,20 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         }
         int r = roomOf(left);
         if (r >= 0) { room = r; roomLast[r] = left; }
-        for (int i = 0; i < tabBtn.length; i++) {
-            TextView t = tabBtn[i];
+        for (int i = 0; i < tabCell.length; i++) {
+            if (tabCell[i] == null) continue;
             boolean on = i == left || i == right;
-            t.setTextColor(on ? Design.ON_ACCENT() : Design.DIM());
-            t.setBackground(on ? Design.roundBg(this, Design.ACCENT(), 10) : null);
-            if (!isShared(i)) t.setVisibility(roomOf(i) == room ? View.VISIBLE : View.GONE);
+            tabCell[i].setBackground(Design.roundBg(this, on ? Design.ACCENT_SOFT() : 0x00000000, 14));
+            tabIcon[i].setColorFilter(on ? Design.TEXT() : Design.DIM());
+            tabBtn[i].setTextColor(on ? Design.TEXT() : Design.DIM());
+            tabBtn[i].setTypeface(on ? Design.sansBold() : Design.sans());
+            tabCell[i].setSelected(on);
+            if (!isShared(i)) tabCell[i].setVisibility(roomOf(i) == room ? View.VISIBLE : View.GONE);
         }
-        subBar.setVisibility(ROOM_PAGES[room].length > 1 ? View.VISIBLE : View.GONE);   // a one-page room needs no row
         for (int i = 0; i < 3; i++) {
             boolean on = i == room;
             roomBtn[i].setTextColor(on ? Design.ON_ACCENT() : Design.DIM());
-            roomBtn[i].setBackground(on ? Design.roundBg(this, Design.ACCENT(), 12) : Design.stroked(this, Design.SURFACE2(), 12));
+            roomBtn[i].setBackground(on ? Design.roundBg(this, Design.ACCENT(), 10) : Design.stroked(this, Design.SURFACE2(), 10));
         }
         repaint();
     }

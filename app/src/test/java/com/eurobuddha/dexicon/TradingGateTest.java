@@ -60,7 +60,7 @@ public class TradingGateTest {
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
         View root = a.getWindow().getDecorView();
         assertNotNull("gate shown", DoorsTabSmokeTest.find(root, "One trading app per phone"));
-        assertNull("no trading tabs behind it", DoorsTabSmokeTest.find(root, "TRADE"));
+        assertNull("no trading tabs behind it", DoorsTabSmokeTest.find(root, "Trade"));
         View remove = DoorsTabSmokeTest.find(root, "2 · Remove AtomiX");
         assertNotNull(remove);
         assertFalse("remove stays locked until AtomiX hands over", remove.isEnabled());
@@ -70,7 +70,7 @@ public class TradingGateTest {
         a.showTab(MainActivity.TAB_TRADE);   // ③
         root = a.getWindow().getDecorView();
         assertNull(DoorsTabSmokeTest.find(root, "One trading app per phone"));
-        TextView trade = DoorsTabSmokeTest.find(root, "TRADE");
+        TextView trade = DoorsTabSmokeTest.find(root, "Trade");
         assertNotNull(trade);
         assertTrue("trading is back, and visible", trade.isShown());
     }
@@ -82,14 +82,14 @@ public class TradingGateTest {
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
         View root = a.getWindow().getDecorView();
         assertNotNull("a short checking state, not the trading chrome", DoorsTabSmokeTest.find(root, "Checking your node…"));
-        assertNull(DoorsTabSmokeTest.find(root, "TRADE"));
+        assertNull(DoorsTabSmokeTest.find(root, "Trade"));
 
         TradingGate.record(app, null);
         assertTrue("a reply without a list proves nothing", TradingGate.blocked(app));
         TradingGate.record(app, new JSONArray("[{\"uid\":\"0xCC\",\"conf\":{\"name\":\"Wallet\"}}]"));
         assertFalse(TradingGate.blocked(app));
         a.recheckGate();
-        assertNotNull(DoorsTabSmokeTest.find(a.getWindow().getDecorView(), "TRADE"));
+        assertNotNull(DoorsTabSmokeTest.find(a.getWindow().getDecorView(), "Trade"));
 
         TradingGate.record(app, new JSONArray("[{\"uid\":\"0xAA\",\"conf\":{\"name\":\"AtomiX\"}}]"));
         assertTrue("the MiniHub list alone blocks", TradingGate.blocked(app));
@@ -97,7 +97,7 @@ public class TradingGateTest {
         a.recheckGate();
         root = a.getWindow().getDecorView();
         assertNotNull(DoorsTabSmokeTest.find(root, "AtomiX MiniDapp on your node"));
-        assertNull(DoorsTabSmokeTest.find(root, "TRADE"));
+        assertNull(DoorsTabSmokeTest.find(root, "Trade"));
     }
 
     /** 0.1.90: the bears' node has no MDS; "Command not found" means no MiniHub, so nothing can be paired. Any other failure proves nothing. */

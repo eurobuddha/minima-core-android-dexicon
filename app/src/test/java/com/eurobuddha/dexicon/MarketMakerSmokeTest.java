@@ -26,7 +26,7 @@ public class MarketMakerSmokeTest {
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
-        DoorsTabSmokeTest.find(root, "ORDERS").performClick();
+        DoorsTabSmokeTest.tab(root, "Orders").performClick();
         assertNotNull(DoorsTabSmokeTest.find(root, "MARKET MAKER"));
         DoorsTabSmokeTest.find(root, "SET UP ▸").performClick();
         org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();   // the dialog's OnShow (SAVE handler) is a posted message

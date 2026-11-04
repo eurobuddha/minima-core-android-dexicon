@@ -99,7 +99,10 @@ public final class Ui {
 
     /** The explainer card every journey step carries: a title that folds a short "why" paragraph. Open until the user
      *  folds it (the choice is remembered per title). */
-    public static LinearLayout why(LinearLayout parent, String title, String body) {
+    public static LinearLayout why(LinearLayout parent, String title, String body) { return why(parent, title, body, false); }
+
+    /** {@code startFolded}: one tappable line until opened (① Swap, so the form is the first thing on screen). */
+    public static LinearLayout why(LinearLayout parent, String title, String body, boolean startFolded) {
         Context c = parent.getContext();
         LinearLayout card = card(parent);
         TextView head = label(c, title);
@@ -107,8 +110,8 @@ public final class Ui {
         TextView p = para(c, body);
         card.addView(head); card.addView(p);
         String foldedKey = "why_closed_" + title;   // stored true = FOLDED (the key name is kept so upgrades keep their folds)
-        Runnable paint = () -> { boolean folded = prefs(c).getBoolean(foldedKey, false); p.setVisibility(folded ? View.GONE : View.VISIBLE); head.setText(title + (folded ? "  ▸" : "  ▾")); };
-        head.setOnClickListener(v -> { prefs(c).edit().putBoolean(foldedKey, !prefs(c).getBoolean(foldedKey, false)).apply(); paint.run(); });
+        Runnable paint = () -> { boolean folded = prefs(c).getBoolean(foldedKey, startFolded); p.setVisibility(folded ? View.GONE : View.VISIBLE); head.setText(title + (folded ? "  ▸" : "  ▾")); };
+        head.setOnClickListener(v -> { prefs(c).edit().putBoolean(foldedKey, !prefs(c).getBoolean(foldedKey, startFolded)).apply(); paint.run(); });
         paint.run();
         return card;
     }

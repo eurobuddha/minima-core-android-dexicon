@@ -42,7 +42,7 @@ public class CcySwitchTest {
         MainActivity a = launch();
         View root = a.getWindow().getDecorView();
         assertNotNull("the pill names the active market", DoorsTabSmokeTest.find(root, "⇄  MxUSD"));
-        assertNotNull("① names it too", DoorsTabSmokeTest.find(root, "① DOLLARS IN\nAtomiX · USDT ⇄ MxUSD"));
+        assertNotNull("① names it too", DoorsTabSmokeTest.find(root, "Swap MxUSD ⇄ USDT"));
         DoorsTabSmokeTest.find(root, "⇄  MxUSD").performClick();
         AlertDialog d = (AlertDialog) ShadowDialog.getLatestDialog();
         assertTrue(d.isShowing());
@@ -51,7 +51,7 @@ public class CcySwitchTest {
         assertEquals(TradingContext.MINIMA, host.market());
         assertEquals("AtomiX's own key persists the choice", "minima", host.prefs().getString(TradingContext.PREF_KEY, ""));
         assertNotNull(DoorsTabSmokeTest.find(root, "⇄  MINIMA"));
-        assertNotNull(DoorsTabSmokeTest.find(root, "① DOLLARS IN\nAtomiX · USDT ⇄ MINIMA"));
+        
         assertNotNull("① now quotes MINIMA only", DoorsTabSmokeTest.find(root, "Swap MINIMA ⇄ USDT"));
         assertNotNull(DoorsTabSmokeTest.find(root, "Buy MINIMA"));
         assertNull(DoorsTabSmokeTest.find(root, "Buy MxUSD"));

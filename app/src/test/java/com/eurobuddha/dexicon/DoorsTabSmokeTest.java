@@ -27,7 +27,9 @@ public class DoorsTabSmokeTest {
         TradingGate.record(org.robolectric.RuntimeEnvironment.getApplication(), new org.json.JSONArray());
         return org.robolectric.Robolectric.buildActivity(MainActivity.class).setup().get();
     }
-    static String room(int r) { return MainActivity.ROOMS[r] + "\n" + MainActivity.ROOM_SUBS[r] + (r == 0 ? "MxUSD" : ""); }
+    static String room(int r) { return MainActivity.ROOMS[r]; }
+    /** A bottom-bar tab: the cell (icon over label) that takes the tap. */
+    static View tab(View root, String name) { TextView t = find(root, name); return t == null ? null : (View) t.getParent(); }
 
     @Test public void doorsTabRendersBothRoutes() {
         // no node in a JVM test: the IPC transport's bindService must not deliver a null binder
@@ -36,13 +38,16 @@ public class DoorsTabSmokeTest {
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
-        for (String tab : new String[]{"TRADE", "ACTIVITY", "ORDERS", "HISTORY", "ASSETS", "SETTINGS", room(0), room(1), room(2)}) assertNotNull(tab, find(root, tab));
-        assertTrue("every launch opens on ① Dollars in", find(root, "YOUR ETHEREUM WALLET").isShown());
-        assertNotNull("① explains why it comes first", find(root, "WHY THIS STEP  ▾"));
+        for (String tab : new String[]{"Trade", "Activity", "Orders", "History", "Assets", "Settings", "Market", "OTC", "My pools", room(0), room(1), room(2)}) assertNotNull(tab, find(root, tab));
+        assertTrue("every launch opens on ① Swap, the form first", find(root, "Swap MxUSD ⇄ USDT").isShown());
+        assertTrue("six tabs: the room's three pages and the shared three", find(root, "Swap").isShown() && find(root, "Market").isShown() && find(root, "OTC").isShown()
+                && find(root, "Activity").isShown() && find(root, "Assets").isShown() && find(root, "Settings").isShown());
+        assertFalse("other rooms' pages are not on the bar", find(root, "Trade").isShown());
+        assertNotNull("① explains why it comes first, folded to one line", find(root, "WHY THIS STEP  ▸"));
         find(root, room(1)).performClick();
         assertTrue("② is optional: Skip is the main button", find(root, "Skip — go to the exchange →").isShown());
         find(root, "Skip — go to the exchange →").performClick();
-        assertTrue("Skip lands on ③", find(root, "TRADE").isShown());
+        assertTrue("Skip lands on ③", find(root, "Trade").isShown());
         find(root, room(0)).performClick();
         // 0.1.93: AtomiX's own Swap tab — header, Sell / Buy toggle, both shown; one market at a time
         assertTrue("AtomiX's header", find(root, "Swap MxUSD ⇄ USDT").isShown());
@@ -55,7 +60,7 @@ public class DoorsTabSmokeTest {
         find(root, "Sell MxUSD").performClick();
         assertTrue(find(root, "Sell MxUSD").isShown());
         assertNull("the old door panes are gone", find(root, "EXIT"));
-        find(root, "ACTIVITY").performClick();
+        tab(root, "Activity").performClick();
     }
 
     /** ACTIVITY / HISTORY / ASSETS render from real rows; a finished line opens to its proof; tapping an id copies it in FULL. */
@@ -73,7 +78,7 @@ public class DoorsTabSmokeTest {
                 .put("gave", "10.34739224").put("txpowid", tx).put("coins", new org.json.JSONArray().put(coin)).put("counterparty", "POOL").put("ts", now / 1000 - 600).put("status", "done").put("block", "2382347"));
         View root = a.getWindow().getDecorView();
 
-        find(root, "ACTIVITY").performClick();
+        tab(root, "Activity").performClick();
         assertNotNull(find(root, "Activity"));
         assertNotNull(find(root, "Buy MINIMA"));
         assertNotNull(find(root, "2728.1472894674 MINIMA @ 0.003792827565"));
@@ -84,19 +89,18 @@ public class DoorsTabSmokeTest {
         android.content.ClipboardManager cm = (android.content.ClipboardManager) a.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
         assertEquals("tap copies the COMPLETE id", tx, cm.getPrimaryClip().getItemAt(0).getText().toString());
 
-        find(root, "HISTORY").performClick();
+        tab(root, "History").performClick();
         assertNotNull(find(root, "NET · SETTLED TRADES"));
         assertNotNull(find(root, "+2728.1472894674 MINIMA"));
         assertNotNull(find(root, "−10.34739224 MxUSD"));
         assertNotNull(find(root, "Bought"));
         assertNotNull(find(root, "Coins you received (1) ▸"));
 
-        find(root, "ASSETS").performClick();
+        tab(root, "Assets").performClick();
         assertNotNull(find(root, "YOUR TRADING ID"));
         assertNotNull(find(root, "RECEIVE MINIMA OR MxUSD"));
 
         find(root, room(0)).performClick();
-        assertNotNull(find(root, "YOUR ETHEREUM WALLET"));
         assertNotNull(find(root, "Swap MxUSD ⇄ USDT"));
     }
 

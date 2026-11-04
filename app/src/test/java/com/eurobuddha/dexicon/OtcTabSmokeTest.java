@@ -36,7 +36,7 @@ public class OtcTabSmokeTest {
     @Test public void otcPageRendersAndStaysOffWithoutANode() {
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
-        DoorsTabSmokeTest.find(root, "OTC").performClick();
+        DoorsTabSmokeTest.tab(root, "OTC").performClick();
         assertTrue(DoorsTabSmokeTest.find(root, "OTC — A PRIVATE DEAL  ▾").isShown());
         assertNotNull(DoorsTabSmokeTest.find(root, "MY AVAILABILITY"));
         assertNotNull(DoorsTabSmokeTest.find(root, "LIQUIDITY PROVIDERS"));

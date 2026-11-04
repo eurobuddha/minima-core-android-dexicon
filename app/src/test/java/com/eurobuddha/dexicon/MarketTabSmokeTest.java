@@ -39,8 +39,8 @@ public class MarketTabSmokeTest {
     @Test public void marketPageRendersAndEditorSaves() {
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
-        assertTrue("① shows its pages in the sub row", DoorsTabSmokeTest.find(root, "SWAP").isShown());
-        DoorsTabSmokeTest.find(root, "MARKET").performClick();
+        assertTrue("① shows its pages on the bottom bar", DoorsTabSmokeTest.find(root, "Swap").isShown());
+        DoorsTabSmokeTest.tab(root, "Market").performClick();
         assertTrue(DoorsTabSmokeTest.find(root, "YOUR AtomiX MARKET  ▾").isShown());
         assertNotNull(DoorsTabSmokeTest.find(root, "YOUR OFFER · USDT ⇄ MxUSD"));
         assertNotNull(DoorsTabSmokeTest.find(root, "Off — edit your order, then Publish."));
@@ -68,7 +68,7 @@ public class MarketTabSmokeTest {
     @Test public void anEditorOpenedForOneMarketNeverSavesIntoTheOther() {
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
-        DoorsTabSmokeTest.find(root, "MARKET").performClick();
+        DoorsTabSmokeTest.tab(root, "Market").performClick();
         DoorsTabSmokeTest.find(root, "Edit my order").performClick();
         AlertDialog d = (AlertDialog) ShadowDialog.getLatestDialog();
         android.view.ViewGroup a1 = (android.view.ViewGroup) DoorsTabSmokeTest.find(d.getWindow().getDecorView(), "A1").getParent();

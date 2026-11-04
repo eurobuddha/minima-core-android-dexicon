@@ -54,7 +54,8 @@ public final class DoorsTab extends LinearLayout {
     private final MainActivity act;
     private final DoorHost host;
     private final SharedPreferences prefs;
-    private final TextView halt, launch, ethAddr, bals, head, sellTab, buyTab, bestLine, planLine, toLabel, review;
+    private final TextView flip;
+    private final TextView halt, launch, head, sellTab, buyTab, bestLine, planLine, toLabel, review;
     private final TextView setupTitle, setupBody, emptyTitle;
     private final LinearLayout swapCard, setupCard, emptyCard, slipRow, stages, list;
     private final Chip sendChip, recvChip;
@@ -111,18 +112,7 @@ public final class DoorsTab extends LinearLayout {
         Ui.why(this, "WHY THIS STEP", "Dexicon's exchange (③) trades MINIMA against MxUSD, Minima's own dollar. If your dollars are USDT on "
                 + "Ethereum, buy MxUSD with them here first; sell MxUSD here to turn it back into USDT. Both sides lock their funds in a "
                 + "time-locked contract; if anything stalls, you are refunded automatically. Already hold MxUSD? Go straight to ③. "
-                + "Just swapping? You can stop here.");
-
-        LinearLayout dep = card(this);
-        dep.addView(Ui.copyRow(act, "YOUR ETHEREUM WALLET", "ETH deposit address", host::ethAddress));
-        ethAddr = t("—", Design.TEXT(), 12f, Design.mono());
-        ethAddr.setOnClickListener(v -> { String a = host.ethAddress(); if (a != null) act.copy("ETH deposit address", a); });
-        dep.addView(ethAddr, Ui.wide(act, 6, 0));
-        LinearLayout balRow = new LinearLayout(act); balRow.setGravity(Gravity.CENTER_VERTICAL);
-        bals = t("", Design.DIM(), 11f, Design.mono());
-        balRow.addView(bals, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
-        dep.addView(balRow, Ui.wide(act, 4, 0));
-        Ui.info(balRow, dep, "info_doors_deposit", "Send ERC20 USDT here, plus a little ETH for gas. This address is derived from this node’s seed by AtomiX’s rule (seedrandom:ethbridge) and never stored — it is the same address the AtomiX app on this node uses. Tap the address or Copy to copy it in full.");
+                + "Just swapping? You can stop here. Your Ethereum wallet (the USDT you swap from and to) is in Assets.", true);
 
         // ---- AtomiX header + Sell / Buy toggle ----
         head = t("", Design.TEXT(), 18f, Design.sansBold()); head.setPadding(0, Design.dp(act, 4), 0, Design.dp(act, 2));
@@ -166,7 +156,7 @@ public final class DoorsTab extends LinearLayout {
         flipRow.setPadding(0, Design.dp(act, 10), 0, Design.dp(act, 10));
         View l1 = new View(act); l1.setBackgroundColor(Design.BORDER());
         View l2 = new View(act); l2.setBackgroundColor(Design.BORDER());
-        TextView flip = t("⇅", Design.ACCENT(), 16f, Design.sansBold()); flip.setGravity(Gravity.CENTER);
+        flip = t("⇅", Design.ACCENT(), 16f, Design.sansBold()); flip.setGravity(Gravity.CENTER);
         flip.setBackground(Design.stroked(act, Design.SURFACE2(), 19));
         flip.setContentDescription("Flip: swap the other way");
         flip.setOnClickListener(v -> setSide(!sell)); Design.pressable(flip);
@@ -364,6 +354,7 @@ public final class DoorsTab extends LinearLayout {
         sellTab.setText("Sell " + c); buyTab.setText("Buy " + c);
         mark(sellTab, sell); mark(buyTab, !sell);
         review.setBackground(cta(route())); review.setTextColor(ink(route()));
+        flip.setTextColor(acc(route()));
         sendChip.set(sell); recvChip.set(!sell);
         toLabel.setText(sell ? "SEND THE USDT TO · optional — leave empty to keep it in your Ethereum wallet above"
                              : "SEND THE " + c + " TO · optional — leave empty to keep it in this node’s wallet");
@@ -428,12 +419,6 @@ public final class DoorsTab extends LinearLayout {
         boolean h = IdentityWatch.halted();
         halt.setVisibility(h ? VISIBLE : GONE);
         if (h) halt.setText(IdentityWatch.fgLine() + " — new AtomiX swaps are stopped; in-flight swaps keep settling. Rescue funds, then reinstall Dexicon.");
-        String a = host.ethAddress();
-        ethAddr.setText(a != null ? a : host.bootNote().isEmpty() ? "deriving…" : host.bootNote());
-        String usdt = host.usdtRaw == null ? "—" : EthWallet.format(host.usdtRaw, 6, 6);
-        bals.setText("ETH " + (host.ethWei == null ? "—" : eth(host.ethWei)) + " · USDT " + usdt
-                + " · MxUSD " + nz(host.coinBalance(TradingContext.MXUSDT)) + " · MINIMA " + minima12(host.coinBalance(TradingContext.MINIMA))
-                + (host.gasWei != null ? " · gas " + EthWallet.format(host.gasWei, 9, 3) + " gwei" : ""));
         if (sendChip != null) { sendChip.set(sell); recvChip.set(!sell); }
     }
     private static String nz(String s) { return s == null ? "—" : s; }

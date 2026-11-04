@@ -42,15 +42,15 @@ public class PoolsRoomSmokeTest {
         assertTrue("PandaPools' live pool list", a.findViewById(R.id.poolList).isShown());
         assertNotNull(containing(root, "unpruned MegaMMR"));
         assertNotNull(containing(root, "You don't host a pool"));
-        assertNotNull("② has its own sub-tabs", shownTab(root, "SWAP"));
-        assertNotNull(shownTab(root, "POOLS"));
+        assertNotNull("② has its own sub-tabs", shownTab(root, "Swap"));
+        assertNotNull(shownTab(root, "Pools"));
     }
 
     @Test public void swapPageIsPandaPoolsSwap() {
         MainActivity a = DoorsTabSmokeTest.launch();
         View root = a.getWindow().getDecorView();
         DoorsTabSmokeTest.find(root, DoorsTabSmokeTest.room(1)).performClick();
-        shownTab(root, "SWAP").performClick();
+        ((View) shownTab(root, "Swap").getParent()).performClick();
         assertTrue("SwapView's pay field", a.findViewById(R.id.swapAmount).isShown());
         assertTrue(a.findViewById(R.id.swapFlip).isShown());
         assertTrue(a.findViewById(R.id.swapBtn).isShown());
