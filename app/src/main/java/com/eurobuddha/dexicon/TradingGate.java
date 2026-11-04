@@ -79,10 +79,18 @@ public final class TradingGate {
         JSONArray list = r == null ? null : r.optJSONArray("minidapps");
         String why = String.valueOf(j.opt("error") != null ? j.opt("error") : j.opt("response"));
         if (j.optBoolean("status", true) && list != null) { record(c, list); note(c, "read " + list.length() + " MiniDapps"); }
-        else if (!j.optBoolean("status", true) && why.toLowerCase(Locale.ROOT).contains("command not found")) {
+        else if (noMds(j)) {
             record(c, new JSONArray()); note(c, "this node has no MiniHub, so no MiniDapps can be paired");
         }
         else note(c, "the node's reply had no MiniDapp list: status " + j.opt("status") + ", " + clip(why));
+    }
+
+    /** Exactly the node's missing-command reply to `mds` (CommandRunner: status false, error "Command not found") — never a
+     *  substring of some other text, and only for the `mds` command itself (code review, defence in depth). */
+    static boolean noMds(JSONObject j) {
+        if (j.optBoolean("status", true)) return false;
+        String cmd = j.optString("command", "mds").trim();
+        return "mds".equalsIgnoreCase(cmd) && j.optString("error", "").trim().toLowerCase(Locale.ROOT).startsWith("command not found");
     }
 
     /** The outcome of the last MiniHub read, for the "Checking your node…" screen and logcat (tag Dexicon). */

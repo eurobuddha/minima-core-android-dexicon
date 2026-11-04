@@ -214,4 +214,13 @@ public class TradingGateTest {
         assertNotNull("the gate says what was withdrawn", PoolsRoomSmokeTest.containing(a.getWindow().getDecorView(), "were withdrawn, so no one can hit them"));
         Shadows.shadowOf(app.getPackageManager()).removePackage(TradingGate.ATOMIX);
     }
+
+    /** 0.2.33: only the node's exact missing-command reply to `mds` opens the gate. */
+    @Test public void onlyTheExactNoMdsReplyCounts() throws Exception {
+        assertTrue(TradingGate.noMds(new org.json.JSONObject("{\"command\":\"mds\",\"status\":false,\"error\":\"Command not found\"}")));
+        assertFalse("another command", TradingGate.noMds(new org.json.JSONObject("{\"command\":\"balance\",\"status\":false,\"error\":\"Command not found\"}")));
+        assertFalse("the text elsewhere", TradingGate.noMds(new org.json.JSONObject("{\"command\":\"mds\",\"status\":false,\"response\":\"Command not found\"}")));
+        assertFalse("inside another error", TradingGate.noMds(new org.json.JSONObject("{\"command\":\"mds\",\"status\":false,\"error\":\"Package NOT enabled: Command not found\"}")));
+        assertFalse("a success", TradingGate.noMds(new org.json.JSONObject("{\"command\":\"mds\",\"status\":true,\"error\":\"Command not found\"}")));
+    }
 }
