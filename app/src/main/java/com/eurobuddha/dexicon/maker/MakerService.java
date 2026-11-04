@@ -607,7 +607,7 @@ public class MakerService extends Service {
      *  node returns. The tap opens the node app (a service can't launch another app's Activity; a notification can). */
     private void maybeOfflineAlert() {
         long now = System.currentTimeMillis();
-        if (!offlineAlertDue(paired, com.eurobuddha.dexicon.doors.DoorHost.get(this).makerLive(), unpairedSince, lastOfflineAlertMs, now)) return;
+        if (!offlineAlertDue(paired, com.eurobuddha.dexicon.doors.DoorHost.get(this).marketPublished(), unpairedSince, lastOfflineAlertMs, now)) return;
         lastOfflineAlertMs = now;
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;

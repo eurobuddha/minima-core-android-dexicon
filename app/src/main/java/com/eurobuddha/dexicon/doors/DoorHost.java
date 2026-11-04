@@ -269,6 +269,9 @@ public final class DoorHost {
 
     /** The ACTIVE market has a maker side configured or kept live: a liquid saved order (it arms the responder), the
      *  order kept published, or an OTC offer. Read from the active prefs — they are always the active market's. */
+    /** AtomiX's own test for "a market is being kept on the book" (SwapService.maybeOfflineAlert): auto-publish or OTC auto. */
+    public boolean marketPublished() { return prefs.getBoolean("auto_publish", false) || prefs.getBoolean("otc_auto", false); }
+
     public boolean makerLive() {
         boolean liquid = false;
         try { liquid = Order.fromConfigJson(prefs.getString("order_config", "")).hasLiquidity(); } catch (Exception ignored) {}
