@@ -222,7 +222,7 @@ public class MakerService extends Service {
     /** A posted cross spent rung coins: re-back those rungs now so they are not advertised with spent coins until the next tick. */
     private void afterCross(Runnable next) { if (cross.posted()) { ladder.soon(); ladder.pass(next); } else next.run(); }
 
-    private void kickLadder() { if (ladder != null && paired && !chainBusy) ladder.pass(this::changed); }
+    private void kickLadder() { if (ladder != null && paired && !chainBusy && !com.eurobuddha.dexicon.TradingGate.blocked(this)) ladder.pass(this::changed); }
 
     static final int MAX_TAKES_PER_CYCLE = 16, MAX_TAKES_PER_SENDER = 2;
 
@@ -243,6 +243,14 @@ public class MakerService extends Service {
                 if (takes.size() < MAX_TAKES_PER_CYCLE && (seen == null || seen < MAX_TAKES_PER_SENDER)) { takes.add(inner); perSender.put(from, seen == null ? 1 : seen + 1); }
             }
             else if ("taken".equals(k) || "refused".equals(k)) onReply(inner);
+        }
+        if (com.eurobuddha.dexicon.TradingGate.blocked(this)) {
+            // One trading app per phone: AtomiX / PandaPools is present, so make no new trade (every take refused, no
+            // ladder, no auto-cross, no republish: my orders age off the relays). What is already in flight keeps settling.
+            for (JSONObject t : takes) reply(t.optString("_from", ""), refused(t.optString("orderId", ""), "maker paused"));
+            if (ticks % 3 == 0) { settleFills(); voidStaleTakes(); }
+            tickDone();
+            return;
         }
         processTakes(takes, 0, () -> {
             if (ticks % 3 == 0) { settleFills(); voidStaleTakes(); }

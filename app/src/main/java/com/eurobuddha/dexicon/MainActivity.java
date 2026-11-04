@@ -100,6 +100,12 @@ public class MainActivity extends AppCompatActivity {
     private BroadcastReceiver changedReceiver, nodeReceiver;
     private ActivityResultLauncher<String> saveCsv;
     private String pendingCsv;
+    /** One trading app per phone: the gate replaces every trading screen while AtomiX / PandaPools is present. */
+    private View chromeRoot;
+    private GateView gate;
+    private Boolean gateShown;
+    private ActivityResultLauncher<Intent> handover;
+    private String handoverPkg, handoverName;
 
     private TradeView trade;
     private ActivityTab activityTab;
@@ -153,8 +159,10 @@ public class MainActivity extends AppCompatActivity {
             catch (Exception e) { toast("Could not save: " + e.getMessage()); }
             pendingCsv = null;
         });
-        setContentView(buildChrome());
+        handover = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), r -> onHandover(r.getResultCode(), r.getData()));
+        chromeRoot = buildChrome();
         selectTab(tab);
+        applyGate();
 
         node = new NodeApi(this, enabled -> {
             paired = enabled; pairingKnown = true;
@@ -184,6 +192,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void onPaired() {
+        TradingGate.checkMiniHub(this, node, this::applyGate);
         readBalances(); readBlock();
         if (me == null) deriveIdentity();
         refreshResting();
@@ -910,7 +919,7 @@ public class MainActivity extends AppCompatActivity {
         header.addView(verPill, vp);
         TextView themePill = Design.pill(this, Design.isDark() ? "☀" : "☾", Design.SURFACE2(), Design.DIM());
         themePill.setMinWidth(Design.dp(this, 48)); themePill.setMinHeight(Design.dp(this, 48));
-        themePill.setOnClickListener(v -> { Design.toggle(this); if (trade != null) trade.close(); setContentView(buildChrome()); showPages(tab, tab2); });
+        themePill.setOnClickListener(v -> { Design.toggle(this); if (trade != null) trade.close(); chromeRoot = buildChrome(); setContentView(chromeRoot); showPages(tab, tab2); });
         Design.pressable(themePill);
         header.addView(themePill);
         root.addView(header);
@@ -1077,8 +1086,55 @@ public class MainActivity extends AppCompatActivity {
         FOREGROUND = true;
         if (node != null && !paired) node.reRegister();   // back from the node app's Apps screen: re-ask at once
         applySettings();
+        recheckGate();
         bookLoop();
         repaint();
+    }
+
+    // ---- one trading app per phone ----
+
+    /** Shows the gate instead of the trading screens while AtomiX or PandaPools is present, and the screens once both are gone. */
+    void applyGate() {
+        if (closed || chromeRoot == null) return;
+        boolean blocked = TradingGate.blocked(this);
+        if (blocked) {
+            if (!Boolean.TRUE.equals(gateShown)) { gate = new GateView(this); setContentView(gate); gateShown = true; }
+            gate.render();
+        } else if (!Boolean.FALSE.equals(gateShown)) {
+            gate = null; gateShown = false;
+            setContentView(chromeRoot);
+            repaint();
+        }
+    }
+
+    void recheckGate() { if (node != null && paired) TradingGate.checkMiniHub(this, node, this::applyGate); else applyGate(); }
+
+    /** Opens the app's own "Hand over to Dexicon" step; it answers only to Dexicon (it checks the calling package). */
+    void startHandover(String pkg, String name) {
+        handoverPkg = pkg; handoverName = name;
+        try { handover.launch(new Intent(TradingGate.ACTION_HANDOVER).setPackage(pkg)); }
+        catch (android.content.ActivityNotFoundException e) {
+            explain(name + " needs an update", "This version of " + name + " has no \"Hand over to Dexicon\" step yet. Update " + name + " from the store, then try again.");
+        }
+    }
+
+    private void onHandover(int code, Intent d) {
+        String pkg = handoverPkg, name = handoverName;
+        handoverPkg = null;
+        if (pkg == null) return;
+        long ver = TradingGate.versionOf(this, pkg);
+        if (code == RESULT_OK && d != null && d.getBooleanExtra("handover", false) && pkg.equals(d.getStringExtra("app")) && d.getIntExtra("version", -1) == ver) {
+            TradingGate.noteHandover(this, pkg, ver);
+            toast(name + " handed over. You can remove it now.");
+        } else {
+            String why = d == null ? null : d.getStringExtra("reason");
+            explain(name + " is not ready to remove", why == null || why.isEmpty() ? name + " did not confirm the hand-over, so nothing changed." : why);
+        }
+        applyGate();
+    }
+
+    private void explain(String title, String body) {
+        new AlertDialog.Builder(this, Design.dialogTheme()).setTitle(title).setMessage(body).setPositiveButton("OK", null).show();
     }
 
     @Override protected void onPause() { super.onPause(); FOREGROUND = false; }

@@ -15,6 +15,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <!-- Opens Android's own uninstall dialog for AtomiX / PandaPools once each has handed over (the user confirms there) -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
     <!-- Android 11+ package visibility: the SDK discovers the Minima Core builds and pins one responder. -->
     <queries>
@@ -24,6 +26,9 @@
         <!-- The official Minima Core, and the legacy org.minimarex build -->
         <package android:name="org.minima.core" />
         <package android:name="org.minimarex.minimacore" />
+        <!-- One trading app per phone: Dexicon contains these two and refuses to trade while either is installed -->
+        <package android:name="com.eurobuddha.atomix" />
+        <package android:name="com.eurobuddha.pandapools" />
     </queries>
 
     <!-- allowBackup=false is a FUND-SAFETY setting (family-wide scaffold defect): Auto Backup would cloud-copy and
