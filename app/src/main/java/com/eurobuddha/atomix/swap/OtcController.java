@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.84 app/src/main/java/com/eurobuddha/atomix/swap/OtcController.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.87 app/src/main/java/com/eurobuddha/atomix/swap/OtcController.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -100,7 +100,7 @@ public final class OtcController {
                 && java.util.Objects.equals(d.amount, m.amount) && java.util.Objects.equals(d.price, m.price);
     }
 
-    private static boolean isTerminal(String st) {
+    public static boolean isTerminal(String st) {
         return OtcDb.ST_REJECTED.equals(st) || OtcDb.ST_EXPIRED.equals(st) || OtcDb.ST_COMPLETE.equals(st);
     }
 

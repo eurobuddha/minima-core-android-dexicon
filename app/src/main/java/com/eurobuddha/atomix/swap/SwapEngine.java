@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.84 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.87 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -180,7 +180,9 @@ public final class SwapEngine {
     /** No NEW liabilities while the app's keys don't belong to the node. Settlement (claim/refund of swaps
      *  already in flight) deliberately keeps running — freezing that is how funds got stranded twice — but
      *  anything that commits fresh money must stop dead. */
-    private boolean halted() { return com.eurobuddha.atomix.IdentityWatch.halted(); }
+    // Also true once handed over to Dexicon: no new liability, settlement untouched (every caller is a new-liability path).
+    private boolean halted() { return com.eurobuddha.atomix.IdentityWatch.halted() || com.eurobuddha.atomix.Handover.active(); }
+    private static final String HANDOVER_ERROR = "Handed over to Dexicon — AtomiX starts no new swaps. Take back on the main screen.";
     public void setMyOrder(Order o) { this.myOrder = o; }
     public void setOtcDb(OtcDb o) { this.otcDb = o; }
     public String swapStatus(String hash) { SwapDb.Swap s = db.getSwap(hash); return s == null ? null : s.status; }
@@ -634,6 +636,7 @@ public final class SwapEngine {
     }
 
     void startMinimaToErc20(Order maker, String sellMinima, String tokenSymbol, String buyTokenAmount, boolean otc, com.eurobuddha.atomix.TradingContext market, StartCb result) {
+        if (com.eurobuddha.atomix.Handover.active()) { result.err(HANDOVER_ERROR); return; }
         if (!ready()) { result.err("Not ready"); return; }
         if (market == null || market != com.eurobuddha.atomix.TradingContext.active() || !market.tokenId.equalsIgnoreCase(minima.activeToken())) { result.err(OtcController.MARKET_ERROR); return; }
         if (!otc && (maker == null || maker.market != market)) { result.err(SwapOrderBook.MARKET_ERROR); return; }
@@ -728,6 +731,7 @@ public final class SwapEngine {
     }
 
     void startErc20ToMinima(Order maker, String tokenSymbol, String sellTokenAmount, String buyMinima, boolean otc, com.eurobuddha.atomix.TradingContext market, StartCb cb) {
+        if (com.eurobuddha.atomix.Handover.active()) { cb.err(HANDOVER_ERROR); return; }
         if (!ready()) { cb.err("Not ready"); return; }
         if (market == null || market != com.eurobuddha.atomix.TradingContext.active() || !market.tokenId.equalsIgnoreCase(minima.activeToken())) { cb.err(OtcController.MARKET_ERROR); return; }
         if (!otc && (maker == null || maker.market != market)) { cb.err(SwapOrderBook.MARKET_ERROR); return; }
