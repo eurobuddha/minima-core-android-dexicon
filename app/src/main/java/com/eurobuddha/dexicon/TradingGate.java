@@ -101,6 +101,12 @@ public final class TradingGate {
                 && pkg.equals(d.getStringExtra("app")) && d.getIntExtra("version", -1) == installedVersion;
     }
 
+    /** The answering app is signed with Dexicon's own key (a same-named impostor is never believed). */
+    static boolean sameSigner(Context c, String pkg) {
+        try { return pkg != null && c.getPackageManager().checkSignatures(pkg, c.getPackageName()) == PackageManager.SIGNATURE_MATCH; }
+        catch (RuntimeException e) { return false; }
+    }
+
     /** The last answer, for the card only (never a permission): the version that last said yes. */
     static void noteAnswer(Context c, String pkg, long version) { prefs(c).edit().putLong("ho_ver_" + pkg, version).apply(); }
     static boolean lastAnswerOk(Context c, String pkg) { long v = versionOf(c, pkg); return v >= 0 && prefs(c).getLong("ho_ver_" + pkg, -2) == v; }

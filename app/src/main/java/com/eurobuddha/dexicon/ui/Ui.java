@@ -106,9 +106,9 @@ public final class Ui {
         head.setMinHeight(Design.dp(c, 32)); head.setGravity(Gravity.CENTER_VERTICAL);
         TextView p = para(c, body);
         card.addView(head); card.addView(p);
-        String key = "why_closed_" + title;
-        Runnable paint = () -> { boolean closed = isOpen(c, key); p.setVisibility(closed ? View.GONE : View.VISIBLE); head.setText(title + (closed ? "  ▸" : "  ▾")); };
-        head.setOnClickListener(v -> { setOpen(c, key, !isOpen(c, key)); paint.run(); });
+        String foldedKey = "why_closed_" + title;   // stored true = FOLDED (the key name is kept so upgrades keep their folds)
+        Runnable paint = () -> { boolean folded = prefs(c).getBoolean(foldedKey, false); p.setVisibility(folded ? View.GONE : View.VISIBLE); head.setText(title + (folded ? "  ▸" : "  ▾")); };
+        head.setOnClickListener(v -> { prefs(c).edit().putBoolean(foldedKey, !prefs(c).getBoolean(foldedKey, false)).apply(); paint.run(); });
         paint.run();
         return card;
     }

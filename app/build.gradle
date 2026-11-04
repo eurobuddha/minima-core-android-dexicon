@@ -11,8 +11,8 @@ android {
         minSdk 28
         targetSdk 35
         // Every code change bumps BOTH (pre-commit hook .githooks/pre-commit enforces it).
-        versionCode 175
-        versionName "0.1.75"
+        versionCode 176
+        versionName "0.1.76"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -57,6 +57,16 @@ android {
     }
 }
 
+// No jdk18on BouncyCastle on the APP's runtime classpath (debug/release — what ships in the APK): it lacks gmss (minima.jar's
+// Winternitz) and duplicates every jdk15on class (duplicate-class dex failure). Fails the build the moment such a
+// classpath resolves. JVM-test classpaths are exempt: Robolectric itself brings bcprov-jdk18on there.
+configurations.configureEach { conf ->
+    if (conf.name.endsWith('RuntimeClasspath') && !conf.name.contains('UnitTest') && !conf.name.contains('AndroidTest')) conf.incoming.afterResolve { deps ->
+        def bad = deps.resolutionResult.allComponents.findAll { c -> c.moduleVersion != null && c.moduleVersion.group == 'org.bouncycastle' && c.moduleVersion.name.endsWith('jdk18on') }
+        if (!bad.isEmpty()) throw new GradleException("${conf.name}: BouncyCastle jdk18on is forbidden (no gmss; pin bcprov-jdk15on): ${bad*.moduleVersion.join(', ')}")
+    }
+}
+
 dependencies {
 
     implementation libs.appcompat
@@ -81,8 +91,11 @@ dependencies {
 
     // ② POOLS (vendored PandaPools engine, scripts/vendor-pandapools.sh): Pandamonium's pinned Minima wire codecs for the
     // proof-only MegaMMR recovery (app/libs/MINIMA-PROVENANCE.md), and SVG token icons (PandaPools' ImageLoader).
-    // PandaPools' SHA3Digest comes from the bcprov-jdk15on already on this classpath (1.70, via web3j) — never jdk18on.
     implementation files('libs/minima.jar')
+    // BouncyCastle, PINNED (family rule): minima.jar's Winternitz signer lives in org.bouncycastle.pqc.crypto.gmss, which
+    // BC 1.71+ (every jdk18on release) removed. web3j would otherwise decide the version transitively. 1.69 = what
+    // minima-core and apks/wallet ship; it also carries PandaPools' SHA3Digest. Never jdk18on (the check below fails the build).
+    implementation('org.bouncycastle:bcprov-jdk15on') { version { strictly '1.69' } }
     implementation 'com.caverock:androidsvg-aar:1.4'
 
     // ---- Local JVM unit tests (src/test) ----

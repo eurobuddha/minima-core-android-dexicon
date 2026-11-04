@@ -115,7 +115,10 @@ public class MakerService extends Service {
         if (started && intent != null && com.eurobuddha.pandapools.PoolKeepAliveService.ACTION_DEXICON_REPUBLISH.equals(intent.getAction())) {
             final String address = intent.getStringExtra(com.eurobuddha.pandapools.PoolKeepAliveService.EXTRA_ADDRESS);
             acquireTimedWakelock();
-            h.post(() -> { if (paired) com.eurobuddha.pandapools.DexiconPools.republish(this, node, address); });
+            // Persisted first: a just-(re)created service is not paired yet, and the tap must not be lost — the first
+            // paired tick runs it (runPendingRepublish).
+            queueRepublish(address);
+            h.post(() -> { if (paired) runPendingRepublish(); });
         }
         return START_STICKY;
     }
@@ -191,7 +194,7 @@ public class MakerService extends Service {
         @Override public void run() {
             h.removeCallbacks(this);
             h.postDelayed(this, TICK_MS);
-            if (!started || ticking) return;
+            if (!started) return;
             // DOORS settlement (AtomiX taker engine): claims, ETH withdraws, refunds and forwards, ~every 90 s, app closed or
             // not — and paired or not: unpaired it still refunds/withdraws the ETH legs, which need only Ethereum.
             // Between polls, AtomiX's ~30 s maker discovery (buy requests to my market, OTC messages).
@@ -202,6 +205,8 @@ public class MakerService extends Service {
             } catch (RuntimeException e) { log("doors poll: " + e); }
             else if (door % 3 == 0 && paired) try { com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this).discover(); }
             catch (RuntimeException e) { log("doors discover: " + e); }
+            // Only the relay chain waits on `ticking`: door settlement above never stalls behind a slow inbox/take chain.
+            if (ticking) return;
             if (!paired) {
                 long now = System.currentTimeMillis();
                 if (now - lastRegisterMs >= REREGISTER_GAP_MS) { lastRegisterMs = now; node.reRegister(); }
@@ -210,6 +215,7 @@ public class MakerService extends Service {
             long nowMs = System.currentTimeMillis();
             if (nowMs - lastHubMs >= HUB_EVERY_MS) { lastHubMs = nowMs; com.eurobuddha.dexicon.TradingGate.checkMiniHub(MakerService.this, node, MakerService.this::changed); }
             ActivityLog.track(node, db, MakerService.this::changed);   // BOOK/POOL rows need no relay or identity
+            runPendingRepublish();
             // ② Pools: PandaPools' keep-alive (keep-fresh, stranding alarm, re-announce, collections), at most every 5 min.
             // Settlement, so it runs even while the trading gate is shut; it needs no relay or identity.
             holdOrderCoins();   // ② pool coin selection must never pick a live ③ order's backing coin
@@ -232,6 +238,27 @@ public class MakerService extends Service {
             });
         }
     };
+
+    static final String PREFS_REPUBLISH = "dexicon_pool_republish";
+
+    /** A stranding notification's Re-publish, kept until a paired pass runs it. */
+    void queueRepublish(String address) {
+        if (address == null || address.trim().isEmpty()) return;
+        android.content.SharedPreferences p = getSharedPreferences(PREFS_REPUBLISH, MODE_PRIVATE);
+        Set<String> s = new HashSet<>(p.getStringSet("pending", new HashSet<>()));
+        s.add(address.trim());
+        p.edit().putStringSet("pending", s).commit();
+    }
+
+    /** Paired: run (and forget) every queued Re-publish; every signing guard of DexiconPools.republish still applies. */
+    void runPendingRepublish() {
+        android.content.SharedPreferences p = getSharedPreferences(PREFS_REPUBLISH, MODE_PRIVATE);
+        Set<String> s = p.getStringSet("pending", null);
+        if (s == null || s.isEmpty()) return;
+        List<String> todo = new ArrayList<>(s);
+        p.edit().remove("pending").commit();
+        for (String a : todo) com.eurobuddha.pandapools.DexiconPools.republish(this, node, a);
+    }
 
     /** Re-hold (every tick, inside PandaPools' ~3 min reservation) the coins backing my live ③ orders in PandaPools' CoinLock. */
     void holdOrderCoins() {

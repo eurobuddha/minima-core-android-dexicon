@@ -35,9 +35,18 @@ public class TradingGateTest {
                 new android.os.Messenger(new android.os.Handler(android.os.Looper.getMainLooper(), m -> true)).getBinder());
     }
 
-    private void installAtomix(int versionCode) {
+    private void installAtomix(int versionCode) { installAtomix(versionCode, "0a0b0c"); }
+
+    /** AtomiX signed with {@code signer}; Dexicon itself is signed with "0a0b0c" (the family key). */
+    private void installAtomix(int versionCode, String signer) {
+        try {
+            PackageInfo self = app.getPackageManager().getPackageInfo(app.getPackageName(), 0);
+            self.signatures = new android.content.pm.Signature[]{new android.content.pm.Signature("0a0b0c")};
+            Shadows.shadowOf(app.getPackageManager()).installPackage(self);
+        } catch (Exception e) { throw new RuntimeException(e); }
         PackageInfo pi = new PackageInfo(); pi.packageName = TradingGate.ATOMIX; pi.versionName = "0.1.86";
         pi.versionCode = versionCode; pi.setLongVersionCode(versionCode);
+        pi.signatures = new android.content.pm.Signature[]{new android.content.pm.Signature(signer)};
         Shadows.shadowOf(app.getPackageManager()).installPackage(pi);
     }
 
@@ -165,6 +174,17 @@ public class TradingGateTest {
         a.onHandover(Activity.RESULT_OK, answer(true, TradingGate.ATOMIX, 186));
         assertNull("process death lost the Remove intent: no uninstall", next(a));
         assertTrue("but the answer is shown on the card", TradingGate.lastAnswerOk(app, TradingGate.ATOMIX));
+    }
+
+    /** L (0.1.76): a valid-looking yes from an app of the right name and version but ANOTHER signer is never believed. */
+    @Test public void aYesFromAnotherSignerIsIgnored() {
+        TradingGate.record(app, new JSONArray());
+        installAtomix(186, "0d0e0f");
+        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        a.startHandover(TradingGate.ATOMIX, "AtomiX", true); next(a);
+        a.onHandover(Activity.RESULT_OK, answer(true, TradingGate.ATOMIX, 186));
+        assertNull("no uninstall", next(a));
+        assertFalse(TradingGate.lastAnswerOk(app, TradingGate.ATOMIX));
     }
 
     /** E (0.1.75): MakerService's change broadcast applies the gate at once — no wait for a MiniHub read. */

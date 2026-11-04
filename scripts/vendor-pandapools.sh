@@ -12,6 +12,8 @@
 #   Handover.java              PandaPools' create/swap gate, answered by Dexicon's TradingGate + PandaPools' custody provider (DexiconPools)
 #   Design.java  BuildConfig.java  R.java   PandaPools' tokens / build constants / resource ids, mapped onto Dexicon's
 #   DexiconPools.java          the one public door Dexicon's own code (com.eurobuddha.dexicon.*) uses into this engine
+#   tests DexiconPoolsKeepAliveTest / DexiconNodeApiShimTest  Dexicon's own tests of those shims
+# --check also FAILS on any other file in that package (main or test) that carries no vendored header.
 # NOT vendored at all: BootReceiver, HeartbeatReceiver, PoolWatchWorker (MakerService already keeps the process alive),
 # MainPager, NodeTransport(+Service), HandoverActivity, WalletView, Identicon (PandaPools' own app shell / wallet tab).
 set -euo pipefail
@@ -80,6 +82,14 @@ if [ "$MODE" = "--check" ]; then
   pruned=$(grep -rlE "(spartacusrex\.com|megammr\.minima\.global|minimammr\.com):9001" app/src/main || true)
   [ -z "$pruned" ] || { echo "PRUNED MEGAMMR named in: $pruned"; fail=1; }
   grep -q 'HOST = "eurobuddha.com"' "$DST/$P/MegaArchiveProofs.java" || { echo "MegaMMR host is not eurobuddha.com"; fail=1; }
+  # Every other file in the PandaPools package is vendored (header) or one of the Dexicon-owned shims / tests named here.
+  OWNED=" NodeApi MainActivity PoolKeepAliveService Handover Design BuildConfig R DexiconPools DexiconPoolsKeepAliveTest DexiconNodeApiShimTest "
+  for f in "$DST/$P"/*.java app/src/test/java/$P/*.java; do
+    [ -f "$f" ] || continue
+    head -1 "$f" | grep -q '^// VENDORED VERBATIM from apks/pandapools ' && continue
+    n=$(basename "$f" .java)
+    case "$OWNED" in *" $n "*) ;; *) echo "UNLISTED (no vendored header, not a Dexicon shim): $f"; fail=1;; esac
+  done
   [ $fail = 0 ] && echo "PANDAPOOLS VENDOR PASS — matches apks/pandapools $VER" || { echo "PANDAPOOLS VENDOR FAIL — run scripts/vendor-pandapools.sh"; exit 1; }
 else
   echo "vendored apks/pandapools $VER"

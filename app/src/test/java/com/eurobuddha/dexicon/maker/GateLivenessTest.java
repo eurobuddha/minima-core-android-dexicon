@@ -49,4 +49,16 @@ public class GateLivenessTest {
         assertEquals(MakerService.PAUSED, s.replies.get(0).optString("reason"));
         Shadows.shadowOf(app.getPackageManager()).removePackage(TradingGate.ATOMIX);
     }
+
+    /** J (0.1.76): a stranding notification's Re-publish reaching a service that is not paired yet is kept, not dropped,
+     *  and the first paired pass runs (and forgets) it. */
+    @Test public void aRepublishBeforePairingIsKeptForTheFirstPairedPass() {
+        MakerService s = Robolectric.buildService(MakerService.class).get();
+        String pool = "0x" + "f1".repeat(32);
+        s.queueRepublish(pool);
+        android.content.SharedPreferences p = s.getSharedPreferences(MakerService.PREFS_REPUBLISH, android.content.Context.MODE_PRIVATE);
+        assertTrue("persisted in full", p.getStringSet("pending", new java.util.HashSet<>()).contains(pool));
+        s.runPendingRepublish();   // no recipe for it here: DexiconPools.republish signs nothing
+        assertFalse(p.contains("pending"));
+    }
 }

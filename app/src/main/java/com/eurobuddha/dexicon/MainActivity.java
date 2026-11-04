@@ -1362,7 +1362,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         if (pkg == null) { applyGate(); return; }
         if (name == null) name = TradingGate.ATOMIX.equals(pkg) ? "AtomiX" : "PandaPools";
         long ver = TradingGate.versionOf(this, pkg);
-        if (TradingGate.validHandover(code == RESULT_OK, d, pkg, ver)) {
+        if (TradingGate.validHandover(code == RESULT_OK, d, pkg, ver) && TradingGate.sameSigner(this, pkg)) {
             TradingGate.noteAnswer(this, pkg, ver);
             if (TradingGate.PANDAPOOLS.equals(pkg)) poolsHandedOver(d.getStringArrayExtra(com.eurobuddha.pandapools.DexiconPools.EXTRA_POOLS));
             if (remove) startActivity(new Intent(Intent.ACTION_DELETE, android.net.Uri.parse("package:" + pkg)));
