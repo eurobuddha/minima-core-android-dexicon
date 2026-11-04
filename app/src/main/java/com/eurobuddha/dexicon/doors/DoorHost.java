@@ -28,7 +28,15 @@ import com.eurobuddha.comms.LocalEcCryptoProvider;
 import com.eurobuddha.comms.NodeApi;
 import com.eurobuddha.comms.Opened;
 import com.eurobuddha.comms.Sodium;
+import com.eurobuddha.atomix.swap.OtcBook;
+import com.eurobuddha.atomix.swap.OtcController;
+import com.eurobuddha.atomix.swap.OtcDb;
+import com.eurobuddha.atomix.swap.OtcMessage;
+import com.eurobuddha.atomix.swap.OtcOffer;
+import com.eurobuddha.atomix.swap.PriceOracle;
+import com.eurobuddha.atomix.swap.PublishGate;
 import com.eurobuddha.dexicon.Notifier;
+import com.eurobuddha.dexicon.TradingGate;
 import com.eurobuddha.dexicon.maker.MakerService;
 import com.goterl.lazysodium.LazySodium;
 
@@ -47,11 +55,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * The DOORS host — Dexicon-owned, the Java twin of mds/dexicon doors/ax_service.js + ui/doors.js's take path. It wires
- * the vendored AtomiX engine exactly as AtomiX's own SwapService does (ensureDerivations: node-derived ETH key via
- * {@code seedrandom modifier:ethbridge}, never persisted; the persisted swap identity {@code swap_addr/swap_pk} adopted,
- * never self-healed; the node's 64 keys for refunds; IdentityWatch HALT on mismatch) but as the TAKER only: no order is
- * ever armed ({@code setMyOrder} never called → every responder path declines), no OTC, no publishing.
+ * The DOORS host — Dexicon-owned FULL AtomiX host. It wires the vendored AtomiX engine exactly as AtomiX's own
+ * SwapService does (ensureDerivations: node-derived ETH key via {@code seedrandom modifier:ethbridge}, never persisted;
+ * the persisted swap identity {@code swap_addr/swap_pk} adopted, never self-healed; the node's 64 keys for refunds;
+ * IdentityWatch HALT on mismatch), as the taker (① Swap) AND the maker (① Market / OTC): the responder armed with
+ * {@link PriceOracle#armSafe}, auto-republish, the price-oracle peg and its withdraw tombstone, OTC republish and
+ * responder, the book-presence belt — SwapService's maker, ported. While {@link TradingGate#blocked} (AtomiX or
+ * PandaPools present) it publishes and arms NOTHING; settlement continues. The comms identity stays Dexicon's own
+ * ({@link com.eurobuddha.dexicon.identity.SeedSource}: the app never reads the seed phrase).
  *
  * ONE process-wide instance (Activity and MakerService share it), so there is one engine, one SwapDb, one nonce journal
  * — AtomiX runs two engines and guards them with statics; Dexicon simply doesn't. {@link MakerService} drives
@@ -98,6 +109,15 @@ public final class DoorHost {
     private final Map<TradingContext, Map<String, Order>> books = new EnumMap<>(TradingContext.class);
     private final Map<TradingContext, String> coinBal = new EnumMap<>(TradingContext.class);
     private final Map<TradingContext, CommsScanner> noticeScanners = new EnumMap<>(TradingContext.class);
+    private final OtcDb otcDb;
+    private final OtcController otc;
+    private CommsScanner otcScanner;
+    private TradingContext otcScannerMarket;
+    private boolean incomingLoaded;
+    private int orderMisses, otcMisses, polls;
+    private long lastReassertMs;
+    /** AtomiX MainActivity.REPUBLISH_INTERVAL_MS: keep a published order / OTC offer live + fresh. */
+    public static final long REPUBLISH_INTERVAL_MS = 30 * 60_000;
 
     private TradingContext market;
     /** Why this launch stayed in MINIMA mode (owner Q1, 4 Nov 2026), or null. Shown as a banner on ①. */
@@ -118,15 +138,30 @@ public final class DoorHost {
         minima = new MinimaHtlc(node);
         db = new SwapDb(app);
         engine = new SwapEngine(node, minima, db, wallet, h, new SwapEngine.Notifier() {
-            @Override public void notify(String title, String body) { Notifier.alert(app, "AtomiX · " + title, body.replace("mxUSDT", "MxUSD")); }
+            @Override public void notify(String title, String body) { Notifier.alert(app, "AtomiX · " + title, mx(body)); }
             @Override public void onSwapsChanged() { changed(); }
         });
         rpc = new EthRpc(net.defaultRpc);
         engine.setNetwork(rpc, net);
+        PriceOracle.init(prefs);   // the persisted last-good stamp — the withdraw clock survives restarts
+        engine.setNoticeSink((to, hh, st, why, mkt) -> {
+            TradingContext m = mkt == null ? market : mkt;
+            CryptoProvider cp = crypto.get(m); CommsIdentity id = ids.get(m);
+            if (cp != null && id != null) SwapTake.notice(node, cp, to, id.publicId(), hh, st, why, m, SwapTake.QUIET);
+        });
+        otcDb = new OtcDb(app);
+        engine.setOtcDb(otcDb);
+        otc = new OtcController(node, otcDb, engine, new OtcController.Ui() {
+            @Override public void onDealsChanged() { changed(); }
+            @Override public void note(String title, String body) { Notifier.alert(app, "AtomiX OTC · " + title, mx(body)); }
+        });
         for (TradingContext m : MARKETS) { books.put(m, Collections.emptyMap()); coinBal.put(m, null); }
         market = TradingContext.load(prefs);   // AtomiX's own key + default (MxUSD)
         select(market);
     }
+
+    /** The Minima dollar token is MxUSD in everything Dexicon shows (the vendored engine still says mxUSDT). */
+    public static String mx(String s) { return s == null ? null : s.replace("mxUSDT", "MxUSD"); }
 
     /** Tell the Activity (its ACTION_CHANGED receiver repaints) that door state moved. */
     void changed() { try { app.sendBroadcast(new Intent(MakerService.ACTION_CHANGED).setPackage(app.getPackageName())); } catch (Exception ignored) {} }
@@ -208,6 +243,7 @@ public final class DoorHost {
             try { engine.setMyOrder(new Order()); } catch (Exception ignored) {}   // disarm now
             restoreMarket(prefs, target.key);
             for (TradingContext m : MARKETS) books.put(m, Collections.emptyMap());
+            otcScanner = null; otcScannerMarket = null; orderMisses = 0; otcMisses = 0;
             launchNote = null;
             changed();
             if (done != null) done.run();
@@ -344,9 +380,31 @@ public final class DoorHost {
     public void poll() {
         ensure();
         if (!dnode.isEnabled() || !ready()) { engine.pollEthOnly(); return; }
-        if (!com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) engine.poll();
-        scanNotices();
+        // SwapService.tickPass, minus its FOREGROUND stand-down: Dexicon has ONE engine. Mid-sweep the sweep owns the
+        // ETH nonce and the coin selection, so nothing else may submit.
+        if (!com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) {
+            loadIncoming();
+            armMaker();   // re-arm the responder guard from the PERSISTED config on every pass, before poll()
+            boolean live = prefs.getBoolean("auto_publish", false);
+            if (prefs.getBoolean(PriceOracle.P_ENABLE, false) && live) { PriceOracle.refreshAsync(); maybePegWithdraw(); }
+            engine.poll();
+            if (!gated()) {
+                maybeAutoRepublish();
+                maybeRepublishOtc();
+                if (live) engine.maintainLadderCoins(true);
+            }
+        }
+        discover();
+        if (polls++ % 10 == 0 && (makerLive() || prefs.contains("last_publish_ok"))) reconcileBookPresence();   // the belt, ~15 min
         processForwards();
+    }
+
+    /** SwapService's ~30 s discovery tick: buy requests to my market and OTC messages, so a taker is seen in about a
+     *  block instead of a 90 s poll. MakerService drives it between polls. */
+    public void discover() {
+        if (!dnode.isEnabled() || !ready()) return;
+        scanTake();
+        scanOtc();
     }
 
     /** Settlement with no Minima node: ETH refunds and withdraws of door swaps (the engine checks each ETH contract). */
@@ -356,13 +414,14 @@ public final class DoorHost {
     public void refundNow(String hash, java.util.function.Consumer<String> answer) { engine.refundNow(hash, answer); }
     public int lastMinimaBlock() { return engine.lastMinimaBlock(); }
 
-    /** Makers seal a "retrying / declined" notice to us on the market's TAKE channel. Dexicon is a taker only, so it
-     *  scans that channel just while a swap it started is still waiting for its maker. */
-    private void scanNotices() {
-        boolean waiting = false;
+    /** The market's TAKE channel carries buyers' sealed hashlocks to a maker and makers' "retrying / declined" notices
+     *  to a taker. Scanned for the ACTIVE market while my maker side is configured, and for any market while a swap I
+     *  started is still waiting for its maker. */
+    private void scanTake() {
+        boolean waiting = false, maker = makerLive();
         for (SwapDb.Swap s : swaps()) if (SwapDb.ST_STARTED.equals(s.status)) { waiting = true; break; }
-        if (!waiting) return;
         for (TradingContext m : MARKETS) {
+            if (!waiting && !(maker && m == market)) continue;
             CryptoProvider cp = crypto.get(m);
             if (cp == null) continue;
             CommsScanner sc = noticeScanners.get(m);
@@ -377,17 +436,236 @@ public final class DoorHost {
         }
     }
 
-    /** A notice is accepted only when sealed to MY id for that market by the sender it names (the engine further
-     *  checks it is the maker I notified, for a swap I started). Informational only — it never moves funds. */
+    /** Accepted only when sealed to MY id for that market by the sender it names (AtomiX routeTakeRequest). A notice is
+     *  informational (the engine checks it is the maker I notified); a buy request is recorded for the ACTIVE market
+     *  only, and the responder guard ({@link #armMaker}) decides whether anything locks. */
     boolean routeNotice(TradingContext m, Opened opened) {
         try {
             JSONObject j = new JSONObject(new String(opened.plaintext, java.nio.charset.StandardCharsets.UTF_8));
-            if (!j.has("notice")) return false;
             String to = j.optString("to", ""), from = j.optString("from", ""), hash = j.optString("hash", ""), me = myPublicId(m);
             if (hash.isEmpty() || me == null || !me.equals(to)) return false;
             if (opened.fromPublicId == null || !opened.fromPublicId.equals(from)) return false;
-            return engine.onMakerNotice(hash, from, j.optString("notice"), j.optString("reason"));
+            if (j.has("notice")) return engine.onMakerNotice(hash, from, j.optString("notice"), j.optString("reason"));
+            if (m != market) return false;
+            java.util.Set<String> set = incomingHashlocks();
+            boolean isNew = set.add(hash);
+            if (isNew) prefs.edit().putString("incoming_hashlocks", android.text.TextUtils.join(",", set)).apply();
+            engine.addIncomingHashlock(hash, from);
+            if (isNew && !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) engine.checkBuyNow(hash);   // act now, not at the next poll
+            if (isNew) Notifier.alert(app, "AtomiX · Buy request received", "A buyer wants your " + DoorPlan.coin(market) + " — finding their USDT lock, then locking.");
+            return isNew;
         } catch (Exception e) { return false; }
+    }
+
+    private java.util.Set<String> incomingHashlocks() {
+        java.util.Set<String> set = new java.util.HashSet<>();
+        for (String x : prefs.getString("incoming_hashlocks", "").split(",")) if (!x.isEmpty()) set.add(x);
+        return set;
+    }
+
+    /** AtomiX loadIncoming: re-arm persisted handshakes once per process, pruning the ones that fully resolved. */
+    private void loadIncoming() {
+        if (incomingLoaded) return;
+        incomingLoaded = true;
+        java.util.Set<String> set = incomingHashlocks();
+        boolean pruned = false;
+        for (java.util.Iterator<String> it = set.iterator(); it.hasNext(); ) {
+            String x = it.next();
+            SwapDb.Swap s = db.getSwap(x);
+            if (s != null && com.eurobuddha.atomix.swap.SwapVisibility.isTerminal(s)) { it.remove(); pruned = true; }
+            else engine.addIncomingHashlock(x);
+        }
+        if (pruned) prefs.edit().putString("incoming_hashlocks", android.text.TextUtils.join(",", set)).apply();
+    }
+
+    // ------------------------------------------------------------------ the maker (AtomiX SwapService, ported)
+
+    /** One trading app per phone: while AtomiX / PandaPools is present Dexicon publishes and arms NOTHING. */
+    public boolean gated() { return TradingGate.blocked(app); }
+
+    public Order loadOrder() { return Order.fromConfigJson(prefs.getString("order_config", "")); }
+
+    /** My Minima swap key (the persisted, never self-healed {@code swap_pk}), once the HTLC side is set up. */
+    String myPk() { String pk = prefs.getString("swap_pk", ""); return minima.ready() && !pk.isEmpty() ? pk : null; }
+
+    /** Everything a publish signs with is ready: the active market's comms identity, the swap key, the ETH address. */
+    boolean makerReady() { return ids.get(market) != null && myPk() != null && wallet.ready(); }
+
+    /** The responder guard: AtomiX's armSafe order (empty while a pegged order is withdrawn) — or EMPTY while gated or
+     *  halted, so every take declines. */
+    Order armMaker() { Order o = gated() || IdentityWatch.halted() ? new Order() : PriceOracle.armSafe(loadOrder(), prefs); engine.setMyOrder(o); return o; }
+
+    /** The saved order with my identities attached and every pair disabled: a tombstone (freshest-per-signer wins). */
+    Order tombstone() {
+        Order o = loadOrder();
+        for (Order.Pair p : o.pairs.values()) p.enable = false;
+        o.minimaPublicKey = myPk(); o.ethAddress = wallet.address();
+        return o;
+    }
+
+    private double usdtAvail() { try { return Double.parseDouble(prefs.getString("usdt_avail", "0")); } catch (Exception e) { return 0; } }
+
+    /** SwapService.maybeAutoRepublish: keep the published order live and its size current (~30 min, fresh sendable),
+     *  or NOW when the pegged price moved past the threshold / the feed just recovered. Runs off {@code last_publish_ok}
+     *  (stamped ONLY on a confirmed publish), so a failed attempt retries on the next pass. */
+    private void maybeAutoRepublish() {
+        if (IdentityWatch.halted() || gated() || !makerReady()) return;
+        if (!prefs.getBoolean("auto_publish", false)) return;
+        long okStamp = prefs.getLong("last_publish_ok", 0);
+        boolean reprice = PriceOracle.shouldReprice(prefs, okStamp);
+        long interval = orderMisses >= 2 ? 60 * 60_000 : REPUBLISH_INTERVAL_MS;   // belt throttle while publishes don't land
+        if (!reprice && System.currentTimeMillis() - okStamp < interval) return;
+        final Order o = loadOrder();
+        o.minimaPublicKey = myPk(); o.ethAddress = wallet.address(); o.usdtAvail = usdtAvail();
+        boolean anyEnabled = false;
+        for (Order.Pair p : o.pairs.values()) if (p.enable) { anyEnabled = true; break; }
+        if (!anyEnabled) return;
+        if (!PublishGate.tryAcquire(PublishGate.ORDER)) return;
+        final boolean restored = prefs.getBoolean(PriceOracle.P_WITHDRAWN, false);
+        final int peg = PriceOracle.applyPeg(o, prefs);
+        if (peg == PriceOracle.PEG_STALE) { PublishGate.release(PublishGate.ORDER); return; }   // no usable price — withdraw runs on the pass
+        final boolean wide = peg == PriceOracle.PEG_WIDE;
+        final double pegMid = PriceOracle.appliedMid();
+        final long gen = PublishGate.gen();
+        final CommsIdentity id = ids.get(market);
+        engine.ensureLadderCoins(o, !com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE, () -> {
+            // a withdraw/edit/tombstone during the coin reads must not be out-freshened on-chain by this stale ladder
+            if (gen != PublishGate.gen() || gated()) { PublishGate.release(PublishGate.ORDER); return; }
+            engine.publishFresh(ls(), id, o, gen, new CommsTransport.SendCb() {
+                @Override public void onSent(String txpowid) {
+                    if (gen != PublishGate.gen()) { PublishGate.release(PublishGate.ORDER); return; }
+                    prefs.edit().putLong("last_publish_ok", System.currentTimeMillis()).apply();
+                    if (peg == PriceOracle.PEG_APPLIED || wide) PriceOracle.commitPeg(prefs, pegMid, wide);   // baseline moves only on a CONFIRMED publish
+                    engine.setMyOrder(o);
+                    PublishGate.release(PublishGate.ORDER);
+                    changed();
+                    if (restored && peg == PriceOracle.PEG_APPLIED && o.hasLiquidity())
+                        Notifier.alert(app, "AtomiX · " + PriceOracle.source() + " feed recovered", "Your pegged " + DoorPlan.coin(market) + " order is live again.");
+                }
+                @Override public void onFailed(String message) { PublishGate.release(PublishGate.ORDER); }   // retried next pass
+            });
+        });
+    }
+
+    /** SwapService.maybeRepublishOtc: the OTC offer ages off the board (~1 h) exactly like the order. */
+    private void maybeRepublishOtc() {
+        if (IdentityWatch.halted() || gated() || !makerReady()) return;
+        if (!prefs.getBoolean("otc_auto", false)) return;
+        long okStamp = prefs.getLong("otc_last_publish_ok", 0);
+        long interval = otcMisses >= 2 ? 60 * 60_000 : REPUBLISH_INTERVAL_MS;
+        if (System.currentTimeMillis() - okStamp < interval) return;
+        if (!PublishGate.tryAcquire(PublishGate.OTC)) return;
+        final long gen = PublishGate.gen();
+        OtcOffer o = otcOffer(true, num(prefs.getString("otc_sell_size", "0")), num(prefs.getString("otc_buy_size", "0")));
+        OtcBook.publish(node, ls(), ids.get(market), o, new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) {
+                PublishGate.release(PublishGate.OTC);
+                if (gen != PublishGate.gen()) return;   // a user's new-sizes tap must not be over-stamped by this keep-alive
+                prefs.edit().putLong("otc_last_publish_ok", System.currentTimeMillis()).apply();
+            }
+            @Override public void onFailed(String message) { PublishGate.release(PublishGate.OTC); }
+        });
+    }
+
+    OtcOffer otcOffer(boolean enable, double sell, double buy) {
+        OtcOffer o = new OtcOffer();
+        o.sellSize = enable ? Math.max(0, sell) : 0; o.buySize = enable ? Math.max(0, buy) : 0; o.enable = enable;
+        o.minimaPublicKey = myPk(); o.ethAddress = wallet.address(); o.commsPublicId = ids.get(market).publicId();
+        return o;
+    }
+    static double num(String s) { try { double d = Double.parseDouble(s); return Double.isFinite(d) ? d : 0; } catch (Exception e) { return 0; } }
+
+    /** SwapService.maybePegWithdraw — FUND-SAFETY, last resort: only when there is NO usable price at all and the feed has
+     *  been down past the window, tombstone the order and DISARM the guard. With a last-good mid the peg stays live at a
+     *  widened defensive spread instead. auto_publish stays on either way. A withdrawal is allowed even while gated. */
+    private void maybePegWithdraw() {
+        if (!makerReady()) return;
+        final boolean withdrawn = prefs.getBoolean(PriceOracle.P_WITHDRAWN, false);
+        if (withdrawn && prefs.getBoolean(PriceOracle.P_TOMBSTONED, false)) return;   // tombstone confirmed — done
+        if (PriceOracle.mid() > 0 && !PriceOracle.feedDownPastCeiling()) return;
+        if (!withdrawn && !PriceOracle.feedDownPastLimit()) return;
+        final boolean first = !withdrawn;
+        if (first) prefs.edit().putBoolean(PriceOracle.P_WITHDRAWN, true).putBoolean(PriceOracle.P_TOMBSTONED, false).apply();   // kill-safe
+        PublishGate.bumpGen();            // an in-flight auto publish must not re-arm the ladder
+        engine.setMyOrder(new Order());   // disarm NOW, even if the publish fails
+        SwapOrderBook.publish(node, ls(), ids.get(market), tombstone(), new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) { prefs.edit().putBoolean(PriceOracle.P_TOMBSTONED, true).apply(); changed(); }
+            @Override public void onFailed(String message) { /* retried next pass */ }
+        });
+        if (first) Notifier.alert(app, "AtomiX · " + PriceOracle.source() + " price feed lost",
+                "Your pegged " + DoorPlan.coin(market) + " order was withdrawn for safety. It re-publishes automatically when the feed recovers.");
+    }
+
+    /** OTC negotiation receiver (SwapService.scanOtc): deals progress with the app closed. Scanned while my offer is on
+     *  or a deal is still open. The offer is never advertised as enabled while gated. */
+    private void scanOtc() {
+        if (!makerReady()) return;
+        CommsIdentity id = ids.get(market);
+        otc.setSelf(crypto.get(market), id, myPk(), wallet.address());
+        otc.setMyOffer(prefs.getBoolean("otc_enable", false) && !gated() && !IdentityWatch.halted(),
+                num(prefs.getString("otc_sell_size", "0")), num(prefs.getString("otc_buy_size", "0")));
+        boolean open = prefs.getBoolean("otc_enable", false);
+        if (!open) for (OtcDb.Deal d : otcDb.allDeals()) if (!OtcController.isTerminal(d.status)) { open = true; break; }
+        if (!open) return;
+        if (otcScanner == null || otcScannerMarket != market) {
+            otcScannerMarket = market;
+            otcScanner = new CommsScanner(node, crypto.get(market), new CommsScanner.MetaStore() {
+                @Override public String getMeta(String k, String def) { return prefs.getString("otcmeta_" + k, def); }
+                @Override public void setMeta(String k, String v) { prefs.edit().putString("otcmeta_" + k, v).apply(); }
+            }, OtcMessage.address(), otc::route, (ok, n) -> {});
+        }
+        otcScanner.scan(0);
+        otc.expireStale(System.currentTimeMillis());
+    }
+
+    /**
+     * SwapService.reconcileBookPresence — the book-presence belt. The ok-stamp can lie (a vault-locked node answers
+     * pending, an accepted txn is orphaned): if my freshest coin is missing/stale while the stamp claims a recent
+     * success, ZERO the stamp so the next pass republishes. Inversely, while the market is cancelled/withdrawn and my
+     * freshest coin still shows liquidity, re-assert the tombstone.
+     */
+    private void reconcileBookPresence() {
+        if (!makerReady()) return;
+        final String me = "0x" + Hex.to(ids.get(market).signPk);
+        final long genAtScan = PublishGate.gen();
+        final TradingContext m = market;
+        SwapOrderBook.scan(node, ls(), book -> {
+            if (m != market) return;
+            Order mine = book.get(me);
+            boolean autoPub = prefs.getBoolean("auto_publish", false), withdrawn = prefs.getBoolean(PriceOracle.P_WITHDRAWN, false);
+            if (autoPub && !withdrawn && !gated()) checkPresence(mine == null ? 0 : mine.ts, "last_publish_ok", true);
+            else if (mine != null && mine.hasLiquidity() && genAtScan == PublishGate.gen()) reassertTombstone();
+        }, err -> {});
+        if (prefs.getBoolean("otc_auto", false)) OtcBook.scan(node, ls(), book -> {
+            if (m != market) return;
+            OtcOffer mine = book.get(me);
+            checkPresence(mine == null ? 0 : mine.ts, "otc_last_publish_ok", false);
+        }, err -> {});
+    }
+
+    private void reassertTombstone() {
+        if (!makerReady() || com.eurobuddha.atomix.MainActivity.SWEEP_ACTIVE) return;
+        long now = System.currentTimeMillis();
+        if (now - lastReassertMs < 60 * 60_000) return;   // hourly cap
+        lastReassertMs = now;
+        if (!PublishGate.tryAcquire(PublishGate.ORDER)) return;
+        SwapOrderBook.publish(node, ls(), ids.get(market), tombstone(), new CommsTransport.SendCb() {
+            @Override public void onSent(String txpowid) { PublishGate.release(PublishGate.ORDER); }
+            @Override public void onFailed(String message) { PublishGate.release(PublishGate.ORDER); }
+        });
+    }
+
+    private void checkPresence(long coinTs, String stampKey, boolean isOrder) {
+        long now = System.currentTimeMillis(), stamp = prefs.getLong(stampKey, 0);
+        if (stamp == 0 || now - stamp >= REPUBLISH_INTERVAL_MS) return;   // republish already due
+        if (now - stamp < 5 * 60_000) return;   // a just-confirmed publish takes ~1 block to appear
+        boolean present = coinTs > 0 && now - coinTs < REPUBLISH_INTERVAL_MS + 10 * 60_000;
+        if (present) { if (isOrder) orderMisses = 0; else otcMisses = 0; return; }
+        int misses = isOrder ? ++orderMisses : ++otcMisses;
+        prefs.edit().putLong(stampKey, 0).apply();   // force a republish on the next pass
+        String c = DoorPlan.coin(market);
+        if (misses == 2) Notifier.alert(app, "AtomiX · " + c + (isOrder ? " market" : " OTC offer") + " isn't landing on-chain",
+                "Your " + c + (isOrder ? " market updates" : " OTC offer") + " may be stuck in the node's Pending list — is the vault locked? Open your Minima node and check Pending.");
     }
 
     // ------------------------------------------------------------------ reads
@@ -420,7 +698,11 @@ public final class DoorHost {
             try { g = EthRpc.hexToBig(rpc.callStr("eth_gasPrice", new JSONArray())); } catch (Exception ignored) {}
             try { b = rpc.baseFeePerGasOrZero(); } catch (Exception ignored) {}
             final BigInteger fe = e, fu = u, fg = g, fb = b;
-            h.post(() -> { ethWei = fe; usdtRaw = fu; gasWei = fg; baseFeeWei = fb; if (done != null) done.run(); });
+            h.post(() -> {
+                ethWei = fe; usdtRaw = fu; gasWei = fg; baseFeeWei = fb;
+                if (fu != null) prefs.edit().putString("usdt_avail", new BigDecimal(fu, 6).toPlainString()).apply();   // the background republish's size
+                if (done != null) done.run();
+            });
         });
     }
     /** Wei to reserve for {@code gasLimit} at the price EthTx will actually broadcast at; null when gas is unreadable. */

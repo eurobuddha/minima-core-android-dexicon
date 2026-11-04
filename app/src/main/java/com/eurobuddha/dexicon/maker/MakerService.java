@@ -183,10 +183,14 @@ public class MakerService extends Service {
             if (!started || ticking) return;
             // DOORS settlement (AtomiX taker engine): claims, ETH withdraws, refunds and forwards, ~every 90 s, app closed or
             // not — and paired or not: unpaired it still refunds/withdraws the ETH legs, which need only Ethereum.
-            if (doorTicks++ % 9 == 0) try {
+            // Between polls, AtomiX's ~30 s maker discovery (buy requests to my market, OTC messages).
+            long door = doorTicks++;
+            if (door % 9 == 0) try {
                 com.eurobuddha.dexicon.doors.DoorHost dh = com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this);
                 if (paired) dh.poll(); else dh.pollEthOnly();
             } catch (RuntimeException e) { log("doors poll: " + e); }
+            else if (door % 3 == 0 && paired) try { com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this).discover(); }
+            catch (RuntimeException e) { log("doors discover: " + e); }
             if (!paired) {
                 long now = System.currentTimeMillis();
                 if (now - lastRegisterMs >= REREGISTER_GAP_MS) { lastRegisterMs = now; node.reRegister(); }
