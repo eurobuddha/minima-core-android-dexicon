@@ -533,6 +533,8 @@ public final class DoorHost {
 
     /** Ask for a refund of my lock now; the answer (why not yet, or "refunding") comes back on the main thread. */
     public void refundNow(String hash, java.util.function.Consumer<String> answer) { engine.refundNow(hash, answer); }
+    /** AtomiX checkNow: advance the swap and run the engine's live inspection of both chains (report on the main thread). */
+    public void inspect(String hash, java.util.function.Consumer<java.util.List<String>> report) { engine.poll(); engine.inspect(hash, report::accept); }
     public int lastMinimaBlock() { return engine.lastMinimaBlock(); }
 
     /** The market's TAKE channel carries buyers' sealed hashlocks to a maker and makers' "retrying / declined" notices

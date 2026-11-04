@@ -328,4 +328,17 @@ public class LedgerTest {
         it = Ledger.swap(s, java.util.Collections.singletonList(e), null, s.created / 1000 + 120, 100, "0x" + "12".repeat(20), null, java.util.TimeZone.getTimeZone("UTC"));
         assertTrue(it.sub, it.sub.contains("paid · USDT at your Ethereum address"));
     }
+
+    /** 0.2.2: AtomiX shows "Check now" until a swap is COMPLETE or REFUNDED (an ERROR row can still be inspected). */
+    @Test public void checkNowUntilTheSwapIsSettled() {
+        com.eurobuddha.atomix.swap.SwapDb.Swap s = new com.eurobuddha.atomix.swap.SwapDb.Swap();
+        s.hash = "0x" + "ab".repeat(32); s.role = "INITIATOR"; s.direction = "ERC20_TO_MINIMA";
+        s.sellToken = "USDT"; s.sellAmount = "5"; s.buyToken = "MxUSD"; s.buyAmount = "5"; s.created = 1_700_000_000_000L; s.updated = s.created;
+        String[][] cases = {{"STARTED", "true"}, {"LOCKED", "true"}, {"CLAIMING", "true"}, {"ERROR", "true"}, {"COMPLETE", "false"}, {"REFUNDED", "false"}};
+        for (String[] c : cases) {
+            s.status = c[0];
+            Ledger.Item it = Ledger.swap(s, new java.util.ArrayList<>(), null, s.created / 1000 + 60, 100, null, null, java.util.TimeZone.getTimeZone("UTC"));
+            assertEquals(c[0], Boolean.parseBoolean(c[1]), it.checkable);
+        }
+    }
 }

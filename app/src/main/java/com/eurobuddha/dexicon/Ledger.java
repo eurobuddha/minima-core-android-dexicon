@@ -49,6 +49,8 @@ public final class Ledger {
         /** live = still in flight (steps always visible); usd = an MxUSD swap (AtomiX green, not orange);
          *  header = a day label row; ticking = re-derive every second (a refund countdown). */
         public boolean live, usd, header, ticking, retryForward, refundEnabled;
+        /** AtomiX's "Check now": a swap not yet COMPLETE or REFUNDED can be inspected live on both chains. */
+        public boolean checkable;
         public String refundLabel;
         public long sortMs;
         public final List<Step> steps = new ArrayList<>();
@@ -266,6 +268,7 @@ public final class Ledger {
         it.chipTone = running || "FORWARDING".equals(pill) ? Tone.LIVE : complete && "DONE".equals(pill) ? Tone.OK : complete ? Tone.WARN : Tone.BAD;
         it.icon = it.live ? "●" : complete ? "✓" : refunded ? "↺" : "!";
         it.tone = it.live ? Tone.LIVE : complete ? Tone.OK : Tone.BAD;
+        it.checkable = !complete && !refunded;
 
         long claimAt = 0, refundAt = 0;
         String makerId = null;

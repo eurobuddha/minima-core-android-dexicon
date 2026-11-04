@@ -610,7 +610,8 @@ public final class DoorsTab extends LinearLayout {
                 TextView chk = Design.pill(act, "Check now", Design.SURFACE2(), Design.TEXT());
                 LayoutParams cl = new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT); cl.topMargin = Design.dp(act, 8);
                 chk.setLayoutParams(cl);
-                chk.setOnClickListener(v -> { host.poll(); act.toast("Checking both chains now…"); act.repaint(); }); Design.pressable(chk);
+                final String hash = sw.hash;
+                chk.setOnClickListener(v -> Swaps.checkNow(act, host, hash)); Design.pressable(chk);
                 stages.addView(chk);
             }
             if (more > 0) {
@@ -696,6 +697,26 @@ public final class DoorsTab extends LinearLayout {
             act.repaint();
             host.refundNow(s.hash, answer -> { ANSWERS.put(s.hash, answer); act.repaint(); });
         }
+        @Override public void check(String id) { SwapDb.Swap s = byId.get(id); if (s != null) checkNow(act, host, s.hash); }
+
+        /** AtomiX checkNow + showReport: "Swap status", the inspector's lines, Check again / Close. */
+        static void checkNow(MainActivity act, DoorHost host, String hash) {
+            act.toast("Checking…");
+            host.readBalances(act::repaint);
+            host.inspect(hash, lines -> {
+                StringBuilder sb = new StringBuilder();
+                for (String l : lines) sb.append(l).append("\n\n");
+                TextView t = Ui.text(act, sb.toString().trim(), 13f, Design.TEXT(), Design.sans());
+                t.setTextIsSelectable(true);
+                int p = Design.dp(act, 20); t.setPadding(p, Design.dp(act, 12), p, Design.dp(act, 4));
+                android.widget.ScrollView sv = new android.widget.ScrollView(act); sv.addView(t);
+                act.track(new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Swap status").setView(sv)
+                        .setPositiveButton("Check again", (d, w) -> checkNow(act, host, hash))
+                        .setNegativeButton("Close", null).show());
+                act.repaint();
+            });
+        }
+
         @Override public void retry(String id) {
             SwapDb.Swap s = byId.get(id);
             if (s == null) return;
