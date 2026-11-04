@@ -83,7 +83,8 @@ public class MakerService extends Service {
     MakerEngine engine;
     private LadderRunner ladder;   // the fast market maker (ORDERS › MARKET MAKER)
     private AutoCross cross;       // trades PandaPools back to the ladder's rungs
-    private boolean started, paired, deriving, ticking;
+    boolean started, ticking;   // package-private for tests
+    private boolean paired, deriving;
     private long lastRegisterMs, ticks, doorTicks, lastHubMs;
     /** The trading gate's MiniHub half is re-read here too, so it holds with the Activity closed (an upgrade restarts
      *  only this service). */
@@ -190,7 +191,7 @@ public class MakerService extends Service {
         });
     }
 
-    private final Runnable tick = new Runnable() {
+    final Runnable tick = new Runnable() {
         @Override public void run() {
             h.removeCallbacks(this);
             h.postDelayed(this, TICK_MS);
@@ -208,6 +209,9 @@ public class MakerService extends Service {
             // The MiniHub re-read (the trading gate's MiniDapp half) never waits behind a slow relay chain either.
             long nowMs = System.currentTimeMillis();
             if (paired && nowMs - lastHubMs >= HUB_EVERY_MS) { lastHubMs = nowMs; com.eurobuddha.dexicon.TradingGate.checkMiniHub(MakerService.this, node, MakerService.this::changed); }
+            // ② pool coin selection must never pick a live ③ order's backing coin: re-held every tick, even while the relay
+            // chain runs (a long chain must not let the hold marks lapse).
+            holdOrderCoins();
             // Only the relay chain waits on `ticking`: door settlement above never stalls behind a slow inbox/take chain.
             if (ticking) return;
             if (!paired) {
@@ -219,7 +223,6 @@ public class MakerService extends Service {
             runPendingRepublish();
             // ② Pools: PandaPools' keep-alive (keep-fresh, stranding alarm, re-announce, collections), at most every 5 min.
             // Settlement, so it runs even while the trading gate is shut; it needs no relay or identity.
-            holdOrderCoins();   // ② pool coin selection must never pick a live ③ order's backing coin
             try { com.eurobuddha.pandapools.DexiconPools.keepAlivePass(MakerService.this, node); }
             catch (RuntimeException e) { log("pool keep-alive: " + e); }
             if (me == null) { deriveIdentity(); return; }
@@ -249,6 +252,7 @@ public class MakerService extends Service {
         Set<String> s = new HashSet<>(p.getStringSet("pending", new HashSet<>()));
         s.add(address.trim());
         p.edit().putStringSet("pending", s).commit();
+        lastRepublishReadMs = 0;   // a new tap runs on a fresh read at once
     }
 
     /** Paired: run every queued Re-publish; every signing guard of DexiconPools.republish still applies. An address is
@@ -256,10 +260,17 @@ public class MakerService extends Service {
     void runPendingRepublish() {
         Set<String> s = getSharedPreferences(PREFS_REPUBLISH, MODE_PRIVATE).getStringSet("pending", null);
         if (s == null || s.isEmpty()) return;
-        // custody is re-read OFF the main thread first, so the owner-signing guard decides on a fresh read (on the main
-        // thread an older one fails closed and would hold the queue back every tick)
+        // the owner-signing guard needs a read under ~5 s old: reuse one (e.g. a keep-alive pass keeps it warm) ...
+        if (com.eurobuddha.pandapools.DexiconPools.custodyFreshToSign(this)) { drainRepublish(); return; }
+        // ... else re-read OFF the main thread (on it an older read fails closed), at most once a minute while a
+        // held-back republish stays queued — not a provider query every 10 s tick
+        long now = System.currentTimeMillis();
+        if (now - lastRepublishReadMs < REPUBLISH_READ_GAP_MS) return;
+        lastRepublishReadMs = now;
         com.eurobuddha.pandapools.DexiconPools.readCustodyAsync(this, this::drainRepublish);
     }
+    static final long REPUBLISH_READ_GAP_MS = 60_000;
+    private long lastRepublishReadMs;
 
     private void drainRepublish() {
         android.content.SharedPreferences p = getSharedPreferences(PREFS_REPUBLISH, MODE_PRIVATE);
@@ -274,7 +285,9 @@ public class MakerService extends Service {
     void holdOrderCoins() {
         List<String> ids = new ArrayList<>();
         try { for (MyOrder o : db.myOrders()) if (o.live()) ids.addAll(o.coins); } catch (RuntimeException unreadable) { return; }
-        com.eurobuddha.pandapools.DexiconPools.holdCoins(ids);
+        java.util.Set<String> taken = com.eurobuddha.pandapools.DexiconPools.holdCoins(ids);
+        // a ② pool selection reserved it first: not this order's to hold; the order's coin refresh finds it spent / re-backs
+        if (!taken.isEmpty()) log("order backing coin reserved by a pool transaction: " + String.join(" ", taken));
     }
 
     /** The inbox is a CONTINUOUS long-poll (like the MiniDapp's inboxLoop): a take or a maker's answer is handled the

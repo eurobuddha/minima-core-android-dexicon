@@ -167,8 +167,17 @@ public class NodeApi {
     public void cmd(String command, Cb cb) {
         if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, cb)); return; }
         if (command == null || command.trim().isEmpty()) { if (cb != null) cb.onError("Empty node command."); return; }
-        String refused = refuse == null ? null : refuse.apply(command);
-        if (refused != null) { if (cb != null) cb.onError(refused); return; }
+        if (refuse == null) { send(command, cb); return; }
+        // the refuse decision may read PandaPools' custody provider: decide OFF the main thread, act back on it
+        DexiconPools.offMain(() -> {
+            String refused;
+            try { refused = refuse.apply(command); } catch (RuntimeException e) { refused = "Could not check this command: " + e.getMessage() + ". Nothing was sent."; }
+            final String why = refused;
+            mMain.post(() -> { if (why == null) send(command, cb); else if (cb != null) cb.onError(why); });
+        });
+    }
+
+    private void send(String command, Cb cb) {
         final Write w = new Write(command);
         node.cmd(command, w::admit, timeoutFor(command), new com.eurobuddha.dexicon.NodeApi.Cb() {
             @Override public void onResult(JSONObject reply) {

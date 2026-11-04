@@ -95,7 +95,13 @@ public class DexTxn {
                 return;
             }
             List<String> held = new ArrayList<>(); for (JSONObject c : coins) held.add(c.optString("coinid"));
-            com.eurobuddha.pandapools.DexiconPools.holdCoins(held);   // Dexicon glue: ② pool coin selection skips them too
+            // Dexicon glue: ② pool coin selection skips them too; one a ② pool selection reserved meanwhile is not ours
+            java.util.Set<String> taken = com.eurobuddha.pandapools.DexiconPools.holdCoins(held);
+            if (!taken.isEmpty()) {
+                CoinLock.release(coins);
+                cb.onFailed("A pool transaction just reserved a selected wallet coin:\n" + String.join("\n", taken) + "\nNothing was sent. Try again in a moment.");
+                return;
+            }
             progress(cb, "Wallet coins selected · checking pool access");
             ensureTrackedPools(prep.route == null ? new ArrayList<>() : prep.route.allocs, 0,
                     () -> buildComposite(commands, plan, prep, takerBuys, coins, payoutAddress, cb), message -> {

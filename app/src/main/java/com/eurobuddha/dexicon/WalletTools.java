@@ -29,8 +29,8 @@ final class WalletTools {
                         + "Your node picks the coins with its standard consolidation command. Nothing leaves your wallet and there is no fee.\n\n"
                         + "consolidate tokenid:" + tokenid)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Consolidate", (d, w) -> com.eurobuddha.pandapools.DexiconPools.checkConsolidation(act, error -> {
-                    // PandaPools' guard: never let the node pick a coin of a pool owner key that cannot sign
+                .setPositiveButton("Consolidate", (d, w) -> com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(act.nodeApi(), tokenid, error -> {
+                    // the one node-picked-spend guard: never let the node pick a pool owner coin it must not sign
                     if (error != null) message(act, "Nothing consolidated", error);
                     else run(act, "consolidate tokenid:" + tokenid, "Consolidate " + name);
                 })).show();
@@ -47,8 +47,8 @@ final class WalletTools {
                 .setMessage("Send all " + amt + " sendable " + name + " to yourself as " + SPLIT_COUNT + " equal coins, so several orders and trades "
                         + "can each have their own coin.\n\nThe coins stay in your wallet; they are spendable again once the send confirms.\n\n" + cmd)
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Split", (d, w) -> com.eurobuddha.pandapools.DexiconPools.checkConsolidation(act, error -> {
-                    // a self-send lets the node pick the coins too: PandaPools' consolidation guard applies
+                .setPositiveButton("Split", (d, w) -> com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(act.nodeApi(), tokenid, error -> {
+                    // a self-send lets the node pick the coins too: the same guard applies
                     if (error != null) message(act, "Nothing split", error);
                     else run(act, cmd, "Split " + name);
                 })).show();

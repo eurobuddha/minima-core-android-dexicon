@@ -553,8 +553,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 }
                 final int before = coins;
                 setStage("Your " + name + " is spread over " + coins + " coins — consolidating it, then the trade retries by itself");
-                // PandaPools' guard (as ASSETS › CONSOLIDATE): the node picks the coins, so never while a pool owner key cannot sign
-                com.eurobuddha.pandapools.DexiconPools.checkConsolidation(MainActivity.this, blocked -> {
+                // the one node-picked-spend guard (as ASSETS › CONSOLIDATE): the node picks the coins
+                com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(node, token, blocked -> {
                     if (blocked != null) { setStage(""); explain("Nothing consolidated", blocked + "\n\n" + why); return; }
                     SignGate.submit(release -> node.cmdR("consolidate tokenid:" + token, new NodeApi.Cb() {
                         public void onResult(JSONObject x) { release.free(); waitThenRetry(buy, amount, price, token, need, chainBlock, true); }

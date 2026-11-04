@@ -95,10 +95,15 @@ public class OwnerCoinExclusionTest {
             final List<JSONObject>[] fund = new List[]{java.util.Collections.emptyList()};
             new DexTxn(node).findCoins(MINIMA, new BigDecimal("10"), coins -> fund[0] = coins);
             assertNull("a trade does not fund itself with it", fund[0]);
-            com.eurobuddha.pandapools.DexiconPools.holdCoins(java.util.Collections.singletonList(held.coinid));   // now Dexicon's own hold
+            // 0.1.83: Dexicon cannot take it over with a fresh hold mark — the hold reports it and it stays skipped
+            assertEquals(java.util.Collections.singleton(held.coinid), com.eurobuddha.pandapools.DexiconPools.holdCoins(java.util.Collections.singletonList(held.coinid)));
             MakerEngine.walletCoins(node, MINIMA, (e, coins) -> got[0] = coins);
-            assertEquals("Dexicon's own backing coin stays visible to the maker", 1, got[0].size());
+            assertTrue("still the pool's", got[0].isEmpty());
         } finally { com.eurobuddha.pandapools.CoinLock.release(java.util.Collections.singletonList(held)); }
+        com.eurobuddha.pandapools.DexiconPools.holdCoins(java.util.Collections.singletonList(held.coinid));   // Dexicon's own hold first
+        final List<Coin>[] mine = new List[1];
+        MakerEngine.walletCoins(node, MINIMA, (e, coins) -> mine[0] = coins);
+        assertEquals("Dexicon's own backing coin stays visible to the maker", 1, mine[0].size());
     }
 
     /** C: a live ③ order's backing coins are held in PandaPools' CoinLock every tick, so ② pool refresh never picks one. */
@@ -113,5 +118,20 @@ public class OwnerCoinExclusionTest {
         assertFalse(com.eurobuddha.pandapools.CoinLock.isReserved(coinId));
         s.holdOrderCoins();
         assertTrue(com.eurobuddha.pandapools.CoinLock.isReserved(coinId));
+    }
+
+    /** 0.1.83 (4b): the backing coins are re-held every tick even while the relay chain runs (`ticking`). */
+    @Test public void backingCoinsAreReHeldWhileTheRelayChainRuns() {
+        MakerService s = org.robolectric.Robolectric.buildService(MakerService.class).get();
+        s.db = new com.eurobuddha.dexicon.DexDb(s);
+        String coinId = "0x" + "0a".repeat(32);
+        MyOrder o = new MyOrder(); o.orderId = "0x00000000000000ca"; o.side = "sell"; o.price = "0.0035"; o.amount = "100"; o.remaining = "100";
+        o.address = WALLET; o.seq = 5; o.expiry = MakerEngine.now() + 3600; o.coins.add(coinId);
+        s.db.saveOrder(o);
+        s.started = true; s.ticking = true;
+        assertFalse(com.eurobuddha.pandapools.CoinLock.isReserved(coinId));
+        s.tick.run();
+        assertTrue(com.eurobuddha.pandapools.CoinLock.isReserved(coinId));
+        s.started = false;
     }
 }

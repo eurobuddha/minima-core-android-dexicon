@@ -154,7 +154,58 @@ public class DexiconPoolsKeepAliveTest {
             public void onResult(JSONObject j) {}
             public void onError(String m) { err[0] = m; }
         });
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();   // decided off the main thread, then acted on it
         return sent.size() > before ? null : err[0];
+    }
+
+    /** 0.1.83 (1): a pass keeps custody warm, so a signing step on the main thread long after the pass-start read still
+     *  signs; a pool PandaPools genuinely keeps is still refused; the warm reads stop within ~2 min. */
+    @Test public void aPassKeepsCustodyWarmForItsLaterSigningSteps() {
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), "handed_over"}};
+        CustodyFake.install((android.app.Application) ctx, CustodyFake.Install.NEW, 982);
+        assertTrue(OwnPoolStore.recordDurably(ctx, pool(A)));
+        assertTrue(DexiconPools.keepAlivePass(ctx, dex));
+        org.robolectric.shadows.ShadowLooper main = Shadows.shadowOf(android.os.Looper.getMainLooper());
+        main.idle();   // the pass-start read lands, the pass starts (its reserve reads wait on the node)
+        DexiconPools.ageCustody(6_000);   // the next signing step comes > 5 s after the pass-start read
+        main.idleFor(java.time.Duration.ofMillis(DexiconPools.WARM_EVERY_MS));
+        assertFalse("kept warm: the step signs instead of failing closed", Handover.keptByDexicon(ctx, A));
+        CustodyFake.rows = new String[][]{{A.toLowerCase(), DexiconPools.KEPT_HERE}};
+        DexiconPools.ageCustody(6_000);
+        main.idleFor(java.time.Duration.ofMillis(DexiconPools.WARM_EVERY_MS));
+        assertTrue("a pool PandaPools keeps is still refused", Handover.keptByDexicon(ctx, A));
+        main.idleFor(java.time.Duration.ofMillis(DexiconPools.WARM_MAX_MS));
+        int after = CustodyFake.queries.get();
+        main.idleFor(java.time.Duration.ofSeconds(30));
+        assertEquals("the warm reads stop after ~2 min", after, CustodyFake.queries.get());
+    }
+
+    /** 0.1.83 (5): an Error in the background read must not leave its hand-off set (every later read would be skipped). */
+    @Test public void anErrorInTheBackgroundReadStillHandsOff() {
+        installPandaPools(true);
+        final List<Runnable> background = new ArrayList<>();
+        DexiconPools.custodyExecutorForTest(background::add);
+        try {
+            DexiconPools.ageCustody(120_000);
+            DexiconPools.custodyForUi(ctx, null);
+            assertEquals(1, background.size());
+            CustodyFake.fail = new OutOfMemoryError("test");
+            try { background.remove(0).run(); fail("the Error propagates"); } catch (OutOfMemoryError expected) { }
+            CustodyFake.fail = null;
+            DexiconPools.custodyForUi(ctx, null);
+            assertEquals("a later caller starts a new background read", 1, background.size());
+            background.remove(0).run();
+        } finally { CustodyFake.fail = null; DexiconPools.custodyExecutorForTest(Runnable::run); }
+    }
+
+    /** 0.1.83 (4a): a coin PandaPools' own selection already reserves is not marked as Dexicon's — it is reported back. */
+    @Test public void holdingACoinAPoolSelectionReservedIsRefused() {
+        String id = "0x" + String.join("", Collections.nCopies(64, "9"));
+        CoinLock.reserve(Collections.singletonList(coin(id)));
+        try {
+            assertEquals(Collections.singleton(id), DexiconPools.holdCoins(Collections.singletonList(id)));
+            assertTrue("still PandaPools' reservation", DexiconPools.poolReserved(id));
+        } finally { CoinLock.release(Collections.singletonList(coin(id))); }
     }
 
     /** 9 (0.1.79): the sweep is filtered PER ENTRY — a pending payout of the pool Dexicon keeps is still forwarded while
@@ -235,8 +286,8 @@ public class DexiconPoolsKeepAliveTest {
         assertTrue(DexiconPools.poolReserved(id));
         DexiconPools.holdCoins(Collections.singletonList(other));
         DexiconPools.ageHeld(DexiconPools.HELD_MS);
-        DexiconPools.holdCoins(Collections.singletonList(id));
-        assertEquals("the lapsed mark is pruned", 1, DexiconPools.heldCount());
+        assertEquals("0.1.83: the pool's reservation is not taken over", Collections.singleton(id), DexiconPools.holdCoins(Collections.singletonList(id)));
+        assertEquals("the lapsed mark is pruned, the pool's coin not marked", 0, DexiconPools.heldCount());
     }
     private static Coin coin(String id) { Coin c = new Coin(); c.coinid = id; return c; }
 

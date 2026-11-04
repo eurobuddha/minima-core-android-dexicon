@@ -201,10 +201,16 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /** Layer 2: re-register my pools' covenants so a re-synced node tracks them again; forward funds stranded at owner
-     *  addresses. A pool another app still keeps (AWAITING HAND-OVER) is left to that app. */
+     *  addresses. A pool another app still keeps (standalone PandaPools' custody) is left to that app — decided on a
+     *  custody read that has just landed (read off the main thread), never on an older cache that would fail closed and,
+     *  once per session, skip every pool. */
     private void retrackOwnPools() {
         if (retrackedOwn || ppNode == null) return;
         retrackedOwn = true;
+        DexiconPools.readCustodyAsync(this, () -> { if (!isFinishing() && !isDestroyed() && ppNode != null) retrackKeepable(); });
+    }
+
+    private void retrackKeepable() {
         final List<Pool> own = Handover.keepable(this, OwnPoolStore.all(this));
         final List<String> oadrs = new ArrayList<>();
         for (Pool p : own) if (p.oadr != null && !p.oadr.isEmpty()) oadrs.add(p.oadr);

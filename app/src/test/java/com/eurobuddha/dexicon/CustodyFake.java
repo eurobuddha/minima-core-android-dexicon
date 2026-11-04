@@ -19,6 +19,8 @@ import org.robolectric.Shadows;
  *  ({@code {address, state}}); null = it answers null (e.g. Dexicon not signature-matched). */
 public class CustodyFake extends ContentProvider {
     public static volatile String[][] rows = {};
+    /** Non-null: the next queries throw it (e.g. an Error). */
+    public static volatile Error fail;
     /** Provider queries answered so far. */
     public static final java.util.concurrent.atomic.AtomicInteger queries = new java.util.concurrent.atomic.AtomicInteger();
 
@@ -55,6 +57,7 @@ public class CustodyFake extends ContentProvider {
     @Override public boolean onCreate() { return true; }
     @Override public Cursor query(Uri uri, String[] projection, String selection, String[] args, String sort) {
         queries.incrementAndGet();
+        if (fail != null) throw fail;
         String[][] r = rows;
         if (r == null) return null;
         MatrixCursor c = new MatrixCursor(new String[]{"address", "state"});
