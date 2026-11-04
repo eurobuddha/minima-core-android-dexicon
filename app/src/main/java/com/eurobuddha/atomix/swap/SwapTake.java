@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.87 app/src/main/java/com/eurobuddha/atomix/swap/SwapTake.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.89 app/src/main/java/com/eurobuddha/atomix/swap/SwapTake.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -22,6 +22,31 @@ public final class SwapTake {
     public static String address() { return TradingContext.active().takeAddr; }
 
     private SwapTake() {}
+
+    /** Pref holding pending buy requests (hashlocks) for re-arming after a restart. Each entry is
+     *  {@code hash@marketKey}: a request arrives on ONE market's take channel and must only ever be re-armed in
+     *  that market — an untagged one re-armed after a currency switch was priced against the other market's
+     *  ladder. Untagged entries from before 0.1.89 are unattributable and are dropped on the next write. */
+    public static final String P_PENDING = "incoming_hashlocks";
+
+    /** The pending hashlocks persisted for {@code market}. */
+    public static java.util.Set<String> pending(String stored, TradingContext market) {
+        java.util.Set<String> out = new java.util.LinkedHashSet<>();
+        if (stored == null || market == null) return out;
+        String tag = "@" + market.key;
+        for (String e : stored.split(","))
+            if (e.endsWith(tag) && e.length() > tag.length()) out.add(e.substring(0, e.length() - tag.length()));
+        return out;
+    }
+
+    /** {@code stored} with {@code add} tagged for {@code market} and {@code remove} (that market's) taken out. */
+    public static String edit(String stored, TradingContext market, String add, java.util.Collection<String> remove) {
+        java.util.Set<String> all = new java.util.LinkedHashSet<>();
+        if (stored != null) for (String e : stored.split(",")) if (e.indexOf('@') > 0) all.add(e);
+        if (remove != null) for (String h : remove) all.remove(h + "@" + market.key);
+        if (add != null && !add.isEmpty()) all.add(add + "@" + market.key);
+        return String.join(",", all);
+    }
 
     /** Taker → maker: seal the hashlock to the maker's publicId and post it to the take channel. */
     public static void send(NodeApi node, CryptoProvider crypto, String makerPublicId, String myPublicId,

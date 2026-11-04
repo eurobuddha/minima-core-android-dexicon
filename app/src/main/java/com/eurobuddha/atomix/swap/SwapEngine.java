@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.87 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.89 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -379,6 +379,26 @@ public final class SwapEngine {
     }
     public static void endConsolidate() { synchronized (CP_LOCKING) { inflight.remove("consolidate"); } }
 
+    /** An initiator start is between its entry check and its callback ("sell" / "buy:" markers in {@link #inflight}):
+     *  its secret may not be written yet. The Dexicon handover waits on this as on any in-flight swap. */
+    public static boolean initiatorStarting() {
+        synchronized (inflight) {
+            for (String k : inflight) if ("sell".equals(k) || k.startsWith("buy:")) return true;
+        }
+        return false;
+    }
+
+    /** Write the initiator's row + secret unless AtomiX was handed over meanwhile — the entry check ran two node
+     *  round-trips (or an on-chain approve) earlier. Under Handover.LOCK, so it cannot interleave with the
+     *  handover's final re-check: either the row is written first and that check sees it, or this refuses. */
+    private boolean prepareUnlessHandedOver(SwapDb.Swap s, String secret, String amount, String token) {
+        synchronized (com.eurobuddha.atomix.Handover.LOCK) {
+            if (com.eurobuddha.atomix.Handover.active()) return false;
+            db.prepareInitiator(s, secret, amount, token);
+            return true;
+        }
+    }
+
     // ---- wallet keeper (maker): keep the active token's coins inside the band the engine can trade with ----
     // Every sell take lands as a new coin, so a busy maker fragments until the safe coin read (MinimaHtlc
     // maxSafeCoinRows) refuses and EVERY buy is declined (live 2026-10-26: a 56-coin MxUSD maker). Merge well before
@@ -674,7 +694,7 @@ public final class SwapEngine {
                                 market.coinLabel, sellMinima, tokenSymbol, buyTokenAmount, maker.ethAddress);
                         s.myTimelock = timelock; s.myLegIsMinima = true; s.status = SwapDb.ST_STARTED;
                         try {
-                            db.prepareInitiator(s, secret, buyTokenAmount, reqToken);
+                            if (!prepareUnlessHandedOver(s, secret, buyTokenAmount, reqToken)) { cb.err(HANDOVER_ERROR); return; }
                             if (!cb.onPrepared(hash)) {
                                 cb.err("The swap lock was not submitted because recovery data could not be saved."); return;
                             }
@@ -730,13 +750,21 @@ public final class SwapEngine {
         startErc20ToMinima(maker, tokenSymbol, sellTokenAmount, buyMinima, otc, com.eurobuddha.atomix.TradingContext.active(), cb);
     }
 
-    void startErc20ToMinima(Order maker, String tokenSymbol, String sellTokenAmount, String buyMinima, boolean otc, com.eurobuddha.atomix.TradingContext market, StartCb cb) {
-        if (com.eurobuddha.atomix.Handover.active()) { cb.err(HANDOVER_ERROR); return; }
-        if (!ready()) { cb.err("Not ready"); return; }
-        if (market == null || market != com.eurobuddha.atomix.TradingContext.active() || !market.tokenId.equalsIgnoreCase(minima.activeToken())) { cb.err(OtcController.MARKET_ERROR); return; }
-        if (!otc && (maker == null || maker.market != market)) { cb.err(SwapOrderBook.MARKET_ERROR); return; }
+    void startErc20ToMinima(Order maker, String tokenSymbol, String sellTokenAmount, String buyMinima, boolean otc, com.eurobuddha.atomix.TradingContext market, StartCb result) {
+        if (com.eurobuddha.atomix.Handover.active()) { result.err(HANDOVER_ERROR); return; }
+        if (!ready()) { result.err("Not ready"); return; }
+        if (market == null || market != com.eurobuddha.atomix.TradingContext.active() || !market.tokenId.equalsIgnoreCase(minima.activeToken())) { result.err(OtcController.MARKET_ERROR); return; }
+        if (!otc && (maker == null || maker.market != market)) { result.err(SwapOrderBook.MARKET_ERROR); return; }
         final EthNet.Token token = net.token(tokenSymbol);
-        if (token == null) { cb.err("Unknown token " + tokenSymbol); return; }
+        if (token == null) { result.err("Unknown token " + tokenSymbol); return; }
+        // Mark the start busy until its callback (initiatorStarting) — the handover must not answer OK in between.
+        final String busy = "buy:" + java.util.UUID.randomUUID();
+        inflight.add(busy);
+        final StartCb cb = new StartCb() {
+            public boolean onPrepared(String hash) { return result.onPrepared(hash); }
+            public void ok(String hash) { inflight.remove(busy); result.ok(hash); }
+            public void err(String error) { inflight.remove(busy); result.err(error); }
+        };
         // M1: request the mxUSDT at the 6dp trade grain. The responder locks grain(amount) (6dp), so a >6dp
         // request would be locked SHORT and the initiator's strict want>got check (amountTokenOk) would refuse
         // to claim → the whole deal mutual-refunds. Quantizing the request here makes it exactly fillable.
@@ -768,7 +796,7 @@ public final class SwapEngine {
                         s.myTimelock = timelock; s.myLegIsMinima = false; s.status = SwapDb.ST_STARTED;
                         s.contractId = EthHtlc.contractId(hash);
                         try {
-                            db.prepareInitiator(s, secret, reqMinima, "minima");
+                            if (!prepareUnlessHandedOver(s, secret, reqMinima, "minima")) { ui.post(() -> cb.err(HANDOVER_ERROR)); return; }
                             if (!cb.onPrepared(hash)) {
                                 ui.post(() -> cb.err("The swap lock was not submitted because recovery data could not be saved.")); return;
                             }
