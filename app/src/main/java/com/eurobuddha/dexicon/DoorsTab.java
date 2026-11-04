@@ -758,12 +758,20 @@ public final class DoorsTab extends LinearLayout {
     // ------------------------------------------------------------------ door swaps (IN PROGRESS here; the same lines in ACTIVITY / HISTORY)
 
     private void renderSwaps(LinearLayout into) {
-        List<SwapDb.Swap> swaps = host.swaps();
+        List<SwapDb.Swap> swaps = host.swaps();   // one read per render
+        java.util.Set<String> hidden = host.dismissed();
         List<Ledger.Item> live = new java.util.ArrayList<>();
-        for (SwapDb.Swap s : host.liveListSwaps()) { Ledger.Item it = hooks.item(s); it.hideable = true; if (it.live) live.add(it); }
+        for (SwapDb.Swap s : swaps) {
+            if (hidden.contains(s.hash)) continue;
+            // only a swap that can still be live gets a card built (each build reads its events): open ones, and a completed
+            // one whose forward is still open — never every finished fill of a busy maker on every repaint (code review A6)
+            boolean candidate = !SwapVisibility.isTerminal(s) || (SwapDb.ST_COMPLETE.equals(s.status) && host.forward(s.hash) != null);
+            if (!candidate) continue;
+            Ledger.Item it = hooks.item(s); it.hideable = true; if (it.live) live.add(it);
+        }
         LedgerView.sync(act, into, live, "door", hooks);
         progressLabel.setVisibility(live.isEmpty() ? GONE : VISIBLE);
-        finished.setText(swaps.isEmpty() ? "No AtomiX swaps yet. ENTRY brings ERC20 USDT in as " + coin() + "; EXIT takes it out as USDT. MINIMA and MxUSD holders need no AtomiX swap."
+        finished.setText(swaps.isEmpty() ? "No AtomiX swaps yet. Buy " + coin() + " brings ERC20 USDT in; Sell " + coin() + " takes it back out as USDT."
                 : "Finished swaps are in History ›");
         finished.setTextColor(swaps.isEmpty() ? Design.DIM2() : Design.DIM());
     }

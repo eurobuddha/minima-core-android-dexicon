@@ -31,6 +31,7 @@ public final class ActivityTab extends LinearLayout {
     private final TextView mineTab, marketTab;
     private final LinearLayout marketBox;
     private boolean market;
+    private String marketSig = "";
 
     public ActivityTab(MainActivity act) {
         super(act);
@@ -91,6 +92,10 @@ public final class ActivityTab extends LinearLayout {
         DoorHost h = DoorHost.get(act);
         String ccy = com.eurobuddha.dexicon.doors.DoorPlan.coin(h.market());
         List<SwapDb.MarketTrade> chartData = h.executedTrades(200), recent = h.recentTrades(50);
+        StringBuilder sig = new StringBuilder(ccy).append(chartData.size()).append('|').append(recent.size());
+        for (SwapDb.MarketTrade t : recent) sig.append(t.coinid).append(t.status);
+        if (sig.toString().equals(marketSig) && marketBox.getChildCount() > 0) return;   // unchanged: no redraw, no flicker
+        marketSig = sig.toString();
         marketBox.removeAllViews();
         com.eurobuddha.atomix.MarketChartView chart = new com.eurobuddha.atomix.MarketChartView(act);
         chart.setBackground(Design.card(act, 14));

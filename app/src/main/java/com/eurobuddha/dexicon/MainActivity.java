@@ -992,8 +992,10 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         com.eurobuddha.dexicon.doors.DoorHost h = com.eurobuddha.dexicon.doors.DoorHost.get(this);
         java.util.List<com.eurobuddha.atomix.swap.SwapDb.Swap> all = h.swaps();
         if (all.isEmpty()) { toast("No swaps to export"); return; }
-        pendingCsv = AtomixCsv.csv(all, h::events);
-        saveCsv.launch(AtomixCsv.FILE);
+        net.execute(() -> {   // one events read per swap: built off the main thread, as AtomiX's doExportCsv is
+            String csv = AtomixCsv.csv(all, h::events);
+            ui.post(() -> { if (closed) return; pendingCsv = csv; saveCsv.launch(AtomixCsv.FILE); });
+        });
     }
 
     private void confirm(String title, String body, Runnable yes) {
