@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.80 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.81 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONArray;
@@ -48,6 +48,31 @@ public class PoolManager {
 
     // ===================================================================== CREATE
 
+    /** {@code done}, ending the hand-over RUNNING mark ({@link Handover#begin}/{@link Handover#mark}) exactly once. */
+    static CreateResult ending(CreateResult done) {
+        final java.util.concurrent.atomic.AtomicBoolean ended = new java.util.concurrent.atomic.AtomicBoolean();
+        return new CreateResult() {
+            @Override public void onCreated(Pool pool, String txpowid) {
+                try { done.onCreated(pool, txpowid); } finally { if (!ended.getAndSet(true)) Handover.end(); }
+            }
+            @Override public void onFailed(String message) {
+                try { done.onFailed(message); } finally { if (!ended.getAndSet(true)) Handover.end(); }
+            }
+        };
+    }
+
+    static Result ending(Result done) {
+        final java.util.concurrent.atomic.AtomicBoolean ended = new java.util.concurrent.atomic.AtomicBoolean();
+        return new Result() {
+            @Override public void onPosted(String txpowid) {
+                try { done.onPosted(txpowid); } finally { if (!ended.getAndSet(true)) Handover.end(); }
+            }
+            @Override public void onFailed(String message) {
+                try { done.onFailed(message); } finally { if (!ended.getAndSet(true)) Handover.end(); }
+            }
+        };
+    }
+
     /** (Re-)register an own pool's covenant so the node tracks its coins. Idempotent. */
     static void retrack(NodeApi node, Pool p, NodeApi.Cb cb) {
         node.cmd("newscript trackall:true script:" + Util.scriptArg(p.covenantScript), cb);
@@ -58,15 +83,7 @@ public class PoolManager {
         if (!Handover.begin(node.context())) { done.onFailed(Handover.BLOCKED); return; }
         // Marked running until the result is delivered, so a hand-over refuses while this create can still
         // record a recipe or post.
-        final java.util.concurrent.atomic.AtomicBoolean ended = new java.util.concurrent.atomic.AtomicBoolean();
-        final CreateResult cb = new CreateResult() {
-            @Override public void onCreated(Pool pool, String txpowid) {
-                try { done.onCreated(pool, txpowid); } finally { if (!ended.getAndSet(true)) Handover.end(); }
-            }
-            @Override public void onFailed(String message) {
-                try { done.onFailed(message); } finally { if (!ended.getAndSet(true)) Handover.end(); }
-            }
-        };
+        final CreateResult cb = ending(done);
         if (!BackupState.combinedUpToDate(node.context())) {
             cb.onFailed("BACKUP_REQUIRED: save and verify a password-encrypted pool + node backup before creating another pool. Recovery and withdrawal remain available."); return;
         }
@@ -182,7 +199,10 @@ public class PoolManager {
     // ===================================================================== ADD LIQUIDITY (grow-in-place)
 
     /** Owner-signed deposit: reserves grow at the SAME address. Capped at 2×KMIN (else migrate). */
-    public void deposit(Pool p, BigDecimal addM, BigDecimal addT, Result cb) {
+    public void deposit(Pool p, BigDecimal addM, BigDecimal addT, Result done) {
+        // The owner's own funds: never refused for the hand-over, but marked running so a hand-over waits for it.
+        Handover.mark();
+        final Result cb = ending(done);
         if (!p.funded()) { cb.onFailed("pool has no live reserves"); return; }
         if (addM == null || addT == null || addM.signum() < 0 || addT.signum() < 0
                 || (addM.signum() == 0 && addT.signum() == 0)) { cb.onFailed("enter an amount to add"); return; }
@@ -230,7 +250,10 @@ public class PoolManager {
 
     /** Owner-signed migrate: old reserves sweep to $OADR, a fresh pool of (newX,newY) is created at a new
      *  address with KMIN reset to the new product, and a new announce beacon is posted. */
-    public void migrate(Pool p, BigDecimal newX, BigDecimal newY, CreateResult cb) {
+    public void migrate(Pool p, BigDecimal newX, BigDecimal newY, CreateResult done) {
+        // A migrate creates a NEW pool (a new recipe): refused once handed over, marked running until it answers.
+        if (!Handover.begin(node.context())) { done.onFailed(Handover.BLOCKED); return; }
+        final CreateResult cb = ending(done);
         if (!BackupState.combinedUpToDate(node.context())) {
             cb.onFailed("BACKUP_REQUIRED: save and verify a password-encrypted pool + node backup before creating another pool. Recovery and withdrawal remain available."); return;
         }
@@ -277,6 +300,11 @@ public class PoolManager {
             @Override public void ok(List<Coin> mfunds, BigDecimal msum) {
                 selectCoins(tok, newY, p.address, p.oadr, new SelCb() {
                     @Override public void ok(List<Coin> tfunds, BigDecimal tsum) {
+                        // Last moment to stop, as for a create: nothing is posted and no new recipe recorded yet.
+                        if (Handover.active(node.context())) {
+                            CoinLock.release(mfunds); CoinLock.release(tfunds);
+                            cb.onFailed(Handover.BLOCKED + " Nothing was posted."); return;
+                        }
                         if (!OwnPoolStore.recordDurably(node.context(), np)) {
                             CoinLock.release(mfunds); CoinLock.release(tfunds);
                             cb.onFailed("Could not save the pool recovery recipe. Nothing was posted."); return;
@@ -322,7 +350,10 @@ public class PoolManager {
     // ===================================================================== CLOSE (owner sweep)
 
     /** Owner-signed close: sweep both reserves back to $OADR. */
-    public void close(Pool p, Result cb) {
+    public void close(Pool p, Result done) {
+        // The owner's own funds: never refused for the hand-over, but marked running so a hand-over waits for it.
+        Handover.mark();
+        final Result cb = ending(done);
         if (!p.funded()) { cb.onFailed("pool has no live reserves to withdraw"); return; }
         final String tokArg = " tokenid:" + p.tok;
         String txid = "ppclose_" + tag();

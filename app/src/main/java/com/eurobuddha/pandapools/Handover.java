@@ -35,6 +35,8 @@ final class Handover {
     }
 
     static void end() { RUNNING.decrementAndGet(); }
+    /** An owner action on the user's own funds (close, deposit): counted as running, never refused (PandaPools 0.9.81). */
+    static void mark() { RUNNING.incrementAndGet(); }
 
     static boolean busy() { return RUNNING.get() > 0; }
 

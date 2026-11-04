@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.80 app/src/test/java/com/eurobuddha/pandapools/ExistingWalletRecoveryTest.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.81 app/src/test/java/com/eurobuddha/pandapools/ExistingWalletRecoveryTest.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.junit.Test;

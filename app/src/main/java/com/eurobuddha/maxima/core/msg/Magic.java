@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.80 app/src/main/java/com/eurobuddha/maxima/core/msg/Magic.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.81 app/src/main/java/com/eurobuddha/maxima/core/msg/Magic.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.maxima.core.msg;
 
 import com.eurobuddha.maxima.core.codec.MiniData;

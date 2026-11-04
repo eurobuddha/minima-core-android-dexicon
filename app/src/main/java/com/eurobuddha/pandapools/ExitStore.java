@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.80 app/src/main/java/com/eurobuddha/pandapools/ExitStore.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.81 app/src/main/java/com/eurobuddha/pandapools/ExitStore.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.Context;
@@ -84,7 +84,7 @@ final class ExitStore {
             Record r = new Record();
             r.address = o.optString("addr", address);
             r.opk = o.optString("opk", "");
-            r.state = o.optString("state", State.FAILED.name());
+            r.state = o.optString("state", "");   // missing stays missing: stateOf() reads it as FAILED, the hand-over blocks
             r.reason = o.optString("reason", "");
             r.closeTxpowid = o.optString("close_txpowid", "");
             r.signatures = o.optInt("signatures", 0);
@@ -97,8 +97,10 @@ final class ExitStore {
         List<Record> out = new ArrayList<>();
         if (c == null) return out;
         for (String k : prefs(c).getAll().keySet()) {
-            Record r = get(c, k);
-            if (r != null) out.add(r);
+            Record r = null;
+            try { r = get(c, k); } catch (RuntimeException unreadable) { /* listed below, never dropped */ }
+            if (r == null) { r = new Record(); r.address = k; r.state = ""; }   // unreadable row: never "settled"
+            out.add(r);
         }
         return out;
     }

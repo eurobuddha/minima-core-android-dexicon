@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.89 app/src/main/java/com/eurobuddha/atomix/eth/EthRpc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/main/java/com/eurobuddha/atomix/eth/EthRpc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.eth;
 
 import org.json.JSONArray;
@@ -65,6 +65,33 @@ public final class EthRpc {
     }
 
     public String url() { return url; }
+
+    /** The built-in keyless endpoints, in order — independent providers, for a read that must not trust one node. */
+    public static java.util.List<String> fallbacks() { return java.util.Arrays.asList(FALLBACKS.clone()); }
+
+    /** One call on exactly {@code endpoint} — no fallback, no sticky switch. For evidence that names its source. */
+    public Object callOn(String endpoint, String method, JSONArray params) throws IOException {
+        return callOnce(endpoint, method, params);
+    }
+
+    /** eth_call on exactly {@code endpoint} (see {@link #callOn}). */
+    public String ethCallOn(String endpoint, String to, String data) throws IOException {
+        try {
+            Object r = callOn(endpoint, "eth_call", new JSONArray().put(new JSONObject().put("to", to).put("data", data)).put("latest"));
+            return r == null ? null : r.toString();
+        } catch (JSONException e) {
+            throw new IOException("ETH eth_call build error: " + e.getMessage());
+        }
+    }
+
+    /** {block number, timestamp (unix secs)} of the latest block as {@code endpoint} sees it. */
+    public long[] latestBlockOn(String endpoint) throws IOException {
+        Object r = callOn(endpoint, "eth_getBlockByNumber", new JSONArray().put("latest").put(false));
+        if (!(r instanceof JSONObject)) throw new IOException(host(endpoint) + ": no block header");
+        String n = ((JSONObject) r).optString("number", ""), ts = ((JSONObject) r).optString("timestamp", "");
+        if (n.isEmpty() || ts.isEmpty()) throw new IOException(host(endpoint) + ": incomplete block header");
+        return new long[]{hexToBig(n).longValue(), hexToBig(ts).longValue()};
+    }
 
     /**
      * Raw JSON-RPC call with endpoint fallback. Tries the active endpoint, then each fallback, on any

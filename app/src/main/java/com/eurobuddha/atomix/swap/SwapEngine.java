@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.89 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -383,10 +383,40 @@ public final class SwapEngine {
      *  its secret may not be written yet. The Dexicon handover waits on this as on any in-flight swap. */
     public static boolean initiatorStarting() {
         synchronized (inflight) {
-            for (String k : inflight) if ("sell".equals(k) || k.startsWith("buy:")) return true;
+            for (java.util.Iterator<String> it = inflight.iterator(); it.hasNext(); ) {
+                String k = it.next();
+                if (!"sell".equals(k) && !k.startsWith("buy:")) continue;
+                Long since = startMarkedAt.get(k);
+                if (since != null && System.currentTimeMillis() - since < START_MARKER_TTL_MS) return true;
+                // A lost NodeApi callback never clears its marker: age it out, as tryEthAttempt does. Safe — a start
+                // that is somehow still running is refused at prepareUnlessHandedOver once AtomiX is handed over.
+                it.remove();
+                startMarkedAt.remove(k);
+            }
         }
         return false;
     }
+
+    static final long START_MARKER_TTL_MS = 10 * 60 * 1000;
+    private static final Map<String, Long> startMarkedAt = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Set an initiator busy marker with its start time; returns that time, or 0 if the marker is already held. */
+    private static long markStart(String k) {
+        synchronized (inflight) {
+            if (!inflight.add(k)) return 0;
+            long t = System.currentTimeMillis();
+            startMarkedAt.put(k, t);
+            return t;
+        }
+    }
+
+    /** Clear the marker only if it is still THIS start's — an aged-out marker may already belong to a newer start. */
+    private static void clearStart(String k, long t) {
+        synchronized (inflight) { if (startMarkedAt.remove(k, t)) inflight.remove(k); }
+    }
+
+    /** TEST SEAM: age every initiator start marker by {@code ms}. */
+    static void ageStartMarkersForTest(long ms) { startMarkedAt.replaceAll((k, v) -> v - ms); }
 
     /** Write the initiator's row + secret unless AtomiX was handed over meanwhile — the entry check ran two node
      *  round-trips (or an on-chain approve) earlier. Under Handover.LOCK, so it cannot interleave with the
@@ -666,15 +696,17 @@ public final class SwapEngine {
         // split is in flight so the user just retries a moment later instead of racing it.
         final EthNet.Token token = net.token(tokenSymbol);
         if (token == null) { result.err("Unknown token " + tokenSymbol); return; }
+        final long sellMark;
         synchronized (CP_LOCKING) {
-            if (!cpInFlight.isEmpty() || isSplitting() || isConsolidating() || !inflight.add("sell")) {
+            initiatorStarting();   // ages out a "sell" marker whose callback was lost, so it cannot wedge selling
+            if (!cpInFlight.isEmpty() || isSplitting() || isConsolidating() || (sellMark = markStart("sell")) == 0) {
                 result.err("Wallet busy — wait for the current lock or consolidation"); return;
             }
         }
         final StartCb cb = new StartCb() {
             public boolean onPrepared(String hash) { return result.onPrepared(hash); }
-            public void ok(String hash) { synchronized (CP_LOCKING) { inflight.remove("sell"); } result.ok(hash); }
-            public void err(String error) { synchronized (CP_LOCKING) { inflight.remove("sell"); } result.err(error); }
+            public void ok(String hash) { synchronized (CP_LOCKING) { clearStart("sell", sellMark); } result.ok(hash); }
+            public void err(String error) { synchronized (CP_LOCKING) { clearStart("sell", sellMark); } result.err(error); }
         };
         final String reqToken = "ETH:" + token.address;
         minima.generateSecret(new MinimaHtlc.SecretCb() {
@@ -759,11 +791,11 @@ public final class SwapEngine {
         if (token == null) { result.err("Unknown token " + tokenSymbol); return; }
         // Mark the start busy until its callback (initiatorStarting) — the handover must not answer OK in between.
         final String busy = "buy:" + java.util.UUID.randomUUID();
-        inflight.add(busy);
+        final long busyMark = markStart(busy);
         final StartCb cb = new StartCb() {
             public boolean onPrepared(String hash) { return result.onPrepared(hash); }
-            public void ok(String hash) { inflight.remove(busy); result.ok(hash); }
-            public void err(String error) { inflight.remove(busy); result.err(error); }
+            public void ok(String hash) { clearStart(busy, busyMark); result.ok(hash); }
+            public void err(String error) { clearStart(busy, busyMark); result.err(error); }
         };
         // M1: request the mxUSDT at the 6dp trade grain. The responder locks grain(amount) (6dp), so a >6dp
         // request would be locked SHORT and the initiator's strict want>got check (amountTokenOk) would refuse
@@ -1554,7 +1586,7 @@ public final class SwapEngine {
         final String hash = s.hash;
         final String contractId = EthHtlc.contractId(hash);
         EthHtlc.Contract gc = eth.getContract(contractId);
-        if (gc == null) return;   // the ETH leg isn't locked yet
+        if (gc == null) { finalizeIfNeverLocked(eth, s); return; }   // the ETH leg isn't locked (yet?)
 
         boolean iAmReceiver = gc.receiver != null && gc.receiver.equalsIgnoreCase(myEth);
         boolean iAmSender = gc.owner != null && gc.owner.equalsIgnoreCase(myEth);
@@ -1666,6 +1698,55 @@ public final class SwapEngine {
                 || SwapDb.ST_COMPLETE.equals(cur.status)) return;
         db.setSwapStatus(hash, SwapDb.ST_ERROR);
         ui.post(notifier::onSwapsChanged);
+    }
+
+    /** Past my timelock by this much, a lock that never landed can be told apart from one that is merely slow:
+     *  my own refund window has been open an hour, so a contract that ever existed would still read back. */
+    static final long NEVER_LOCKED_MARGIN_SECS = 60 * 60;
+    private static final java.util.concurrent.atomic.AtomicInteger neverLockedPair = new java.util.concurrent.atomic.AtomicInteger();
+
+    /** An ETH-first initiator row whose lock never landed (newContract threw after the row was written, or the tx
+     *  was dropped) stays STARTED forever and blocks the Dexicon handover. Once chain time is past my timelock +
+     *  {@link #NEVER_LOCKED_MARGIN_SECS}, read getContract(contractId) — deterministic, sha256(hashlock) — from TWO
+     *  independent built-in endpoints; only if BOTH answer "no such contract" is the row finalized (ERROR + an
+     *  {@link SwapDb#EV_NEVER_LOCKED} event naming both endpoints and the block/time each read at). Any read failure
+     *  or disagreement leaves it STARTED; the next pair is tried after the retry window. (package-private for tests) */
+    void finalizeIfNeverLocked(EthHtlc eth, SwapDb.Swap s) {
+        if (!"INITIATOR".equals(s.role) || !"ERC20_TO_MINIMA".equals(s.direction) || s.myLegIsMinima
+                || !SwapDb.ST_STARTED.equals(s.status) || s.myTimelock <= 0) return;
+        long notBefore = s.myTimelock + NEVER_LOCKED_MARGIN_SECS;
+        if (nowUnix() <= notBefore || !tryEthAttempt("neverLocked:" + s.hash)) return;
+        String evidence = db.hasEvent(s.hash, SwapDb.EV_NEVER_LOCKED) ? "recorded"
+                : neverLockedEvidence(rpc, eth, EthHtlc.contractId(s.hash), notBefore, neverLockedPair.getAndIncrement());
+        if (evidence == null) return;
+        SwapDb.Swap cur = db.getSwap(s.hash);
+        if (cur == null || !SwapDb.ST_STARTED.equals(cur.status)) return;
+        // Evidence BEFORE status: an ERROR row without it would block the handover with nothing left to re-check it.
+        if (!"recorded".equals(evidence)) db.logEvent(s.hash, SwapDb.EV_NEVER_LOCKED, "ETH", "", evidence);
+        db.setSwapStatus(s.hash, SwapDb.ST_ERROR);
+        SwapLog.w("swap " + s.hash + ": ETH lock never landed — " + evidence);
+        ui.post(notifier::onSwapsChanged);
+    }
+
+    /** Evidence that contract {@code contractId} does not exist, from two consecutive entries of
+     *  {@link EthRpc#fallbacks()} starting at {@code pair}: each must report chain time past {@code notBefore} and
+     *  a zero-sender getContract. Null on any failure, a not-yet-late chain, or a contract on either. */
+    static String neverLockedEvidence(EthRpc rpc, EthHtlc eth, String contractId, long notBefore, int pair) {
+        java.util.List<String> eps = EthRpc.fallbacks();
+        StringBuilder ev = new StringBuilder("getContract " + contractId + " returned no contract on");
+        for (int i = 0; i < 2; i++) {
+            String ep = eps.get(Math.floorMod(pair + i, eps.size()));
+            try {
+                long[] head = rpc.latestBlockOn(ep);
+                if (head[1] <= notBefore || eth.getContractOn(ep, contractId) != null) return null;
+                ev.append(i == 0 ? " " : " and ").append(ep).append(" at block ").append(head[0])
+                        .append(" (time ").append(head[1]).append(')');
+            } catch (Exception e) {
+                SwapLog.w("never-locked check " + contractId + " on " + ep + ": " + e.getMessage());
+                return null;
+            }
+        }
+        return ev.append(", both past timelock + ").append(NEVER_LOCKED_MARGIN_SECS).append("s (").append(notBefore).append(')').toString();
     }
 
     private boolean ethRetryDue(String key) { return nowUnix() - ethAttempt.getOrDefault(key, 0L) >= ETH_RETRY_SECS; }
