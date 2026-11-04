@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.92 app/src/main/java/com/eurobuddha/atomix/Handover.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.94 app/src/main/java/com/eurobuddha/atomix/Handover.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix;
 
 import android.content.SharedPreferences;
@@ -159,8 +159,10 @@ public final class Handover {
      *      least {@link SwapEngine#refundEvidenceMargin} past myTimelock ({@link #REFUND_MARGIN_BLOCKS}; a RESPONDER
      *      waits {@link SwapEngine#TIMELOCK_BLOCKS}, past the taker's Ethereum leg) — read from the event, not the
      *      device clock;</li>
-     *  <li>a RESPONDER row owes no Ethereum collect: if I know the secret, my withdraw is recorded
-     *      ({@link SwapDb#haveCollect});</li>
+     *  <li>no Ethereum collect is owed: a CLAIMING row (any role) has its collect recorded
+     *      ({@link SwapDb#haveCollect}); a RESPONDER row — whose secret may never have been harvested — has its
+     *      collect recorded or an Ethereum read recorded the taker's contract refunded
+     *      ({@link SwapDb#EV_ETH_LEG_REFUNDED});</li>
      *  <li>positive chain evidence about the lock, confirmed on two reads at least
      *      {@link SwapEngine#LOCK_GONE_CONFIRM_BLOCKS} blocks apart: the recorded lock coin read spent
      *      ({@link SwapDb#EV_LOCK_SPENT}), or — only when no coin is recorded — a depth-free read found no lock of
@@ -174,7 +176,8 @@ public final class Handover {
         if (!(SwapDb.ST_STARTED.equals(s.status) || SwapDb.ST_LOCKED.equals(s.status)
                 || SwapDb.ST_CLAIMING.equals(s.status) || SwapDb.ST_ERROR.equals(s.status))) return false;
         if (refundTriedAt(db, s.hash) < s.myTimelock + SwapEngine.refundEvidenceMargin(s)) return false;
-        if ("RESPONDER".equals(s.role) && db.getSecret(s.hash) != null && !db.haveCollect(s.hash)) return false;
+        if (SwapDb.ST_CLAIMING.equals(s.status) && !db.haveCollect(s.hash)) return false;
+        if ("RESPONDER".equals(s.role) && !db.haveCollect(s.hash) && !db.hasEvent(s.hash, SwapDb.EV_ETH_LEG_REFUNDED)) return false;
         return db.hasEvent(s.hash, db.rememberedLockCoin(s.hash) != null ? SwapDb.EV_LOCK_SPENT : SwapDb.EV_LOCK_ABSENT);
     }
 
@@ -234,7 +237,12 @@ public final class Handover {
                 .put("howToRecover", "Find the HTLC coin at htlcAddress whose state[5] is hash (lockCoinId if known)."
                         + " Unspent and past myTimelock: refund it with your node's owner key (lockOwnerKey). Spent: it was claimed"
                         + " (or refunded) and nothing is left. If you are owed the Ethereum leg, the contract with"
-                        + " contractId can be withdrawn with secret; once withdrawn, the preimage is readable from it.")
+                        + " contractId can be withdrawn with secret; once withdrawn, the preimage is readable from it."
+                        + ("RESPONDER".equals(s.role) ? " As the responder you are owed the Ethereum contract contractId:"
+                        + " if secret is null, the counterparty's claim of your Minima lock revealed it in a coin sent to"
+                        + " the notify address " + com.eurobuddha.atomix.swap.MinimaHtlc.NOTIFY + " - that coin's state[100] is"
+                        + " the secret and its state[101] is hash (check that SHA-256 of state[100] equals hash). Withdraw"
+                        + " contractId with it before that contract's timelock." : ""))
                 .toString(2);
     }
 

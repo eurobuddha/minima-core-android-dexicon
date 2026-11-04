@@ -307,7 +307,14 @@ public final class DexiconPools {
                             + ", so Dexicon never signs with its owner key. Collect them in PandaPools (or hand the pool over), then try again.");
                     return;
                 }
-            OwnerKeyRecovery.checkConsolidation(new NodeApi(dex)::cmd, pools, why -> {
+            // PandaPools' check passes a failed `keys` read's message straight through; a null/empty one would read as
+            // "safe" — so every error carries text here (fail closed).
+            final NodeApi keysNode = new NodeApi(dex);
+            FundingCoins.Command keysRead = (command, kcb) -> keysNode.cmd(command, new NodeApi.Cb() {
+                public void onResult(org.json.JSONObject reply) { kcb.onResult(reply); }
+                public void onError(String e) { kcb.onError(e == null || e.trim().isEmpty() ? "Could not verify current wallet keys (no answer)." : e); }
+            });
+            OwnerKeyRecovery.checkConsolidation(keysRead, pools, why -> {
                 if (why == null) { cb.accept(null); return; }
                 cb.accept(REFUSED + OWNER_COINS + String.join("\n", found) + "\nand that pool's owner key is not safe to sign with right now. "
                         + "They are queued for collection.\n\n" + why);

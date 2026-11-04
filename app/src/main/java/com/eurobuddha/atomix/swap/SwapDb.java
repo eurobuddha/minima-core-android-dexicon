@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.92 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.94 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.content.ContentValues;
@@ -52,6 +52,7 @@ public final class SwapDb {
     public static final String EV_LOCK_ABSENT = "MINIMA_LOCK_ABSENT";   // no coin recorded; a depth-free relevant:true read found no lock of mine, twice ≥6 blocks apart (note = evidence)
     public static final String EV_LOCK_GONE_SEEN = "MINIMA_LOCK_GONE_SEEN"; // first "spent"/"absent" observation, pending confirmation (note = "<event> minima block N")
     public static final String EV_LOCK_PRESENT = "MINIMA_LOCK_PRESENT"; // a later read found the lock unspent — voids any pending GONE_SEEN (note = "minima block N")
+    public static final String EV_ETH_LEG_REFUNDED = "ETH_LEG_REFUNDED"; // the Ethereum leg I was to collect read refunded by its sender (note = contractId)
     public static final String EV_RECOVERY_SAVED = "RECOVERY_SAVED";   // the user saved + re-read this swap's recovery record (note = size + SHA-256)
 
     // ---- UX swap status ----
@@ -111,11 +112,12 @@ public final class SwapDb {
         public long date;
     }
 
-    /** All logged events for a swap, newest first — surfaces actions + reject/error notes (in {@code note}). */
+    /** All logged events for a swap, newest first by insertion (AUTOINCREMENT id, not the wall clock, which can be
+     *  set backwards) — surfaces actions + reject/error notes (in {@code note}). */
     public synchronized java.util.List<Event> getEvents(String hash) {
         java.util.List<Event> out = new ArrayList<>();
         try (Cursor c = helper.getReadableDatabase().rawQuery(
-                "SELECT event, token, amount, txnhash, eventdate FROM events WHERE hash=? ORDER BY eventdate DESC",
+                "SELECT event, token, amount, txnhash, eventdate FROM events WHERE hash=? ORDER BY id DESC",
                 new String[]{norm(hash)})) {
             while (c.moveToNext()) {
                 Event e = new Event();

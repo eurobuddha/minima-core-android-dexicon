@@ -33,7 +33,7 @@ public class OwnerCoinGuardTest {
     private static final String POOL = "0x" + "a9".repeat(32), OPK = "0x" + "b9".repeat(32), OWNER = "0x" + "c1".repeat(32);
     private Application app;
     private final List<String> sends = new ArrayList<>();
-    private boolean keyHeld;
+    private boolean keyHeld, keysFailSilently;
     private com.eurobuddha.comms.NodeApi shim;
 
     @Before public void up() throws Exception {
@@ -52,6 +52,7 @@ public class OwnerCoinGuardTest {
             if (c.startsWith("coins")) cb.onResult(new JSONObject().put("status", true).put("response", c.contains("address:" + OWNER.toLowerCase())
                     ? new JSONArray().put(new JSONObject().put("coinid", "0x" + "01".repeat(32)).put("address", OWNER).put("tokenid", MINIMA).put("amount", "0.000001"))
                     : new JSONArray()));
+            else if (c.equals("keys") && keysFailSilently) cb.onError(null);
             else if (c.equals("keys")) cb.onResult(new JSONObject().put("status", true).put("response", new JSONObject().put("keys", keyHeld
                     ? new JSONArray().put(new JSONObject().put("publickey", OPK).put("uses", 5)) : new JSONArray())));
             else if (c.startsWith("send")) { sends.add(c); cb.onResult(new JSONObject().put("status", true)); }
@@ -92,6 +93,15 @@ public class OwnerCoinGuardTest {
         assertTrue(why, why.contains("not safe to sign"));
         assertTrue(sends.isEmpty());
         assertNotNull(PendingCollect.get(app, OWNER.toLowerCase()));
+    }
+
+    /** PandaPools' key check passes a failed `keys` read's message through; a null one must not read as "safe". */
+    @Test public void aKeysReadFailingWithNoMessageRefuses() {
+        keyHeld = true; keysFailSilently = true;
+        String why = tombstone();
+        assertNotNull("a silent keys failure never lets an owner-address send through", why);
+        assertTrue(why, why.startsWith(DexiconPools.REFUSED));
+        assertTrue(sends.isEmpty());
     }
 
     @Test public void aPoolKeptElsewhereRefusesEvenWithASafeKey() {

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.92 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.94 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -676,7 +676,8 @@ public final class SwapEngine {
             try {
                 EthHtlc eth = new EthHtlc(rpc, wallet.creds(), net);
                 for (SwapDb.Swap s : db.allSwaps()) {
-                    if (SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_COMPLETE.equals(s.status) || SwapDb.ST_ERROR.equals(s.status)) continue;
+                    if ((SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_COMPLETE.equals(s.status) || SwapDb.ST_ERROR.equals(s.status))
+                            && !ethLegUnproven(s)) continue;
                     try { checkEthContractFor(eth, s, myEth()); } catch (Exception e) { SwapLog.w("ethOnly " + s.hash + ": " + e.getMessage()); }
                 }
             } catch (Exception e) { SwapLog.w("ethOnly: " + e.getMessage()); }
@@ -1189,7 +1190,7 @@ public final class SwapEngine {
                 }
             }
             if (!found) refundFromRecord(hash);
-            noteRefundTried(row, block);
+            noteRefundTried(row, block, found);
             // Deliberately NOT on the error path below: an empty scan is a result, a FAILED scan is not.
             // Refunding on a node error would sign against a coin we could not look up, and MinimaHtlc.refund
             // signs BEFORE txncheck - so every failed attempt burns a one-time Winternitz leaf for no possible
@@ -1213,20 +1214,25 @@ public final class SwapEngine {
 
     /** Durable evidence for {@link com.eurobuddha.atomix.Handover#stuck}: a refund pass (scan + refund attempt) of my
      *  Minima lock completed with the chain at {@code block}, at least {@link #refundEvidenceMargin} past my timelock
-     *  ({@link SwapDb#EV_REFUND_TRIED}); then {@link #observeLock}. */
-    private void noteRefundTried(SwapDb.Swap s, int block) {
+     *  ({@link SwapDb#EV_REFUND_TRIED}); then {@link #observeLock}. {@code seenUnspent}: this pass's deep scan (no
+     *  relevant:true, so it sees a coin the node does not track) found an unspent lock with my key and this hash —
+     *  that is the lock PRESENT, whatever a relevant:true read would say, so no "gone" reading is taken. */
+    private void noteRefundTried(SwapDb.Swap s, int block, boolean seenUnspent) {
         if (s.myTimelock <= 0 || block < s.myTimelock + REFUND_EVIDENCE_MARGIN_BLOCKS) return;
         long need = s.myTimelock + refundEvidenceMargin(s);
         if (block >= need && com.eurobuddha.atomix.Handover.refundTriedAt(db, s.hash) < need)
             db.logEvent(s.hash, SwapDb.EV_REFUND_TRIED, "minima", "", "minima block " + block);
-        observeLock(s, block);
+        if (seenUnspent) noteLockPresent(s.hash, block);
+        else observeLock(s, block);
     }
 
     /** Is my lock gone? Only from the node's CURRENT key set ({@code myPubkeys}, non-empty) and never while
      *  IdentityWatch is halted — {@code relevant:true} sees only coins of keys the node holds now, so an orphaned
      *  identity would read every lock as gone.
-     *  <ul><li>Recorded coin, owner key held: {@code coins relevant:true coinid:} — empty means spent
-     *      ({@link SwapDb#EV_LOCK_SPENT}).</li>
+     *  <ul><li>Recorded coin, owner key held: {@code coins relevant:true coinid:}; empty, AND a depth-free
+     *      {@link MinimaHtlc#findMyLockByHash} finding no coin with my owner key and this hash, means spent
+     *      ({@link SwapDb#EV_LOCK_SPENT}) — "no lock of mine for this hash", not "this coin id is gone" (the record
+     *      could be a decoy, or not my only lock).</li>
      *  <li>No recorded coin, publish key held: one depth-free {@link MinimaHtlc#findMyLockByHash}. A lock of mine
      *      found is recorded and refunded ({@link #checkExpiredMinima}); none means absent ({@link SwapDb#EV_LOCK_ABSENT}).
      *      A missing record alone is never evidence.</li></ul>
@@ -1240,63 +1246,105 @@ public final class SwapEngine {
             final String owner = MinimaHtlc.stateAt(coin, 0), id = coin.optString("coinid", "");
             if (!myPubkeys.contains(MinimaHtlc.normKey(owner))) return;
             minima.lockCoinUnspent(id, unspent -> {
-                if (unspent) noteLockPresent(hash, block);
-                else noteLockGone(hash, SwapDb.EV_LOCK_SPENT, "coins relevant:true coinid:" + id
-                        + " returned no unspent coin (owner " + owner + ")");
+                if (unspent) { noteLockPresent(hash, block); return; }
+                minima.findMyLockByHash(hash, coins -> {
+                    if (presentLock(coins, hash, block)) return;
+                    noteLockGone(hash, SwapDb.EV_LOCK_SPENT, owner, "coins relevant:true coinid:" + id
+                            + " returned no unspent coin (owner " + owner + ") and coins relevant:true address:"
+                            + MinimaHtlc.HTLC_ADDRESS + " state:" + MinimaHtlc.normKey(hash) + " returned no lock of mine");
+                }, e -> SwapLog.w("lock read " + hash + " ERR: " + e + " (unknown, not spent)"));
             }, e -> SwapLog.w("lock coin read " + id + " ERR: " + e + " (unknown, not spent)"));
         } else {
             if (myMinimaPk == null || !myPubkeys.contains(MinimaHtlc.normKey(myMinimaPk))) return;
             minima.findMyLockByHash(hash, coins -> {
-                for (int i = 0; i < coins.length(); i++) {
-                    JSONObject c = coins.optJSONObject(i);
-                    if (c != null && isMyOwnedKey(MinimaHtlc.stateAt(c, 0)) && sameHash(MinimaHtlc.stateAt(c, 5), hash)) {
-                        noteLockPresent(hash, block);
-                        checkExpiredMinima(c, block);   // records the coin, refunds it if past its timelock
-                        return;
-                    }
-                }
-                noteLockGone(hash, SwapDb.EV_LOCK_ABSENT, "coins relevant:true address:" + MinimaHtlc.HTLC_ADDRESS
+                if (presentLock(coins, hash, block)) return;
+                noteLockGone(hash, SwapDb.EV_LOCK_ABSENT, myMinimaPk, "coins relevant:true address:" + MinimaHtlc.HTLC_ADDRESS
                         + " state:" + MinimaHtlc.normKey(hash) + " returned no lock of mine (keys " + myMinimaPk + ")");
             }, e -> SwapLog.w("lock read " + hash + " ERR: " + e + " (unknown, not absent)"));
         }
     }
 
+    /** Any coin in {@code coins} with my owner key and this hash is a lock of mine PRESENT (a decoy included — that
+     *  only keeps the row blocking): void pending "gone" readings and hand it to {@link #checkExpiredMinima}, which
+     *  records it (if it is the expected lock) and refunds it once past its timelock. */
+    private boolean presentLock(JSONArray coins, String hash, int block) {
+        for (int i = 0; i < coins.length(); i++) {
+            JSONObject c = coins.optJSONObject(i);
+            if (c != null && isMyOwnedKey(MinimaHtlc.stateAt(c, 0)) && sameHash(MinimaHtlc.stateAt(c, 5), hash)) {
+                noteLockPresent(hash, block);
+                checkExpiredMinima(c, block);
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** A "gone" reading counts only with a live tip read right after it (a node without a tip answers {@code coins}
-     *  with []). The first such reading is stored as a pending {@link SwapDb#EV_LOCK_GONE_SEEN}; {@code event} is
-     *  written once a later reading, at least {@link #LOCK_GONE_CONFIRM_BLOCKS} blocks on, repeats it with no
-     *  {@link SwapDb#EV_LOCK_PRESENT} in between. */
-    private void noteLockGone(final String hash, final String event, final String evidence) {
+     *  with []). The first such reading is stored as a pending {@link SwapDb#EV_LOCK_GONE_SEEN} at that tip;
+     *  {@code event} is written once a later reading, at least {@link #LOCK_GONE_CONFIRM_BLOCKS} blocks on, repeats it
+     *  with no {@link SwapDb#EV_LOCK_PRESENT} at or above the first reading's block — and only after the node's key
+     *  set is re-read ({@code myPubkeys} is otherwise loaded once per process) and still holds {@code key}, the key
+     *  the reading was made under. */
+    private void noteLockGone(final String hash, final String event, final String key, final String evidence) {
         minima.currentBlock(new MinimaHtlc.BlockCb() {
             @Override public void ok(int tip) {
                 if (tip <= 0 || com.eurobuddha.atomix.IdentityWatch.halted() || db.hasEvent(hash, event)) return;
-                long first = pendingLockGone(db, hash, event);
-                if (first < 0) db.logEvent(hash, SwapDb.EV_LOCK_GONE_SEEN, "minima", "", event + " minima block " + tip);
-                else if (tip >= first + LOCK_GONE_CONFIRM_BLOCKS)
-                    db.logEvent(hash, event, "minima", "", evidence + "; read at minima blocks " + first + " and " + tip);
+                final long first = pendingLockGone(db, hash, event);
+                if (first < 0) { db.logEvent(hash, SwapDb.EV_LOCK_GONE_SEEN, "minima", "", event + " minima block " + tip); return; }
+                if (tip < first + LOCK_GONE_CONFIRM_BLOCKS) return;
+                minima.loadMyKeys(new MinimaHtlc.KeysCb() {
+                    @Override public void ok(java.util.Set<String> keys) {
+                        setMyPubkeys(keys);   // raises the identity alarm (halt) if the publish key is gone
+                        if (com.eurobuddha.atomix.IdentityWatch.halted() || !myPubkeys.contains(MinimaHtlc.normKey(key))
+                                || db.hasEvent(hash, event) || pendingLockGone(db, hash, event) != first) return;
+                        db.logEvent(hash, event, "minima", "", evidence + "; read at minima blocks " + first + " and " + tip
+                                + "; node keys re-read, key " + key + " held");
+                    }
+                    @Override public void err(String m) { SwapLog.w("lock read " + hash + ": keys unreadable (" + m + ") — reading not counted"); }
+                });
             }
             @Override public void err(String m) { SwapLog.w("lock read " + hash + ": no tip (" + m + ") — reading not counted"); }
         });
     }
 
-    /** The lock read unspent/present: void any pending "gone" reading. */
+    /** The lock read unspent/present: void every pending "gone" reading. The PRESENT note carries a block at or
+     *  above every GONE_SEEN so far (this read happened after them), so voiding never depends on event order or
+     *  the wall clock. */
     private void noteLockPresent(String hash, int block) {
-        for (SwapDb.Event e : db.getEvents(hash)) {
-            if (SwapDb.EV_LOCK_PRESENT.equals(e.event)) return;
-            if (SwapDb.EV_LOCK_GONE_SEEN.equals(e.event)) { db.logEvent(hash, SwapDb.EV_LOCK_PRESENT, "minima", "", "minima block " + block); return; }
-        }
+        List<SwapDb.Event> events = db.getEvents(hash);
+        long lastGone = -1;
+        for (SwapDb.Event e : events)
+            if (SwapDb.EV_LOCK_GONE_SEEN.equals(e.event)) lastGone = Math.max(lastGone, goneBlock(e.note));
+        if (lastGone > presentBlock(events)) db.logEvent(hash, SwapDb.EV_LOCK_PRESENT, "minima", "", "minima block " + Math.max(block, lastGone));
     }
 
-    /** The block of the earliest pending {@code event} reading since the last {@link SwapDb#EV_LOCK_PRESENT}, or -1. */
+    /** The lowest block of a pending {@code event} reading above the highest {@link SwapDb#EV_LOCK_PRESENT} block, or -1.
+     *  By block number, never by event order: a clock set backwards cannot resurrect a voided reading. */
     static long pendingLockGone(SwapDb db, String hash, String event) {
-        long first = -1;
-        String prefix = event + " minima block ";
-        for (SwapDb.Event e : db.getEvents(hash)) {   // newest first
-            if (SwapDb.EV_LOCK_PRESENT.equals(e.event)) break;
-            if (SwapDb.EV_LOCK_GONE_SEEN.equals(e.event) && e.note != null && e.note.startsWith(prefix)
-                    && e.note.substring(prefix.length()).matches("\\d{1,18}"))
-                first = Long.parseLong(e.note.substring(prefix.length()));
+        List<SwapDb.Event> events = db.getEvents(hash);
+        long voided = presentBlock(events), first = -1;
+        for (SwapDb.Event e : events) {
+            if (!SwapDb.EV_LOCK_GONE_SEEN.equals(e.event) || e.note == null || !e.note.startsWith(event + " minima block ")) continue;
+            long b = goneBlock(e.note);
+            if (b > voided && (first < 0 || b < first)) first = b;
         }
         return first;
+    }
+
+    /** The block in a "&lt;event&gt; minima block N" GONE_SEEN note, or -1. */
+    private static long goneBlock(String note) {
+        int i = note == null ? -1 : note.lastIndexOf(" minima block ");
+        String n = i < 0 ? "" : note.substring(i + " minima block ".length());
+        return n.matches("\\d{1,18}") ? Long.parseLong(n) : -1;
+    }
+
+    /** The highest block in a {@link SwapDb#EV_LOCK_PRESENT} "minima block N" note, or -1. */
+    private static long presentBlock(List<SwapDb.Event> events) {
+        long best = -1;
+        for (SwapDb.Event e : events)
+            if (SwapDb.EV_LOCK_PRESENT.equals(e.event) && e.note != null && e.note.matches("minima block \\d{1,18}"))
+                best = Math.max(best, Long.parseLong(e.note.substring("minima block ".length())));
+        return best;
     }
 
     /**
@@ -1447,6 +1495,18 @@ public final class SwapEngine {
     static void clearRetryMarkersForTest() { ethAttempt.clear(); }
     static void resetIdentityAlarmForTest() { identityAlarmRaised = false; }
 
+    /** Is {@code coin} the Minima lock {@code s} records — its token (from sellToken) and its amount (sellAmount, or
+     *  sellAmount at the 6dp grain the lock quantizes MxUSD to)? True when the row cannot say (no row, not a Minima
+     *  leg, legacy label or no amount). */
+    static boolean expectedLock(SwapDb.Swap s, JSONObject coin) {
+        if (s == null || !s.myLegIsMinima || s.sellAmount == null || s.sellAmount.isEmpty()) return true;
+        com.eurobuddha.atomix.TradingContext c = com.eurobuddha.atomix.TradingContext.forCoinLabel(s.sellToken);
+        if (c == null) return true;
+        if (!c.tokenId.equalsIgnoreCase(coin.optString("tokenid", ""))) return false;
+        BigDecimal got = dec(MinimaHtlc.coinAmount(coin));
+        return got.signum() > 0 && (got.compareTo(dec(s.sellAmount)) == 0 || got.compareTo(dec(MinimaHtlc.grain(s.sellAmount))) == 0);
+    }
+
     /** (package-private for tests) */
     void checkExpiredMinima(JSONObject coin, int block) {
         long timelock = parseBlock(MinimaHtlc.stateAt(coin, 3));   // MI-1: -1 on garbage/overflow (never 0)
@@ -1455,8 +1515,11 @@ public final class SwapEngine {
         // back a fixed number of blocks from the tip, so this lock will age out of view (256 on the hot path,
         // 1024 on the expired sweep) and from then on we could never refund it, because we could never find
         // it again. Write-once, so the earliest sighting is the one kept.
-        db.rememberLockCoin(seenHash, coin.optString("coinid", ""), MinimaHtlc.coinAmount(coin),
-                coin.optString("tokenid", "0x00"), MinimaHtlc.stateAt(coin, 0), MinimaHtlc.stateAt(coin, 4));
+        // Only the lock the row says I made: anyone can send a coin with my key and this hash to the shared HTLC
+        // address, and a write-once record of such a decoy would stand in for my real lock forever.
+        if (expectedLock(db.getSwap(seenHash), coin))
+            db.rememberLockCoin(seenHash, coin.optString("coinid", ""), MinimaHtlc.coinAmount(coin),
+                    coin.optString("tokenid", "0x00"), MinimaHtlc.stateAt(coin, 0), MinimaHtlc.stateAt(coin, 4));
         if (timelock < 0 || block <= timelock) return;             // unparseable timelock → NEVER treat as expired
         String hash = seenHash;
         // SELF-HEALING gate, identical to the claim path above. The old guard was `inflight.add("refundM:")`
@@ -1619,7 +1682,8 @@ public final class SwapEngine {
         // or refund. No eth_getLogs, which free nodes gate as an "archive" request.
         java.util.Set<String> termRaw = new java.util.HashSet<>(), termNorm = new java.util.HashSet<>();
         for (SwapDb.Swap s : db.allSwaps()) {
-            if (SwapDb.ST_COMPLETE.equals(s.status) || SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_ERROR.equals(s.status)) {
+            if (SwapDb.ST_COMPLETE.equals(s.status) || SwapDb.ST_REFUNDED.equals(s.status)
+                    || SwapDb.ST_ERROR.equals(s.status) && !ethLegUnproven(s)) {
                 if (s.hash != null) { termRaw.add(s.hash); termNorm.add(MinimaHtlc.normKey(s.hash)); }
                 continue;
             }
@@ -1717,7 +1781,12 @@ public final class SwapEngine {
             // Finalize on it — never on the broadcast ack — so a dropped tx retries below instead of being
             // marked COMPLETE while the USDT is still in the vault.
             if (gc.withdrawn) { confirmEthWithdrawn(hash, s); return; }
-            if (gc.refunded) { finalizeEthLost(hash); return; }   // counterparty refunded before I claimed — this leg is gone
+            if (gc.refunded) {                     // counterparty refunded before I claimed — this leg is gone
+                // Handover.stuck's proof that no collect is owed (a responder may never have learned the secret).
+                if (!db.hasEvent(hash, SwapDb.EV_ETH_LEG_REFUNDED)) db.logEvent(hash, SwapDb.EV_ETH_LEG_REFUNDED, "ETH", "", contractId);
+                finalizeEthLost(hash);
+                return;
+            }
             String secret = db.getSecret(hash);
             if (secret == null) return;            // (responder before harvesting the secret — nothing to do yet)
             String[] req = db.getRequest(hash);
@@ -1786,6 +1855,14 @@ public final class SwapEngine {
             // pre-mine failure → nothing committed; retry next cycle after the window
             SwapLog.w("refundE ERR " + hash + ": " + e.getMessage() + " (retries after the window)");
         } finally { inflight.remove("refundE:" + hash); }
+    }
+
+    /** An ERROR responder row (my Minima lock, the taker's Ethereum leg to collect) with no recorded proof that leg
+     *  was collected or refunded: keep reading its contract so the proof (or the collect) can still be recorded —
+     *  {@link com.eurobuddha.atomix.Handover#stuck} will not release the row without it. */
+    private boolean ethLegUnproven(SwapDb.Swap s) {
+        return s.hash != null && "RESPONDER".equals(s.role) && s.myLegIsMinima && SwapDb.ST_ERROR.equals(s.status)
+                && !db.haveCollect(s.hash) && !db.hasEvent(s.hash, SwapDb.EV_ETH_LEG_REFUNDED);
     }
 
     /** Finalize a withdraw once the contract confirms it settled. Idempotent (single terminal write + notify). */
