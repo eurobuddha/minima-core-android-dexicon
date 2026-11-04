@@ -409,7 +409,7 @@ public final class DoorHost {
         if (!wallet.ready() && !walletDeriving) {
             walletDeriving = true;
             wallet.deriveFromNode(node, h, new EthWallet.Cb() {
-                @Override public void ok(String address) { walletDeriving = false; changed(); }
+                @Override public void ok(String address) { walletDeriving = false; stepDone(); }
                 @Override public void err(String msg) { walletDeriving = false; bootNote = "ETH key: " + mx(msg); }   // never log key material
             });
         }
@@ -420,7 +420,7 @@ public final class DoorHost {
                     minimaSettingUp = false;
                     prefs.edit().putString("swap_addr", a).putString("swap_pk", pk).apply();
                     engine.setMyMinimaPk(pk);
-                    changed();
+                    stepDone();
                 }
                 @Override public void err(String m) { minimaSettingUp = false; bootNote = "Minima swap key: " + mx(m); }
             });
@@ -428,7 +428,7 @@ public final class DoorHost {
         if (minima.ready() && !keysLoaded && !keysLoading) {
             keysLoading = true;
             minima.loadMyKeys(new MinimaHtlc.KeysCb() {
-                @Override public void ok(java.util.Set<String> keys) { keysLoading = false; keysLoaded = !keys.isEmpty(); engine.setMyPubkeys(keys); }
+                @Override public void ok(java.util.Set<String> keys) { keysLoading = false; keysLoaded = !keys.isEmpty(); engine.setMyPubkeys(keys); if (keysLoaded) stepDone(); }
                 @Override public void err(String m) { keysLoading = false; }
             });
         }
@@ -440,6 +440,15 @@ public final class DoorHost {
     }
 
     /** AtomiX's per-market comms identities (HKDF "usdtswap" / "minimaswap") — they seal the buy handshake to a maker. */
+    /** A boot step finished: start the next one NOW instead of on the next ~90 s pass (four dependent steps used to
+     *  take minutes on a first start), and read the book the moment everything is ready. */
+    private void stepDone() {
+        ensure();
+        if (ready() && !bookReadAfterBoot) { bookReadAfterBoot = true; scanBooks(this::changed); readBalances(this::changed); }
+        changed();
+    }
+    private boolean bookReadAfterBoot;
+
     private void deriveIdentities() {
         identityDeriving = true;
         // one-way input (SeedSource: the phrase never enters the app). A swap already in flight keeps the old (vault seed)
@@ -456,7 +465,7 @@ public final class DoorHost {
                         h.post(() -> {
                             ids.putAll(got);
                             for (TradingContext m : MARKETS) crypto.put(m, new LocalEcCryptoProvider(ls(), got.get(m)));
-                            identityDeriving = false; changed();
+                            identityDeriving = false; stepDone();
                         });
                     } catch (Exception e) { h.post(() -> { identityDeriving = false; bootNote = "Identity derive failed"; }); }
                 });
