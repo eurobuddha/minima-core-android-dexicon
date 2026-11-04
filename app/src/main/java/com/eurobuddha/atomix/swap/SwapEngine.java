@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -181,8 +181,26 @@ public final class SwapEngine {
      *  already in flight) deliberately keeps running — freezing that is how funds got stranded twice — but
      *  anything that commits fresh money must stop dead. */
     // Also true once handed over to Dexicon: no new liability, settlement untouched (every caller is a new-liability path).
-    private boolean halted() { return com.eurobuddha.atomix.IdentityWatch.halted() || com.eurobuddha.atomix.Handover.active(); }
+    // And while the embedding host's own trading gate (setHostGate) says stop — Dexicon embeds this engine.
+    public static boolean halted() {
+        if (com.eurobuddha.atomix.IdentityWatch.halted() || com.eurobuddha.atomix.Handover.active()) return true;
+        java.util.function.BooleanSupplier g = hostGate;
+        try { return g != null && g.getAsBoolean(); }
+        catch (RuntimeException e) { return true; }   // a gate that cannot answer is a closed gate
+    }
+    private static volatile java.util.function.BooleanSupplier hostGate;
+    /** An app that embeds this engine (Dexicon) and has its own trading gate: {@code g} returns TRUE to stop every
+     *  NEW liability — initiator starts, OTC executes, responder locks, publishes — exactly like
+     *  {@link #halted()}. Settlement (claims, refunds, withdraws, locks already submitted) never consults it.
+     *  Null (the default) = no extra gate. */
+    public static void setHostGate(java.util.function.BooleanSupplier g) { hostGate = g; }
     private static final String HANDOVER_ERROR = "Handed over to Dexicon — AtomiX starts no new swaps. Take back on the main screen.";
+    /** Why {@link #halted()} refused a new swap, for the user. */
+    static String haltError() {
+        if (com.eurobuddha.atomix.Handover.active()) return HANDOVER_ERROR;
+        if (com.eurobuddha.atomix.IdentityWatch.halted()) return "Halted: app keys don't match your node — no new swap was started.";
+        return "Trading is paused — no new swap was started.";
+    }
     public void setMyOrder(Order o) { this.myOrder = o; }
     public void setOtcDb(OtcDb o) { this.otcDb = o; }
     public String swapStatus(String hash) { SwapDb.Swap s = db.getSwap(hash); return s == null ? null : s.status; }
@@ -423,7 +441,7 @@ public final class SwapEngine {
      *  handover's final re-check: either the row is written first and that check sees it, or this refuses. */
     private boolean prepareUnlessHandedOver(SwapDb.Swap s, String secret, String amount, String token) {
         synchronized (com.eurobuddha.atomix.Handover.LOCK) {
-            if (com.eurobuddha.atomix.Handover.active()) return false;
+            if (halted()) return false;   // handover, key mismatch or the host's gate: no new liability
             db.prepareInitiator(s, secret, amount, token);
             return true;
         }
@@ -686,7 +704,7 @@ public final class SwapEngine {
     }
 
     void startMinimaToErc20(Order maker, String sellMinima, String tokenSymbol, String buyTokenAmount, boolean otc, com.eurobuddha.atomix.TradingContext market, StartCb result) {
-        if (com.eurobuddha.atomix.Handover.active()) { result.err(HANDOVER_ERROR); return; }
+        if (halted()) { result.err(haltError()); return; }
         if (!ready()) { result.err("Not ready"); return; }
         if (market == null || market != com.eurobuddha.atomix.TradingContext.active() || !market.tokenId.equalsIgnoreCase(minima.activeToken())) { result.err(OtcController.MARKET_ERROR); return; }
         if (!otc && (maker == null || maker.market != market)) { result.err(SwapOrderBook.MARKET_ERROR); return; }
@@ -726,7 +744,7 @@ public final class SwapEngine {
                                 market.coinLabel, sellMinima, tokenSymbol, buyTokenAmount, maker.ethAddress);
                         s.myTimelock = timelock; s.myLegIsMinima = true; s.status = SwapDb.ST_STARTED;
                         try {
-                            if (!prepareUnlessHandedOver(s, secret, buyTokenAmount, reqToken)) { cb.err(HANDOVER_ERROR); return; }
+                            if (!prepareUnlessHandedOver(s, secret, buyTokenAmount, reqToken)) { cb.err(haltError()); return; }
                             if (!cb.onPrepared(hash)) {
                                 cb.err("The swap lock was not submitted because recovery data could not be saved."); return;
                             }
@@ -783,7 +801,7 @@ public final class SwapEngine {
     }
 
     void startErc20ToMinima(Order maker, String tokenSymbol, String sellTokenAmount, String buyMinima, boolean otc, com.eurobuddha.atomix.TradingContext market, StartCb result) {
-        if (com.eurobuddha.atomix.Handover.active()) { result.err(HANDOVER_ERROR); return; }
+        if (halted()) { result.err(haltError()); return; }
         if (!ready()) { result.err("Not ready"); return; }
         if (market == null || market != com.eurobuddha.atomix.TradingContext.active() || !market.tokenId.equalsIgnoreCase(minima.activeToken())) { result.err(OtcController.MARKET_ERROR); return; }
         if (!otc && (maker == null || maker.market != market)) { result.err(SwapOrderBook.MARKET_ERROR); return; }
@@ -828,7 +846,7 @@ public final class SwapEngine {
                         s.myTimelock = timelock; s.myLegIsMinima = false; s.status = SwapDb.ST_STARTED;
                         s.contractId = EthHtlc.contractId(hash);
                         try {
-                            if (!prepareUnlessHandedOver(s, secret, reqMinima, "minima")) { ui.post(() -> cb.err(HANDOVER_ERROR)); return; }
+                            if (!prepareUnlessHandedOver(s, secret, reqMinima, "minima")) { final String why = haltError(); ui.post(() -> cb.err(why)); return; }
                             if (!cb.onPrepared(hash)) {
                                 ui.post(() -> cb.err("The swap lock was not submitted because recovery data could not be saved.")); return;
                             }
@@ -1159,6 +1177,7 @@ public final class SwapEngine {
         }
         if (selected == null || !tryEthAttempt("refundScan:" + selected.hash)) return;
         final String hash = selected.hash;
+        final SwapDb.Swap row = selected;
         minima.scanHtlcByHashDeep(hash, 2, REFUND_SCAN_DEPTH, coins -> {
             boolean found = false;
             for (int i = 0; i < coins.length(); i++) {
@@ -1170,12 +1189,35 @@ public final class SwapEngine {
                 }
             }
             if (!found) refundFromRecord(hash);
+            noteRefundTried(row, block);
             // Deliberately NOT on the error path below: an empty scan is a result, a FAILED scan is not.
             // Refunding on a node error would sign against a coin we could not look up, and MinimaHtlc.refund
             // signs BEFORE txncheck - so every failed attempt burns a one-time Winternitz leaf for no possible
             // benefit, in exactly the condition (node unreachable) where there is nothing to gain. The sweep
             // retries on its own window.
         }, e -> SwapLog.w("refundScan " + hash + " ERR: " + e + " (unknown, not gone — retrying next window)"));
+    }
+
+    /** Past my Minima timelock by this many blocks (~1 h), a refund pass is evidence for the Dexicon handover. */
+    static final int REFUND_EVIDENCE_MARGIN_BLOCKS = 72;
+
+    /** Durable evidence for {@link com.eurobuddha.atomix.Handover#stuck}: a refund pass (scan + refund attempt) of my
+     *  Minima lock completed with the chain at {@code block}, at least {@link #REFUND_EVIDENCE_MARGIN_BLOCKS} past my
+     *  timelock ({@link SwapDb#EV_REFUND_TRIED}, once); and, for a recorded lock coin of MY key, whether it reads
+     *  spent ({@link SwapDb#EV_LOCK_SPENT}). An unspent coin writes nothing — the row keeps blocking and refunding. */
+    private void noteRefundTried(SwapDb.Swap s, int block) {
+        if (s.myTimelock <= 0 || block < s.myTimelock + REFUND_EVIDENCE_MARGIN_BLOCKS) return;
+        if (!db.hasEvent(s.hash, SwapDb.EV_REFUND_TRIED))
+            db.logEvent(s.hash, SwapDb.EV_REFUND_TRIED, "minima", "", "minima block " + block);
+        final JSONObject coin = db.rememberedLockCoin(s.hash);
+        if (coin == null || db.hasEvent(s.hash, SwapDb.EV_LOCK_SPENT)) return;
+        final String owner = MinimaHtlc.stateAt(coin, 0), id = coin.optString("coinid", "");
+        if (!isMyOwnedKey(owner)) return;   // relevant:true only tracks a coin my node holds the key for
+        minima.lockCoinUnspent(id, unspent -> {
+            if (!unspent && !db.hasEvent(s.hash, SwapDb.EV_LOCK_SPENT))
+                db.logEvent(s.hash, SwapDb.EV_LOCK_SPENT, "minima", "", "coins relevant:true coinid:" + id
+                        + " returned no unspent coin at minima block " + block + " (owner " + owner + ")");
+        }, e -> SwapLog.w("lock coin read " + id + " ERR: " + e + " (unknown, not spent)"));
     }
 
     /**
@@ -1335,7 +1377,7 @@ public final class SwapEngine {
         // 1024 on the expired sweep) and from then on we could never refund it, because we could never find
         // it again. Write-once, so the earliest sighting is the one kept.
         db.rememberLockCoin(seenHash, coin.optString("coinid", ""), MinimaHtlc.coinAmount(coin),
-                coin.optString("tokenid", "0x00"), MinimaHtlc.stateAt(coin, 0));
+                coin.optString("tokenid", "0x00"), MinimaHtlc.stateAt(coin, 0), MinimaHtlc.stateAt(coin, 4));
         if (timelock < 0 || block <= timelock) return;             // unparseable timelock → NEVER treat as expired
         String hash = seenHash;
         // SELF-HEALING gate, identical to the claim path above. The old guard was `inflight.add("refundM:")`
@@ -1705,22 +1747,24 @@ public final class SwapEngine {
     static final long NEVER_LOCKED_MARGIN_SECS = 60 * 60;
     private static final java.util.concurrent.atomic.AtomicInteger neverLockedPair = new java.util.concurrent.atomic.AtomicInteger();
 
-    /** An ETH-first initiator row whose lock never landed (newContract threw after the row was written, or the tx
-     *  was dropped) stays STARTED forever and blocks the Dexicon handover. Once chain time is past my timelock +
-     *  {@link #NEVER_LOCKED_MARGIN_SECS}, read getContract(contractId) — deterministic, sha256(hashlock) — from TWO
-     *  independent built-in endpoints; only if BOTH answer "no such contract" is the row finalized (ERROR + an
-     *  {@link SwapDb#EV_NEVER_LOCKED} event naming both endpoints and the block/time each read at). Any read failure
-     *  or disagreement leaves it STARTED; the next pair is tried after the retry window. (package-private for tests) */
+    /** A row whose OWN Ethereum lock never landed stays STARTED (ETH-first initiator) or LOCKED (responder: the
+     *  counter-leg row is written LOCKED before newContract) forever and blocks the Dexicon handover. Role-agnostic:
+     *  any !myLegIsMinima row in STARTED/LOCKED with a timelock. Once chain time is past my timelock +
+     *  {@link #NEVER_LOCKED_MARGIN_SECS} — a newContract can no longer succeed and a contract that ever existed
+     *  would still read back (contractId = sha256(hash), one contract per hash) — {@link #neverLockedEvidence}
+     *  must hold on TWO independent built-in endpoints; only then is the row finalized (ERROR + an
+     *  {@link SwapDb#EV_NEVER_LOCKED} event naming both endpoints and what each read). Any read failure or
+     *  disagreement leaves it as it is; the next pair is tried after the retry window. (package-private for tests) */
     void finalizeIfNeverLocked(EthHtlc eth, SwapDb.Swap s) {
-        if (!"INITIATOR".equals(s.role) || !"ERC20_TO_MINIMA".equals(s.direction) || s.myLegIsMinima
-                || !SwapDb.ST_STARTED.equals(s.status) || s.myTimelock <= 0) return;
+        if (s.myLegIsMinima || s.myTimelock <= 0 || !ownEthLockPending(s.status)) return;
         long notBefore = s.myTimelock + NEVER_LOCKED_MARGIN_SECS;
         if (nowUnix() <= notBefore || !tryEthAttempt("neverLocked:" + s.hash)) return;
         String evidence = db.hasEvent(s.hash, SwapDb.EV_NEVER_LOCKED) ? "recorded"
-                : neverLockedEvidence(rpc, eth, EthHtlc.contractId(s.hash), notBefore, neverLockedPair.getAndIncrement());
+                : neverLockedEvidence(rpc, eth, EthHtlc.contractId(s.hash), notBefore, neverLockedPair.getAndIncrement(),
+                        ethLockTx(s.hash), myEth());
         if (evidence == null) return;
         SwapDb.Swap cur = db.getSwap(s.hash);
-        if (cur == null || !SwapDb.ST_STARTED.equals(cur.status)) return;
+        if (cur == null || !ownEthLockPending(cur.status)) return;
         // Evidence BEFORE status: an ERROR row without it would block the handover with nothing left to re-check it.
         if (!"recorded".equals(evidence)) db.logEvent(s.hash, SwapDb.EV_NEVER_LOCKED, "ETH", "", evidence);
         db.setSwapStatus(s.hash, SwapDb.ST_ERROR);
@@ -1728,19 +1772,58 @@ public final class SwapEngine {
         ui.post(notifier::onSwapsChanged);
     }
 
-    /** Evidence that contract {@code contractId} does not exist, from two consecutive entries of
-     *  {@link EthRpc#fallbacks()} starting at {@code pair}: each must report chain time past {@code notBefore} and
-     *  a zero-sender getContract. Null on any failure, a not-yet-late chain, or a contract on either. */
-    static String neverLockedEvidence(EthRpc rpc, EthHtlc eth, String contractId, long notBefore, int pair) {
+    private static boolean ownEthLockPending(String status) {
+        return SwapDb.ST_STARTED.equals(status) || SwapDb.ST_LOCKED.equals(status);
+    }
+
+    /** The tx hash of my own Ethereum lock for {@code hash}: EV_STARTED (initiator) or EV_CPSENT (responder) on an
+     *  "ETH:" token. Null if none was ever recorded (newContract threw, or the answer was lost). */
+    private String ethLockTx(String hash) {
+        for (SwapDb.Event e : db.getEvents(hash)) {
+            if ((SwapDb.EV_STARTED.equals(e.event) || SwapDb.EV_CPSENT.equals(e.event))
+                    && e.token != null && e.token.startsWith("ETH") && e.note != null && e.note.matches("(?i)0x[0-9a-f]{64}"))
+                return e.note;
+        }
+        return null;
+    }
+
+    /** Evidence that contract {@code contractId} does not exist and never will, from two consecutive entries of
+     *  {@link EthRpc#fallbacks()} starting at {@code pair}. EACH endpoint must show, in this order:
+     *  <ol><li>a latest block whose time is past {@code notBefore};</li>
+     *  <li>if a lock tx was recorded: {@code eth_getTransactionByHash} null, or mined with a receipt of status 0x0
+     *      (a pending or successful tx refuses);</li>
+     *  <li>{@code wallet}'s pending nonce equal to its latest nonce (nothing of mine waiting to mine);</li>
+     *  <li>a zero-sender getContract pinned to the block number read in 1 (not "latest", so 1 and 4 are one block).</li></ol>
+     *  Null on any failure, unreadable or malformed answer, a not-yet-late chain, a missing wallet, or a contract. */
+    static String neverLockedEvidence(EthRpc rpc, EthHtlc eth, String contractId, long notBefore, int pair,
+                                      String lockTx, String wallet) {
+        if (wallet == null || wallet.isEmpty()) return null;
         java.util.List<String> eps = EthRpc.fallbacks();
         StringBuilder ev = new StringBuilder("getContract " + contractId + " returned no contract on");
         for (int i = 0; i < 2; i++) {
             String ep = eps.get(Math.floorMod(pair + i, eps.size()));
             try {
                 long[] head = rpc.latestBlockOn(ep);
-                if (head[1] <= notBefore || eth.getContractOn(ep, contractId) != null) return null;
+                if (head[1] <= notBefore) return null;
+                String txNote = "no lock tx recorded";
+                if (lockTx != null) {
+                    Object tx = rpc.callOn(ep, "eth_getTransactionByHash", new JSONArray().put(lockTx));
+                    if (tx == null || tx == JSONObject.NULL) txNote = "lock tx " + lockTx + " unknown";
+                    else {
+                        if (!(tx instanceof JSONObject) || ((JSONObject) tx).isNull("blockNumber")
+                                || ((JSONObject) tx).optString("blockNumber", "").isEmpty()) return null;   // pending
+                        Object rc = rpc.callOn(ep, "eth_getTransactionReceipt", new JSONArray().put(lockTx));
+                        if (!(rc instanceof JSONObject) || !"0x0".equals(((JSONObject) rc).optString("status"))) return null;
+                        txNote = "lock tx " + lockTx + " reverted (status 0x0)";
+                    }
+                }
+                java.math.BigInteger pending = EthRpc.transactionCount(rpc.callOn(ep, "eth_getTransactionCount", new JSONArray().put(wallet).put("pending")));
+                java.math.BigInteger latest = EthRpc.transactionCount(rpc.callOn(ep, "eth_getTransactionCount", new JSONArray().put(wallet).put("latest")));
+                if (!pending.equals(latest)) return null;
+                if (eth.getContractOn(ep, contractId, "0x" + Long.toHexString(head[0])) != null) return null;
                 ev.append(i == 0 ? " " : " and ").append(ep).append(" at block ").append(head[0])
-                        .append(" (time ").append(head[1]).append(')');
+                        .append(" (time ").append(head[1]).append("; ").append(txNote).append("; ").append(wallet)
+                        .append(" nonce ").append(latest).append(" with nothing pending)");
             } catch (Exception e) {
                 SwapLog.w("never-locked check " + contractId + " on " + ep + ": " + e.getMessage());
                 return null;

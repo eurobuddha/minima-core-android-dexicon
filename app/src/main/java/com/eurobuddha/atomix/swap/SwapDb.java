@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.content.ContentValues;
@@ -47,6 +47,8 @@ public final class SwapDb {
     public static final String EV_REFUND_SENT  = "REFUND_SENT";    // taker: my ETH refund broadcast (note = tx hash)
     // Handover liveness (0.1.90):
     public static final String EV_NEVER_LOCKED = "ETH_NEVER_LOCKED";   // ETH-first initiator: two endpoints showed no contract past the timelock (note = evidence)
+    public static final String EV_REFUND_TRIED = "MINIMA_REFUND_TRIED"; // my Minima lock: a refund sweep completed past myTimelock + margin (note = "minima block N")
+    public static final String EV_LOCK_SPENT = "MINIMA_LOCK_SPENT";     // my recorded Minima lock coin read as spent (note = evidence)
     public static final String EV_RECOVERY_SAVED = "RECOVERY_SAVED";   // the user saved + re-read this swap's recovery record (note = size + SHA-256)
 
     // ---- UX swap status ----
@@ -175,16 +177,30 @@ public final class SwapDb {
     private final java.util.Set<String> recordedLockCoins = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
 
     public synchronized void rememberLockCoin(String hash, String coinid, String amount, String tokenid, String owner) {
+        rememberLockCoin(hash, coinid, amount, tokenid, owner, null);
+    }
+
+    /** As above, plus the lock's counterparty (claim) key, state port 4 — carried into the recovery record only.
+     *  Rows recorded before v5 get the receiver backfilled on the next sighting; nothing else is ever rewritten. */
+    public synchronized void rememberLockCoin(String hash, String coinid, String amount, String tokenid, String owner, String receiver) {
         if (hash == null || coinid == null || coinid.isEmpty()) return;
         // Cache only hashes we have actually WRITTEN (see the end of this method). Marking on entry would
         // make a call that returns early — no swap row yet — permanently skip the retry, which is worse than
         // the SELECT it saves.
         if (recordedLockCoins.contains(norm(hash))) return;
         try (android.database.Cursor c = helper.getReadableDatabase().rawQuery(
-                "SELECT mycoinid FROM swaps WHERE hash=?", new String[]{norm(hash)})) {
+                "SELECT mycoinid, mycoinreceiver FROM swaps WHERE hash=?", new String[]{norm(hash)})) {
             if (c.moveToFirst()) {
-                String existing = c.getString(0);
-                if (existing != null && !existing.isEmpty()) return;   // already recorded
+                String existing = c.getString(0), rcv = c.getString(1);
+                if (existing != null && !existing.isEmpty()) {          // already recorded
+                    if ((rcv == null || rcv.isEmpty()) && receiver != null && !receiver.isEmpty() && existing.equalsIgnoreCase(coinid)) {
+                        ContentValues r = new ContentValues();
+                        r.put("mycoinreceiver", receiver);
+                        helper.getWritableDatabase().update("swaps", r, "hash=?", new String[]{norm(hash)});
+                    }
+                    if (rcv != null && !rcv.isEmpty() || receiver != null && !receiver.isEmpty()) recordedLockCoins.add(norm(hash));
+                    return;
+                }
             } else return;                                             // no such swap row
         }
         ContentValues v = new ContentValues();
@@ -192,6 +208,7 @@ public final class SwapDb {
         v.put("mycoinamount", amount);
         v.put("mycointoken", tokenid);
         v.put("mycoinowner", owner);
+        if (receiver != null && !receiver.isEmpty()) v.put("mycoinreceiver", receiver);
         helper.getWritableDatabase().update("swaps", v, "hash=?", new String[]{norm(hash)});
         recordedLockCoins.add(norm(hash));   // written — later cycles can skip the read
     }
@@ -200,7 +217,7 @@ public final class SwapDb {
     public synchronized org.json.JSONObject rememberedLockCoin(String hash) {
         if (hash == null) return null;
         try (android.database.Cursor c = helper.getReadableDatabase().rawQuery(
-                "SELECT mycoinid, mycoinamount, mycointoken, mycoinowner, mytimelock FROM swaps WHERE hash=?",
+                "SELECT mycoinid, mycoinamount, mycointoken, mycoinowner, mytimelock, mycoinreceiver FROM swaps WHERE hash=?",
                 new String[]{norm(hash)})) {
             if (!c.moveToFirst()) return null;
             String coinid = c.getString(0);
@@ -223,6 +240,8 @@ public final class SwapDb {
                 // silence - the exact shape of failure this whole record exists to prevent.
                 state.put(new org.json.JSONObject().put("port", 0).put("data", c.getString(3)));
                 state.put(new org.json.JSONObject().put("port", 3).put("data", String.valueOf(c.getLong(4))));
+                if (c.getString(5) != null && !c.getString(5).isEmpty())   // the claim key, for the recovery record
+                    state.put(new org.json.JSONObject().put("port", 4).put("data", c.getString(5)));
                 state.put(new org.json.JSONObject().put("port", 5).put("data", norm(hash)));
                 coin.put("state", state);
             } catch (org.json.JSONException impossible) { return null; }
@@ -443,7 +462,7 @@ public final class SwapDb {
 
     private static final class Helper extends SQLiteOpenHelper {
         /** v2 added market_trades; v3 tagged its rows with the market they were observed in. */
-        Helper(Context ctx) { super(ctx, "atomix.db", null, 4); }
+        Helper(Context ctx) { super(ctx, "atomix.db", null, 5); }
 
         @Override public void onCreate(SQLiteDatabase db) {
             db.execSQL("CREATE TABLE secrets (hash TEXT PRIMARY KEY, secret TEXT, added INTEGER)");
@@ -456,7 +475,7 @@ public final class SwapDb {
                     + "status TEXT, contractid TEXT, mytimelock INTEGER, mylegminima INTEGER, "
                     + "created INTEGER, updated INTEGER, "
                     // the coin WE locked — a refund is built from these, never from a depth-bounded scan
-                    + "mycoinid TEXT, mycoinamount TEXT, mycointoken TEXT, mycoinowner TEXT)");
+                    + "mycoinid TEXT, mycoinamount TEXT, mycointoken TEXT, mycoinowner TEXT, mycoinreceiver TEXT)");
             createMarket(db);
         }
 
@@ -464,6 +483,8 @@ public final class SwapDb {
             createMarket(db);   // v1→v2: add the market_trades table (idempotent)
             tagMarketTokens(db);// v2→v3: tag each print with its market (idempotent)
             addLockCoin(db);    // v3→v4: remember the coin we locked, so a refund never needs to FIND it
+            try { db.execSQL("ALTER TABLE swaps ADD COLUMN mycoinreceiver TEXT"); }   // v4→v5: its claim key (recovery record)
+            catch (android.database.SQLException alreadyThere) { /* idempotent */ }
         }
 
         /**

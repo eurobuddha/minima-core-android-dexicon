@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -423,6 +423,18 @@ public final class MinimaHtlc {
     public void myRelevantCoins(Consumer<org.json.JSONArray> ok, Consumer<String> err, Consumer<TokenBalance> oversized) {
         String token = activeToken;
         guardedCoinRead(token, "coins relevant:true tokenid:" + token + " simplestate:true", ok, err, oversized);
+    }
+
+    /** Is my own recorded lock coin still unspent? {@code relevant:true}: the coin carries my key in state port 0, so
+     *  the node carries it forward at ANY age (TxPoWTreeNode.copyParentRelevantCoins); a bare {@code coins coinid:}
+     *  walks only the TxPoW tree and reads an old unspent lock as absent. One coin at most, so no row-count risk. */
+    public void lockCoinUnspent(String coinid, Consumer<Boolean> ok, Consumer<String> err) {
+        if (coinid == null || !coinid.matches("0x[0-9a-fA-F]{2,128}")) { err.accept("bad coin id"); return; }
+        cmd("coins relevant:true coinid:" + coinid, r -> {
+            Object resp = r.opt("response");
+            if (!(resp instanceof org.json.JSONArray)) { err.accept("coins: no coin list"); return; }
+            ok.accept(((org.json.JSONArray) resp).length() > 0);
+        }, err);
     }
 
     /** Is there any UNCONFIRMED native mxUSDT in my wallet (a split/lock/payment still settling)? The chain's

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/main/java/com/eurobuddha/atomix/swap/OtcController.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/swap/OtcController.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -236,6 +236,7 @@ public final class OtcController {
         if (!validDeal(d)) { res.err("enter amount + price"); return; }
         if (!sameMarket(d)) { res.err(MARKET_ERROR); return; }
         if (!ready() || !negotiating(d) || !OtcDb.TURN_ME.equals(d.whoseTurn)) { res.err("not your turn"); return; }
+        if (SwapEngine.halted()) { res.err(SwapEngine.haltError()); return; }   // never agree a deal no lock may follow
         final OtcDb.Deal agreed = d.copy();
         agreed.status = OtcDb.ST_AGREED;
         agreed.whoseTurn = OtcDb.ROLE_INSTIGATOR.equals(d.role) ? OtcDb.TURN_ME : OtcDb.TURN_PEER;

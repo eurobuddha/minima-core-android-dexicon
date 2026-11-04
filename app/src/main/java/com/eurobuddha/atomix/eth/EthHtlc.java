@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/main/java/com/eurobuddha/atomix/eth/EthHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/eth/EthHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.eth;
 
 import com.eurobuddha.atomix.SwapLog;
@@ -138,7 +138,10 @@ public final class EthHtlc {
     public Contract getContract(String contractId) throws Exception { return getContractOn(null, contractId); }
 
     /** {@link #getContract} read from exactly {@code endpoint} (null = the normal fallback chain). */
-    public Contract getContractOn(String endpoint, String contractId) throws Exception {
+    public Contract getContractOn(String endpoint, String contractId) throws Exception { return getContractOn(endpoint, contractId, "latest"); }
+
+    /** As above, at {@code block} (hex block number or "latest"); a pinned block needs an endpoint. */
+    public Contract getContractOn(String endpoint, String contractId, String block) throws Exception {
         Function f = new Function("getContract",
                 Collections.singletonList(new Bytes32(b32(contractId))),
                 Arrays.asList(
@@ -147,7 +150,7 @@ public final class EthHtlc {
                         new TypeReference<Bytes32>() {}, new TypeReference<Uint256>() {}, new TypeReference<Bool>() {},
                         new TypeReference<Bool>() {}, new TypeReference<Bytes32>() {}, new TypeReference<Bool>() {}));
         String ret = endpoint == null ? rpc.ethCall(net.htlc, FunctionEncoder.encode(f))
-                : rpc.ethCallOn(endpoint, net.htlc, FunctionEncoder.encode(f));
+                : rpc.ethCallOn(endpoint, net.htlc, FunctionEncoder.encode(f), block);
         requireReturnWords(ret, 12);
         try {
             // Review MINOR: decode() itself is the likelier thrower on a malformed RPC body (unchecked

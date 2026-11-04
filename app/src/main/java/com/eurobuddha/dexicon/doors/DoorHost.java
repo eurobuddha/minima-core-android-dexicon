@@ -143,6 +143,10 @@ public final class DoorHost {
         });
         rpc = new EthRpc(net.defaultRpc);
         engine.setNetwork(rpc, net);
+        // One trading app per phone, inside the engine itself: while the gate is shut (or the market is mid-switch)
+        // SwapEngine.halted() refuses every NEW lock — responder legs, publishes, initiator starts, OTC execution —
+        // at the moment it would lock. Claims, refunds, withdraws and deals already locked are untouched.
+        SwapEngine.setHostGate(() -> TradingGate.blocked(app) || switching);
         PriceOracle.init(prefs);   // the persisted last-good stamp — the withdraw clock survives restarts
         engine.setNoticeSink((to, hh, st, why, mkt) -> {
             TradingContext m = mkt == null ? market : mkt;
@@ -179,7 +183,7 @@ public final class DoorHost {
     public TradingContext market() { return market; }
     /** A ⇄ switch is under way (between the call and the flip, up to ~4 s): nothing may be saved, published or agreed,
      *  or a ladder priced for one coin lands on the other (~200× mispriced). */
-    private boolean switching;
+    private volatile boolean switching;   // read by the engine's host gate on its own threads
     public boolean switching() { return switching; }
     public static final String SWITCHING = "Switching markets — try again in a moment.";
     /** This host's prefs — AtomiX's keys for the ACTIVE market (order_config, auto_publish, peg_*, otc_*). */
@@ -588,13 +592,9 @@ public final class DoorHost {
 
     // ------------------------------------------------------------------ the maker (AtomiX SwapService, ported)
 
-    /** One trading app per phone: while AtomiX / PandaPools is present Dexicon publishes and arms NOTHING.
-     *
-     *  TODO(re-vendor AtomiX 0.1.91+): wire the engine's own host gate in the constructor, right after the engine is built:
-     *      engine.setHostGate(() -> TradingGate.blocked(app) || switching);
-     *  SwapEngine.setHostGate(BooleanSupplier) folds it into halted() and is consulted where OTC execution starts a lock, so
-     *  a local OTC Accept whose ACCEPT confirms after the gate shut no longer locks leg 1 (OtcController.accept →
-     *  executeDeal runs in the send callback). Until then OtcTab re-checks the gate right before Accept is sent. */
+    /** One trading app per phone: while AtomiX / PandaPools is present Dexicon publishes and arms NOTHING. The same rule
+     *  is wired into the engine (SwapEngine.setHostGate in the constructor), so a lock that would start after the gate
+     *  shut — e.g. a local OTC Accept whose ACCEPT confirms late — is refused where it would lock. */
     public boolean gated() { return TradingGate.blocked(app); }
 
     public Order loadOrder() { return Order.fromConfigJson(prefs.getString("order_config", "")); }

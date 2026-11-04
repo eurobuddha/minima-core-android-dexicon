@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.81 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.82 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONArray;
@@ -73,6 +73,12 @@ public class PoolManager {
         };
     }
 
+    /** Plain wording for a RuntimeException thrown before the operation answered (its mark still ends once). */
+    static String unexpected(RuntimeException e) {
+        return "Something went wrong preparing this (" + e.getClass().getSimpleName()
+                + (e.getMessage() == null ? "" : ": " + e.getMessage()) + "). Check My Pools before trying again.";
+    }
+
     /** (Re-)register an own pool's covenant so the node tracks its coins. Idempotent. */
     static void retrack(NodeApi node, Pool p, NodeApi.Cb cb) {
         node.cmd("newscript trackall:true script:" + Util.scriptArg(p.covenantScript), cb);
@@ -84,62 +90,64 @@ public class PoolManager {
         // Marked running until the result is delivered, so a hand-over refuses while this create can still
         // record a recipe or post.
         final CreateResult cb = ending(done);
-        if (!BackupState.combinedUpToDate(node.context())) {
-            cb.onFailed("BACKUP_REQUIRED: save and verify a password-encrypted pool + node backup before creating another pool. Recovery and withdrawal remain available."); return;
-        }
-        if (!FundingCoins.hex(tokenid) || Util.MINIMA_TOKENID.equalsIgnoreCase(tokenid)
-                || tokDecimals < 0 || tokDecimals > 44) { cb.onFailed("Invalid paired token or precision"); return; }
-        if (x0 == null || y0 == null || x0.signum() <= 0 || y0.signum() <= 0) {
-            cb.onFailed("both reserves must be greater than zero"); return;
-        }
-        final BigDecimal y0c = y0.setScale(tokDecimals, RoundingMode.DOWN);   // reserve must be an achievable coin amount
-        if (y0c.signum() <= 0) { cb.onFailed("token amount is below the token's smallest unit"); return; }
-        if (!PoolCovenant.sizeOk(x0, y0c)) {
-            cb.onFailed("x0 × y0 must stay under 2^64 — use smaller reserves (or split into several pools)"); return;
-        }
-        final String kmin = PoolCovenant.kmin(x0, y0c);
-
-        // 1. mint the owner identity (payout address + its public key = $OADR / $OPK)
-        node.cmd("newaddress", new NodeApi.Cb() {
-            @Override public void onResult(JSONObject j) {
-                JSONObject r = j.optJSONObject("response");
-                String oadr = r != null ? r.optString("address", "") : "";
-                String opk  = r != null ? r.optString("publickey", "") : "";
-                if (!TxPost.truthy(j, "status") || !FundingCoins.hex(oadr) || !FundingCoins.hex(opk)) {
-                    cb.onFailed("could not mint an owner key"); return;
-                }
-                // the reply's `total` is the key count AFTER this mint → this key's derivation index
-                final int newTotal = r.optInt("total", 0);
-                final int kidx = newTotal > 0 ? newTotal - 1 : -1;
-
-                final String script = PoolCovenant.script(opk, oadr, tokenid, kmin);
-                // 2. derive the canonical covenant address the same way discovery will (node runscript)
-                deriveAddress(script, new AddrCb() {
-                    @Override public void ok(String address, String mx) {
-                        // 3. register so the node tracks + can later spend the pool coins
-                        node.cmd("newscript trackall:true script:" + Util.scriptArg(script), new NodeApi.Cb() {
-                            @Override public void onResult(JSONObject nj) {
-                                if (TxPost.truthy(nj, "status")) fundAndPost();
-                                else cb.onFailed("Could not register the recovery covenant. Nothing was posted.");
-                            }
-                            @Override public void onError(String m) { cb.onFailed(m); }
-                            private void fundAndPost() {
-                                Pool p = new Pool();
-                                p.newlyCreatedWithCurrentOwnerState = true;
-                                p.address = address; p.mxaddress = mx; p.opk = opk; p.oadr = oadr;
-                                p.kidx = kidx;
-                                p.tok = tokenid; p.kmin = kmin; p.tokDecimals = tokDecimals;
-                                p.covenantScript = script;   // exact covenant → OwnPoolStore recipe for recovery
-                                p.reserveM = x0; p.reserveT = y0c;
-                                buildCreate(p, x0, y0c, tokenid, cb);
-                            }
-                        });
-                    }
-                    @Override public void fail(String m) { cb.onFailed("address derivation failed: " + m); }
-                });
+        try {
+            if (!BackupState.combinedUpToDate(node.context())) {
+                cb.onFailed("BACKUP_REQUIRED: save and verify a password-encrypted pool + node backup before creating another pool. Recovery and withdrawal remain available."); return;
             }
-            @Override public void onError(String m) { cb.onFailed(m); }
-        });
+            if (!FundingCoins.hex(tokenid) || Util.MINIMA_TOKENID.equalsIgnoreCase(tokenid)
+                    || tokDecimals < 0 || tokDecimals > 44) { cb.onFailed("Invalid paired token or precision"); return; }
+            if (x0 == null || y0 == null || x0.signum() <= 0 || y0.signum() <= 0) {
+                cb.onFailed("both reserves must be greater than zero"); return;
+            }
+            final BigDecimal y0c = y0.setScale(tokDecimals, RoundingMode.DOWN);   // reserve must be an achievable coin amount
+            if (y0c.signum() <= 0) { cb.onFailed("token amount is below the token's smallest unit"); return; }
+            if (!PoolCovenant.sizeOk(x0, y0c)) {
+                cb.onFailed("x0 × y0 must stay under 2^64 — use smaller reserves (or split into several pools)"); return;
+            }
+            final String kmin = PoolCovenant.kmin(x0, y0c);
+
+            // 1. mint the owner identity (payout address + its public key = $OADR / $OPK)
+            node.cmd("newaddress", new NodeApi.Cb() {
+                @Override public void onResult(JSONObject j) {
+                    JSONObject r = j.optJSONObject("response");
+                    String oadr = r != null ? r.optString("address", "") : "";
+                    String opk  = r != null ? r.optString("publickey", "") : "";
+                    if (!TxPost.truthy(j, "status") || !FundingCoins.hex(oadr) || !FundingCoins.hex(opk)) {
+                        cb.onFailed("could not mint an owner key"); return;
+                    }
+                    // the reply's `total` is the key count AFTER this mint → this key's derivation index
+                    final int newTotal = r.optInt("total", 0);
+                    final int kidx = newTotal > 0 ? newTotal - 1 : -1;
+
+                    final String script = PoolCovenant.script(opk, oadr, tokenid, kmin);
+                    // 2. derive the canonical covenant address the same way discovery will (node runscript)
+                    deriveAddress(script, new AddrCb() {
+                        @Override public void ok(String address, String mx) {
+                            // 3. register so the node tracks + can later spend the pool coins
+                            node.cmd("newscript trackall:true script:" + Util.scriptArg(script), new NodeApi.Cb() {
+                                @Override public void onResult(JSONObject nj) {
+                                    if (TxPost.truthy(nj, "status")) fundAndPost();
+                                    else cb.onFailed("Could not register the recovery covenant. Nothing was posted.");
+                                }
+                                @Override public void onError(String m) { cb.onFailed(m); }
+                                private void fundAndPost() {
+                                    Pool p = new Pool();
+                                    p.newlyCreatedWithCurrentOwnerState = true;
+                                    p.address = address; p.mxaddress = mx; p.opk = opk; p.oadr = oadr;
+                                    p.kidx = kidx;
+                                    p.tok = tokenid; p.kmin = kmin; p.tokDecimals = tokDecimals;
+                                    p.covenantScript = script;   // exact covenant → OwnPoolStore recipe for recovery
+                                    p.reserveM = x0; p.reserveT = y0c;
+                                    buildCreate(p, x0, y0c, tokenid, cb);
+                                }
+                            });
+                        }
+                        @Override public void fail(String m) { cb.onFailed("address derivation failed: " + m); }
+                    });
+                }
+                @Override public void onError(String m) { cb.onFailed(m); }
+            });
+        } catch (RuntimeException e) { cb.onFailed(unexpected(e)); }
     }
 
     private void buildCreate(Pool p, BigDecimal x0, BigDecimal y0, String tokenid, CreateResult cb) {
@@ -203,47 +211,49 @@ public class PoolManager {
         // The owner's own funds: never refused for the hand-over, but marked running so a hand-over waits for it.
         Handover.mark();
         final Result cb = ending(done);
-        if (!p.funded()) { cb.onFailed("pool has no live reserves"); return; }
-        if (addM == null || addT == null || addM.signum() < 0 || addT.signum() < 0
-                || (addM.signum() == 0 && addT.signum() == 0)) { cb.onFailed("enter an amount to add"); return; }
-        final BigDecimal addTc = addT.setScale(p.tokDecimals, RoundingMode.DOWN);
-        final BigDecimal newX = p.reserveM.add(addM);
-        final BigDecimal newY = p.reserveT.add(addTc);
-        BigDecimal cap = Util.decOr(p.kmin, BigDecimal.ZERO).multiply(GROW_CAP_MULT);
-        if (cap.signum() > 0 && newX.multiply(newY).compareTo(cap) > 0) {
-            cb.onFailed("this deposit would push K past 2×KMIN — use Migrate to add liquidity and reset the floor");
-            return;
-        }
-        final String tok = p.tok, tokArg = " tokenid:" + tok;
-        selectCoins(Util.MINIMA_TOKENID, addM, p.address, p.oadr, new SelCb() {
-            @Override public void ok(List<Coin> mfunds, BigDecimal msum) {
-                selectCoins(tok, addTc, p.address, p.oadr, new SelCb() {
-                    @Override public void ok(List<Coin> tfunds, BigDecimal tsum) {
-                        String txid = "ppdep_" + tag();
-                        List<String> cmds = new ArrayList<>();
-                        cmds.add("txncreate id:" + txid);
-                        cmds.add("txninput id:" + txid + " coinid:" + p.coinidM);   // 0 pool MINIMA
-                        cmds.add("txninput id:" + txid + " coinid:" + p.coinidT);   // 1 pool token
-                        for (Coin c : mfunds) cmds.add("txninput id:" + txid + " coinid:" + c.coinid);
-                        for (Coin c : tfunds) cmds.add("txninput id:" + txid + " coinid:" + c.coinid);
-                        // outputs 0/1 recreate the grown reserves at the SAME address (owner grow branch)
-                        cmds.add("txnoutput id:" + txid + " amount:" + amt(newX) + " address:" + p.address + " storestate:false");
-                        cmds.add("txnoutput id:" + txid + " amount:" + amt(newY) + " address:" + p.address + tokArg + " storestate:false");
-                        String mChg = mfunds.isEmpty() ? p.oadr : mfunds.get(0).address;
-                        String tChg = tfunds.isEmpty() ? p.oadr : tfunds.get(0).address;
-                        BigDecimal mchange = msum.subtract(addM);
-                        if (mchange.signum() > 0)
-                            cmds.add("txnoutput id:" + txid + " amount:" + amt(mchange) + " address:" + mChg + " storestate:false");
-                        BigDecimal tchange = tsum.subtract(addTc);
-                        if (tchange.signum() > 0)
-                            cmds.add("txnoutput id:" + txid + " amount:" + amt(tchange) + " address:" + tChg + tokArg + " storestate:false");
-                        ownerSignPost(txid, p.opk, cmds, cb);
-                    }
-                    @Override public void fail(String message) { CoinLock.release(mfunds); cb.onFailed(message); }
-                });
+        try {
+            if (!p.funded()) { cb.onFailed("pool has no live reserves"); return; }
+            if (addM == null || addT == null || addM.signum() < 0 || addT.signum() < 0
+                    || (addM.signum() == 0 && addT.signum() == 0)) { cb.onFailed("enter an amount to add"); return; }
+            final BigDecimal addTc = addT.setScale(p.tokDecimals, RoundingMode.DOWN);
+            final BigDecimal newX = p.reserveM.add(addM);
+            final BigDecimal newY = p.reserveT.add(addTc);
+            BigDecimal cap = Util.decOr(p.kmin, BigDecimal.ZERO).multiply(GROW_CAP_MULT);
+            if (cap.signum() > 0 && newX.multiply(newY).compareTo(cap) > 0) {
+                cb.onFailed("this deposit would push K past 2×KMIN — use Migrate to add liquidity and reset the floor");
+                return;
             }
-            @Override public void fail(String message) { cb.onFailed(message); }
-        });
+            final String tok = p.tok, tokArg = " tokenid:" + tok;
+            selectCoins(Util.MINIMA_TOKENID, addM, p.address, p.oadr, new SelCb() {
+                @Override public void ok(List<Coin> mfunds, BigDecimal msum) {
+                    selectCoins(tok, addTc, p.address, p.oadr, new SelCb() {
+                        @Override public void ok(List<Coin> tfunds, BigDecimal tsum) {
+                            String txid = "ppdep_" + tag();
+                            List<String> cmds = new ArrayList<>();
+                            cmds.add("txncreate id:" + txid);
+                            cmds.add("txninput id:" + txid + " coinid:" + p.coinidM);   // 0 pool MINIMA
+                            cmds.add("txninput id:" + txid + " coinid:" + p.coinidT);   // 1 pool token
+                            for (Coin c : mfunds) cmds.add("txninput id:" + txid + " coinid:" + c.coinid);
+                            for (Coin c : tfunds) cmds.add("txninput id:" + txid + " coinid:" + c.coinid);
+                            // outputs 0/1 recreate the grown reserves at the SAME address (owner grow branch)
+                            cmds.add("txnoutput id:" + txid + " amount:" + amt(newX) + " address:" + p.address + " storestate:false");
+                            cmds.add("txnoutput id:" + txid + " amount:" + amt(newY) + " address:" + p.address + tokArg + " storestate:false");
+                            String mChg = mfunds.isEmpty() ? p.oadr : mfunds.get(0).address;
+                            String tChg = tfunds.isEmpty() ? p.oadr : tfunds.get(0).address;
+                            BigDecimal mchange = msum.subtract(addM);
+                            if (mchange.signum() > 0)
+                                cmds.add("txnoutput id:" + txid + " amount:" + amt(mchange) + " address:" + mChg + " storestate:false");
+                            BigDecimal tchange = tsum.subtract(addTc);
+                            if (tchange.signum() > 0)
+                                cmds.add("txnoutput id:" + txid + " amount:" + amt(tchange) + " address:" + tChg + tokArg + " storestate:false");
+                            ownerSignPost(txid, p.opk, cmds, cb);
+                        }
+                        @Override public void fail(String message) { CoinLock.release(mfunds); cb.onFailed(message); }
+                    });
+                }
+                @Override public void fail(String message) { cb.onFailed(message); }
+            });
+        } catch (RuntimeException e) { cb.onFailed(unexpected(e)); }
     }
 
     // ===================================================================== MIGRATE (reset floor, new addr)
@@ -254,42 +264,44 @@ public class PoolManager {
         // A migrate creates a NEW pool (a new recipe): refused once handed over, marked running until it answers.
         if (!Handover.begin(node.context())) { done.onFailed(Handover.BLOCKED); return; }
         final CreateResult cb = ending(done);
-        if (!BackupState.combinedUpToDate(node.context())) {
-            cb.onFailed("BACKUP_REQUIRED: save and verify a password-encrypted pool + node backup before creating another pool. Recovery and withdrawal remain available."); return;
-        }
-        if (!p.funded()) { cb.onFailed("pool has no live reserves"); return; }
-        if (newX == null || newY == null || newX.signum() <= 0 || newY.signum() <= 0) { cb.onFailed("enter the new reserves"); return; }
-        final BigDecimal newYc = newY.setScale(p.tokDecimals, RoundingMode.DOWN);
-        if (newYc.signum() <= 0) { cb.onFailed("new token reserve below the token grain"); return; }
-        if (!PoolCovenant.sizeOk(newX, newYc)) { cb.onFailed("new reserves too large — x×y must stay under 2^64"); return; }
-        final String kmin2 = PoolCovenant.kmin(newX, newYc);
-        final String script2 = PoolCovenant.script(p.opk, p.oadr, p.tok, kmin2);
-        deriveAddress(script2, new AddrCb() {
-            @Override public void ok(String a2, String mx2) {
-                if (a2.equalsIgnoreCase(p.address)) {
-                    cb.onFailed("these reserves give the same pool — change the amounts, or use Add to grow in place");
-                    return;
-                }
-                node.cmd("newscript trackall:true script:" + Util.scriptArg(script2), new NodeApi.Cb() {
-                    @Override public void onResult(JSONObject nj) {
-                        if (TxPost.truthy(nj, "status")) go();
-                        else cb.onFailed("Could not register the recovery covenant. Nothing was posted.");
-                    }
-                    @Override public void onError(String m) { cb.onFailed(m); }
-                    private void go() {
-                        Pool np = new Pool();
-                        np.newlyCreatedWithCurrentOwnerState = true;
-                        np.address = a2; np.mxaddress = mx2; np.opk = p.opk; np.oadr = p.oadr;
-                        np.kidx = p.kidx;   // same owner key, same derivation index
-                        np.tok = p.tok; np.kmin = kmin2; np.tokDecimals = p.tokDecimals;
-                        np.covenantScript = script2;   // exact covenant → OwnPoolStore recipe for recovery
-                        np.reserveM = newX; np.reserveT = newYc;
-                        buildMigrate(p, np, newX, newYc, cb);
-                    }
-                });
+        try {
+            if (!BackupState.combinedUpToDate(node.context())) {
+                cb.onFailed("BACKUP_REQUIRED: save and verify a password-encrypted pool + node backup before creating another pool. Recovery and withdrawal remain available."); return;
             }
-            @Override public void fail(String m) { cb.onFailed("new address derivation failed: " + m); }
-        });
+            if (!p.funded()) { cb.onFailed("pool has no live reserves"); return; }
+            if (newX == null || newY == null || newX.signum() <= 0 || newY.signum() <= 0) { cb.onFailed("enter the new reserves"); return; }
+            final BigDecimal newYc = newY.setScale(p.tokDecimals, RoundingMode.DOWN);
+            if (newYc.signum() <= 0) { cb.onFailed("new token reserve below the token grain"); return; }
+            if (!PoolCovenant.sizeOk(newX, newYc)) { cb.onFailed("new reserves too large — x×y must stay under 2^64"); return; }
+            final String kmin2 = PoolCovenant.kmin(newX, newYc);
+            final String script2 = PoolCovenant.script(p.opk, p.oadr, p.tok, kmin2);
+            deriveAddress(script2, new AddrCb() {
+                @Override public void ok(String a2, String mx2) {
+                    if (a2.equalsIgnoreCase(p.address)) {
+                        cb.onFailed("these reserves give the same pool — change the amounts, or use Add to grow in place");
+                        return;
+                    }
+                    node.cmd("newscript trackall:true script:" + Util.scriptArg(script2), new NodeApi.Cb() {
+                        @Override public void onResult(JSONObject nj) {
+                            if (TxPost.truthy(nj, "status")) go();
+                            else cb.onFailed("Could not register the recovery covenant. Nothing was posted.");
+                        }
+                        @Override public void onError(String m) { cb.onFailed(m); }
+                        private void go() {
+                            Pool np = new Pool();
+                            np.newlyCreatedWithCurrentOwnerState = true;
+                            np.address = a2; np.mxaddress = mx2; np.opk = p.opk; np.oadr = p.oadr;
+                            np.kidx = p.kidx;   // same owner key, same derivation index
+                            np.tok = p.tok; np.kmin = kmin2; np.tokDecimals = p.tokDecimals;
+                            np.covenantScript = script2;   // exact covenant → OwnPoolStore recipe for recovery
+                            np.reserveM = newX; np.reserveT = newYc;
+                            buildMigrate(p, np, newX, newYc, cb);
+                        }
+                    });
+                }
+                @Override public void fail(String m) { cb.onFailed("new address derivation failed: " + m); }
+            });
+        } catch (RuntimeException e) { cb.onFailed(unexpected(e)); }
     }
 
     private void buildMigrate(Pool p, Pool np, BigDecimal newX, BigDecimal newY, CreateResult cb) {
@@ -354,18 +366,20 @@ public class PoolManager {
         // The owner's own funds: never refused for the hand-over, but marked running so a hand-over waits for it.
         Handover.mark();
         final Result cb = ending(done);
-        if (!p.funded()) { cb.onFailed("pool has no live reserves to withdraw"); return; }
-        final String tokArg = " tokenid:" + p.tok;
-        String txid = "ppclose_" + tag();
-        List<String> cmds = new ArrayList<>();
-        cmds.add("txncreate id:" + txid);
-        cmds.add("txninput id:" + txid + " coinid:" + p.coinidM);   // 0 -> owner exit
-        cmds.add("txninput id:" + txid + " coinid:" + p.coinidT);   // 1 -> owner exit
-        cmds.add("txnoutput id:" + txid + " amount:" + amt(p.reserveM) + " address:" + p.oadr + " storestate:false");
-        cmds.add("txnoutput id:" + txid + " amount:" + amt(p.reserveT) + " address:" + p.oadr + tokArg + " storestate:false");
-        final String payoutAddress = p.oadr;
-        ownerSignPost(txid, p.opk, cmds, false,
-                (post, fail) -> CollectConfirmation.beforePost(node, txid, payoutAddress, post, fail), cb);
+        try {
+            if (!p.funded()) { cb.onFailed("pool has no live reserves to withdraw"); return; }
+            final String tokArg = " tokenid:" + p.tok;
+            String txid = "ppclose_" + tag();
+            List<String> cmds = new ArrayList<>();
+            cmds.add("txncreate id:" + txid);
+            cmds.add("txninput id:" + txid + " coinid:" + p.coinidM);   // 0 -> owner exit
+            cmds.add("txninput id:" + txid + " coinid:" + p.coinidT);   // 1 -> owner exit
+            cmds.add("txnoutput id:" + txid + " amount:" + amt(p.reserveM) + " address:" + p.oadr + " storestate:false");
+            cmds.add("txnoutput id:" + txid + " amount:" + amt(p.reserveT) + " address:" + p.oadr + tokArg + " storestate:false");
+            final String payoutAddress = p.oadr;
+            ownerSignPost(txid, p.opk, cmds, false,
+                    (post, fail) -> CollectConfirmation.beforePost(node, txid, payoutAddress, post, fail), cb);
+        } catch (RuntimeException e) { cb.onFailed(unexpected(e)); }
     }
 
     // ===================================================================== FORWARD TO DEFAULT WALLET

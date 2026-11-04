@@ -47,6 +47,9 @@ public class DoorHostGateTest {
 
     @Before public void up() {
         app = RuntimeEnvironment.getApplication();
+        // no node in a JVM test: the IPC transport's bindService must not deliver a null binder (as the other smoke tests do)
+        Shadows.shadowOf(app).setComponentNameAndServiceForBindService(new android.content.ComponentName(app, com.eurobuddha.dexicon.NodeTransportService.class),
+                new android.os.Messenger(new android.os.Handler(Looper.getMainLooper(), m -> true)).getBinder());
         TradingGate.record(app, new org.json.JSONArray());
         host = DoorHost.get(app);
         real = host.tombstones;
@@ -109,6 +112,17 @@ public class DoorHostGateTest {
         assertFalse("auto_publish off: every take declines", host.armMaker().hasLiquidity());
         host.prefs().edit().putBoolean("auto_publish", true).commit();
         assertTrue(host.armMaker().hasLiquidity());
+    }
+
+    /** The gate also lives INSIDE the engine (SwapEngine.setHostGate): no new lock anywhere while blocked or mid-switch. */
+    @Test public void theEngineItselfHaltsWhileGated() {
+        org.junit.Assume.assumeFalse(com.eurobuddha.atomix.IdentityWatch.halted());
+        assertFalse("open gate: the engine may lock", com.eurobuddha.atomix.swap.SwapEngine.halted());
+        installAtomiX();
+        assertTrue(TradingGate.blocked(app));
+        assertTrue("found app: the engine refuses every new lock", com.eurobuddha.atomix.swap.SwapEngine.halted());
+        Shadows.shadowOf(app.getPackageManager()).removePackage(TradingGate.ATOMIX);
+        assertFalse("gone again: the engine may lock", com.eurobuddha.atomix.swap.SwapEngine.halted());
     }
 
     @Test public void anUnreadMiniHubWithdrawsNothing() {

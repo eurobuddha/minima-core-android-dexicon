@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/test/java/com/eurobuddha/atomix/swap/IdentityGuardTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/test/java/com/eurobuddha/atomix/swap/IdentityGuardTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import static org.junit.Assert.assertTrue;
@@ -18,6 +18,7 @@ import com.eurobuddha.atomix.eth.EthNet;
 import com.eurobuddha.atomix.eth.EthRpc;
 import com.eurobuddha.atomix.eth.EthWallet;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -36,6 +37,9 @@ public class IdentityGuardTest {
 
     private SwapEngine engine;
     private SwapEngine.Notifier notifier;
+
+    /** The verdict is process-static; halted() now also refuses initiator starts, so never leak it. */
+    @After public void clearVerdict() { com.eurobuddha.atomix.IdentityWatch.resetForTest(); }
 
     @Before public void setUp() throws Exception {
         SwapEngine.clearRetryMarkersForTest();

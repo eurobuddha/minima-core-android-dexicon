@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/main/java/com/eurobuddha/atomix/eth/EthRpc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/main/java/com/eurobuddha/atomix/eth/EthRpc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.eth;
 
 import org.json.JSONArray;
@@ -76,8 +76,13 @@ public final class EthRpc {
 
     /** eth_call on exactly {@code endpoint} (see {@link #callOn}). */
     public String ethCallOn(String endpoint, String to, String data) throws IOException {
+        return ethCallOn(endpoint, to, data, "latest");
+    }
+
+    /** eth_call on exactly {@code endpoint} at {@code block} (a hex block number, or "latest"). */
+    public String ethCallOn(String endpoint, String to, String data, String block) throws IOException {
         try {
-            Object r = callOn(endpoint, "eth_call", new JSONArray().put(new JSONObject().put("to", to).put("data", data)).put("latest"));
+            Object r = callOn(endpoint, "eth_call", new JSONArray().put(new JSONObject().put("to", to).put("data", data)).put(block));
             return r == null ? null : r.toString();
         } catch (JSONException e) {
             throw new IOException("ETH eth_call build error: " + e.getMessage());
@@ -202,7 +207,7 @@ public final class EthRpc {
     }
 
     /** RPC QUANTITY is distinct from padded ABI DATA. EIP-2681 bounds account nonces to 64 bits. */
-    static BigInteger transactionCount(Object result) throws IOException {
+    public static BigInteger transactionCount(Object result) throws IOException {
         if (!(result instanceof String) || !((String) result).matches("0x(?:0|[1-9a-fA-F][0-9a-fA-F]{0,15})")) {
             throw new IOException("Invalid Ethereum transaction count from RPC");
         }

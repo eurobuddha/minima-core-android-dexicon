@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.90 app/src/test/java/com/eurobuddha/atomix/swap/RefundRetryTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.91 app/src/test/java/com/eurobuddha/atomix/swap/RefundRetryTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import static org.junit.Assert.assertTrue;
@@ -140,7 +140,7 @@ public class RefundRetryTest {
     @Test public void seeingMyOwnLockRecordsTheCoinEvenBeforeItExpires() throws Exception {
         engine.checkExpiredMinima(myExpiredCoin(), 2241000);   // not yet expired — still must record
         verify(db, times(1)).rememberLockCoin(eq(HASH), eq("0x" + "77".repeat(32)),
-                any(), any(), eq(MY_PK));
+                any(), any(), eq(MY_PK), any());
         verify(minima, never()).refund(any(JSONObject.class), any(MinimaHtlc.PostCb.class));
     }
 
