@@ -539,7 +539,10 @@ public final class DoorHost {
     /** Ask for a refund of my lock now; the answer (why not yet, or "refunding") comes back on the main thread. */
     public void refundNow(String hash, java.util.function.Consumer<String> answer) { engine.refundNow(hash, answer); }
     /** AtomiX checkNow: advance the swap and run the engine's live inspection of both chains (report on the main thread). */
-    public void inspect(String hash, java.util.function.Consumer<java.util.List<String>> report) { engine.poll(); engine.inspect(hash, report::accept); }
+    public void inspect(String hash, java.util.function.Consumer<java.util.List<String>> report) {
+        poll();   // the host's guarded pass: mid-sweep the sweep owns the ETH nonce and coin choice, and taps are throttled
+        engine.inspect(hash, report::accept);
+    }
     public int lastMinimaBlock() { return engine.lastMinimaBlock(); }
 
     /** The market's TAKE channel carries buyers' sealed hashlocks to a maker and makers' "retrying / declined" notices
@@ -1186,7 +1189,8 @@ public final class DoorHost {
         if (!ready()) return "AtomiX not ready — " + bootNote();
         if (IdentityWatch.halted()) return "Halted: this node no longer owns the keys AtomiX uses here.";
         if (gated()) return "Trading is off: one trading app per phone.";
-        if (busy || scanning) return "An AtomiX swap is already starting — wait for it to finish.";
+        if (busy) return "An AtomiX swap is already starting — wait for it to finish.";
+        if (scanning) return "Refreshing the order book — tap Start swap again in a moment.";
         if (plan == null || plan.legs.isEmpty()) return "Nothing to fill.";
         if (market != this.market) return "The market was switched — review the swap again.";
         if (to != null && !to.trim().isEmpty() && (plan.sell ? !DoorForwards.isEthAddr(to) : !DoorForwards.isMxAddr(to))) return "Bad destination address.";
