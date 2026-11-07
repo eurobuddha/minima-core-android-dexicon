@@ -47,6 +47,14 @@ public class FillTxnGuardTest {
         assertNotNull(FillTxn.takerGuard(wallet(), plan(coin("01", Tokens.MINIMA, "60", MAKER_ADDR), "  return signedby(" + MY_PK.toLowerCase() + ") "), new ArrayList<>()));
     }
 
+    @Test public void stateIsReadFromTheProofCoinNotTheInputView() throws Exception {
+        JSONObject blank = new JSONObject("{\"mmrproofs\":[{\"coin\":{\"coinid\":\"0x01\",\"state\":[]}}]}");
+        JSONObject locked = new JSONObject("{\"mmrproofs\":[{\"coin\":{\"coinid\":\"0x01\",\"state\":[]}},{\"coin\":{\"coinid\":\"0x02\",\"state\":[{\"port\":0,\"data\":\"0x01\"}]}}]}");
+        assertFalse(FillTxn.proofCarriesState(blank));
+        assertTrue(FillTxn.proofCarriesState(locked));
+        assertFalse(FillTxn.proofCarriesState(null));
+    }
+
     @Test public void makerCoinAtTheTakersPayingAddressIsRefusedInPlan() {
         FillPlan.Order o = new FillPlan.Order("sell", "0.01", "100", hex("b9"), Arrays.asList(hex("03")), Arrays.asList(MAKER_SCRIPT));
         try { FillPlan.plan(o, "50", Arrays.asList(coin("03", Tokens.MINIMA, "60", MY_ADDR)), Arrays.asList(coin("11", Tokens.MXUSD(), "5", MY_ADDR)), MY_ADDR); fail(); }

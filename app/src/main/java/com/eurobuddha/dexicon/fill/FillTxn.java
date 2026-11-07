@@ -137,6 +137,9 @@ public final class FillTxn {
                 JSONObject txn = resp == null ? null : resp.optJSONObject("transaction");
                 if (txn == null || txn.optJSONArray("inputs") == null || txn.optJSONArray("outputs") == null) { cb.done("txnview returned no transaction", null, null, null); return; }
                 List<Coin> ins = coins(txn.optJSONArray("inputs")), outs = coins(txn.optJSONArray("outputs"));
+                // review 7 Nov (R2-3): scripts run on the MMR-proof coin, and core checks only amount/address/token/coinid of
+                // `transaction.inputs` against it — a taker can blank the state there. Read state from the proofs themselves.
+                if (proofCarriesState(resp.optJSONObject("witness"))) { cb.done("refused: an input carries state", null, null, null); return; }
                 JSONArray st = txn.optJSONArray("state");
                 boolean hasState = false;
                 if (st != null) for (int i = 0; i < st.length(); i++) if (!st.isNull(i)) hasState = true;
@@ -225,6 +228,18 @@ public final class FillTxn {
         JSONArray sigs = v.optJSONArray("signatures");
         if (sigs != null) for (int i = 0; i < sigs.length(); i++) { JSONObject s = sigs.optJSONObject(i); if (s != null && !s.optBoolean("valid", false)) return false; }
         return true;
+    }
+
+    /** True when any witness MMR-proof coin has a non-empty state (the state its script will actually read). */
+    static boolean proofCarriesState(JSONObject witness) {
+        JSONArray proofs = witness == null ? null : witness.optJSONArray("mmrproofs");
+        if (proofs == null) return false;
+        for (int i = 0; i < proofs.length(); i++) {
+            JSONObject p = proofs.optJSONObject(i), c = p == null ? null : p.optJSONObject("coin");
+            JSONArray st = c == null ? null : c.optJSONArray("state");
+            if (st != null && st.length() > 0) return true;
+        }
+        return false;
     }
 
     static List<Coin> coins(JSONArray a) {
