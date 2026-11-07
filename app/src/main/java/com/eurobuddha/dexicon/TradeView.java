@@ -265,6 +265,8 @@ public final class TradeView extends LinearLayout {
     /** One ladder level: FAST / BOOK / POOL MINIMA at this grouped price. */
     private static final class Level {
         BigDecimal fast = BigDecimal.ZERO, book = BigDecimal.ZERO, pool = BigDecimal.ZERO, exact;
+        /** FAST orders here, and how many come from makers that co-sign my takes slowly (MakerSpeed). */
+        int fastN, slowN;
         boolean mine;
         BigDecimal total() { return fast.add(book).add(pool); }
     }
@@ -295,7 +297,9 @@ public final class TradeView extends LinearLayout {
         f.post(() -> { FrameLayout.LayoutParams p = (FrameLayout.LayoutParams) bar.getLayoutParams(); p.width = (int) (f.getWidth() * Math.min(1f, depthFrac)); bar.setLayoutParams(p); });
         LinearLayout row = new LinearLayout(getContext());
         row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(0, dp(3), 0, dp(3));
-        TextView p = tv((lv.mine ? "• " : "") + Util.fmtPrice(lv.exact != null ? lv.exact : price), 11f, ask ? Design.RED() : Design.IN(), Design.mono());   // the real best price in the row, never a rounded bucket
+        // ⏱ = every FAST order at this level is from a maker that has been slow to co-sign my takes
+        boolean slowLv = lv.fastN > 0 && lv.slowN == lv.fastN && lv.book.signum() == 0 && lv.pool.signum() == 0;
+        TextView p = tv((lv.mine ? "• " : "") + (slowLv ? "⏱ " : "") + Util.fmtPrice(lv.exact != null ? lv.exact : price), 11f, ask ? Design.RED() : Design.IN(), Design.mono());   // the real best price in the row, never a rounded bucket
         row.addView(p, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1.2f));
         String amt = amountText(lv.fast, lv.book, lv.pool);
         TextView am = tv(amt, amt.contains("\n") || amt.contains(" ") ? 9.5f : 11f, Design.TEXT(), Design.mono()); am.setGravity(Gravity.END);
@@ -530,12 +534,14 @@ public final class TradeView extends LinearLayout {
         BigDecimal tick = GROUPS[groupIdx];
         TreeMap<BigDecimal, Level> asks = new TreeMap<>(), bids = new TreeMap<>((a, b) -> b.compareTo(a));
         int fastN = 0, bookN = 0;
+        final java.util.Map<String, Long> speeds = act.makerSpeeds();
         for (Envelope o : book) {
             if (o.coins.isEmpty()) continue;   // unbacked: nobody can take it, so it is not on the book (owner 29 Oct)
             boolean sell = "sell".equals(o.side);
             BigDecimal p = new BigDecimal(o.price), amt = new BigDecimal(o.amount);
             Level lv = level(sell ? asks : bids, p, tick, sell);
             lv.fast = lv.fast.add(amt);
+            lv.fastN++; if (MakerSpeed.slow(speeds, o.signPk)) lv.slowN++;
             if (act.isMine(o)) lv.mine = true;
             fastN++;
         }

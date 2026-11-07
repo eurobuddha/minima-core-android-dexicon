@@ -311,6 +311,12 @@ public class MakerService extends Service {
 
     private void kickLadder() { if (ladder != null && paired && !chainBusy && !com.eurobuddha.dexicon.TradingGate.blocked(this)) ladder.pass(this::changed); }
 
+    static final long SYNC_GAP_MS = 60_000;
+    private long lastSyncMs;
+    private void syncMaybe(boolean sync, java.util.function.Consumer<MakerEngine.SyncReport> cb) {
+        if (sync) engine.syncRelays(cb); else cb.accept(new MakerEngine.SyncReport());
+    }
+
     static final int MAX_TAKES_PER_CYCLE = 16, MAX_TAKES_PER_SENDER = 2;
 
     private void onInbox(List<Envelope> msgs) {
@@ -334,7 +340,13 @@ public class MakerService extends Service {
         if (com.eurobuddha.dexicon.TradingGate.blocked(this)) { pausedPass(takes); return; }
         processTakes(takes, 0, () -> {
             if (ticks % 3 == 0) { settleFills(); voidStaleTakes(); }
-            ladder.pass(() -> cross.run(() -> afterCross(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
+            // Owner 7 Nov (FAST speed): the relay check reads EVERY relay's whole book one after another, and nothing
+            // reads the inbox meanwhile — a take (or a maker's answer to my take) waited behind it each cycle. It is a
+            // repair sweep: once a minute, or straight after a take, is enough.
+            long nowSync = System.currentTimeMillis();
+            boolean sync = !takes.isEmpty() || nowSync - lastSyncMs >= SYNC_GAP_MS;
+            if (sync) lastSyncMs = nowSync;
+            ladder.pass(() -> cross.run(() -> afterCross(() -> syncMaybe(sync, rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
                 for (String l : rep.lines) log(l);
                 if (rep.fixed > 0) changed();
                 // by the clock, not the tick count: in Doze one tick runs per 15-min heartbeat, and every one must refresh

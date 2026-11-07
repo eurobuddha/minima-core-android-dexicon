@@ -803,6 +803,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private TakeRun run;
 
     boolean taking() { return run != null; }
+    /** MakerSpeed averages, read once per book paint. */
+    java.util.Map<String, Long> makerSpeeds() { return MakerSpeed.load(db); }
     long takingSecs() { return run == null ? 0 : (System.currentTimeMillis() - run.t0) / 1000; }
     String takeLog() { return takeLog.toString(); }
     Envelope fastCross(boolean buy, BigDecimal price) { return bestFastCross(buy, price); }
@@ -890,6 +892,14 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             logStep("No other FAST order crosses " + r.price.toPlainString() + ".");
             finishSweep(); return;
         }
+        // best price first, always; among orders at the SAME price, the maker that has co-signed my takes fastest first
+        final java.util.Map<String, Long> speed = MakerSpeed.load(db);
+        final boolean buyR = r.buy;
+        java.util.Collections.sort(hits, (x, y) -> {
+            int c = new BigDecimal(x.price).compareTo(new BigDecimal(y.price));
+            if (c != 0) return buyR ? c : -c;
+            return Long.compare(MakerSpeed.avg(speed, x.signPk), MakerSpeed.avg(speed, y.signPk));
+        });
         if (r.tried.isEmpty()) logStep("Found " + hits.size() + " FAST order" + (hits.size() == 1 ? "" : "s") + " at or better than your price");
         tryOrder(hits.get(0));
     }
@@ -1027,6 +1037,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                         ui.postDelayed(() -> {
                             if (run == r && actId.equals(r.act) && db.pending(order.orderId) != null) {
                                 r.unanswered = r.unanswered.add(r.taking);
+                                MakerSpeed.record(db, order.signPk, SWEEP_WAIT_MS);
                                 logStep("  no answer in " + SWEEP_WAIT_MS / 1000 + "s — counted as possibly filled (if it is not co-signed within 5 minutes your node voids it); next order");
                                 r.act = null; nextOrder();
                             }
@@ -1049,6 +1060,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             if (ActivityLog.COSIGNED.equals(st)) {
                 logStep(String.format(java.util.Locale.ROOT, "  maker co-signed in %.1fs · %s MINIMA @ %s · txpow %s", a.optLong("cosignMs") / 1000.0, a.optString("amount"), a.optString("price"), a.optString("txpowid")));
                 r.got = r.got.add(r.taking);
+                if (r.order != null) MakerSpeed.record(db, r.order.signPk, a.optLong("cosignMs"));
                 followAct = r.act; followStatus = null;
                 r.act = null; nextOrder();
             } else if (ActivityLog.REFUSED.equals(st)) {
