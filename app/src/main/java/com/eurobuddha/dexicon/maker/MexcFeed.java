@@ -58,9 +58,11 @@ public final class MexcFeed {
             return a < 0 ? Long.MAX_VALUE : a;   // a backward clock jump reads as STALE, never fresh
         }
     }
-    public static boolean fresh() { return mid() > 0 && ageMs() <= FRESH_MS; }
+    public static boolean fresh() { return mid() > 0 && ageMs() <= FRESH_MS && !jumpPending(); }
+    /** Security review 7 Nov (R2-1): a move over JUMP_FRACTION is being confirmed — the held mid may be badly out of date. */
+    public static boolean jumpPending() { synchronized (LOCK) { return suspect > 0; } }
     /** True when a pegged ladder must not be live: no price at all, or the feed has been down past 12 h. */
-    public static boolean unusable() { return !(mid() > 0) || ageMs() > HARD_STALE_MS; }
+    public static boolean unusable() { return !(mid() > 0) || ageMs() > HARD_STALE_MS || jumpPending(); }
     /** No price and no failure yet since the app started: the first fetch is still on its way. A pegged ladder keeps its
      *  live orders meanwhile instead of withdrawing them (28 Oct: every app update cancelled the whole ladder). */
     public static boolean firstFetchPending() { synchronized (LOCK) { return price <= 0 && lastError == null; } }
@@ -120,9 +122,13 @@ public final class MexcFeed {
             double m = (a + b) / 2;
             if (err == null && (!(m > 0) || Double.isInfinite(m))) err = "bad price";
             if (err == null && price > 0 && Math.abs(m - price) / price > JUMP_FRACTION) {
-                boolean agrees = suspect > 0 && Math.abs(m - suspect) / suspect < CONFIRM_BAND;
-                if (!agrees) { suspect = m; suspectAtMs = nowMs; err = "suspect jump " + fmt(price) + "→" + fmt(m) + " — held until it holds for 60 s"; }
-                else if (nowMs - suspectAtMs < CONFIRM_MS) err = "confirming jump " + fmt(price) + "→" + fmt(m);
+                // Security review 7 Nov (R2-1): a move is confirmed once reads stay on the SAME side of the held price, beyond
+                // JUMP_FRACTION, for CONFIRM_MS — a trending market (each read a little further) no longer resets the timer
+                // forever and freezes the ladder at an old price. While it is pending, unusable()/fresh() keep a pegged ladder
+                // and auto-cross OFF, so nothing is quoted or refilled at the old price meanwhile.
+                boolean sameSide = suspect > 0 && Math.signum(m - price) == Math.signum(suspect - price);
+                if (!sameSide) { suspect = m; suspectAtMs = nowMs; err = "suspect jump " + fmt(price) + "→" + fmt(m) + " — held until it holds for 60 s"; }
+                else { suspect = m; if (nowMs - suspectAtMs < CONFIRM_MS) err = "confirming jump " + fmt(price) + "→" + fmt(m); }
             }
             if (err != null) { lastError = err; return err; }
             suspect = 0; price = m; bid = b; ask = a; goodAtMs = nowMs; lastError = null;

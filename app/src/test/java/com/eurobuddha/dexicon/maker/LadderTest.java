@@ -99,6 +99,13 @@ public class LadderTest {
         assertEquals(0.01, MexcFeed.mid(), 1e-12);
         assertNull(MexcFeed.accept(0.01009, 0.01011, now + 62_000));    // within 3 %: taken at once
         assertEquals(0.0101, MexcFeed.mid(), 1e-12);
+        // review 7 Nov (R2-1): while a jump is pending the pegged ladder is OFF; a steady trend confirms after 60 s
+        assertNotNull(MexcFeed.accept(0.01059, 0.01061, now + 63_000));  // +5 %
+        assertTrue(MexcFeed.jumpPending()); assertTrue(MexcFeed.unusable()); assertFalse(MexcFeed.fresh());
+        assertNotNull(MexcFeed.accept(0.01069, 0.01071, now + 93_000));  // +6 %, same side: timer kept
+        assertNull(MexcFeed.accept(0.01079, 0.01081, now + 124_000));    // +7 %, same side, held 61 s: taken
+        assertEquals(0.0108, MexcFeed.mid(), 1e-12);
+        assertFalse(MexcFeed.jumpPending());   // (unusable() also reads the clock: these reads are stamped in the future)
     }
 
     @Test public void wideningRampsFromOneToTen() {
