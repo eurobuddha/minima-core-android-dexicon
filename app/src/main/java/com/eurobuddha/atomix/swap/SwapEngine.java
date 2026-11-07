@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.98 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.99 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -1465,6 +1465,7 @@ public final class SwapEngine {
             // NEVER retried (the 30-min stall we hit). Now the timestamp is the gate: markEthAttempt stamps NOW
             // (same-cycle dedup), and after ETH_RETRY_SECS a lost/failed claim re-fires on its own. No inflight.
             if (db.haveCollect(hash) || !tryEthAttempt("claimM:" + hash)) return;   // MA-20: atomic due-check-and-mark
+            markSecretOut(hash);                          // before the post: a retry must never be blocked by the reveal margin
             db.setSwapStatus(hash, SwapDb.ST_CLAIMING);   // counterparty leg found — claiming now
             notifier.onSwapsChanged();
             SwapLog.d("claim MINIMA leg " + hash + " amount=" + MinimaHtlc.coinAmount(coin));
@@ -1858,6 +1859,7 @@ public final class SwapEngine {
         if (!ethGasAffordable(hash, EthHtlc.GAS_WITHDRAW)) { inflight.remove("wdEth:" + hash); return; }
         try {
             markEthAttempt("wdEth:" + hash);
+            markSecretOut(hash);                   // before the send: a retry must never be blocked by the reveal margin
             db.setSwapStatus(hash, SwapDb.ST_CLAIMING);
             ui.post(notifier::onSwapsChanged);
             eth.withdraw(contractId, secret);      // ack only; success is confirmed on-chain, not here
@@ -2098,10 +2100,16 @@ public final class SwapEngine {
         return false;
     }
 
-    /** True when this swap's secret is mine and still unrevealed by anyone else: I initiated it (I generated the secret). */
+    /** True while this swap's secret is mine and has never gone out: I initiated it (I generated the secret) and no
+     *  claim/withdraw of mine has carried it yet. Once one has (review 7 Nov R2-1), it is public and a retry — e.g. a
+     *  claim that did not mine — must never be blocked, or the counterparty refunds and uses the secret on my first leg. */
     private boolean iMadeTheSecret(String hash) {
         SwapDb.Swap sw = db.getSwap(hash);
-        return sw != null && "INITIATOR".equals(sw.role);
+        return sw != null && "INITIATOR".equals(sw.role) && !db.hasEvent(hash, SwapDb.EV_SECRET_OUT);
+    }
+    private void markSecretOut(String hash) {
+        SwapDb.Swap sw = db.getSwap(hash);
+        if (sw != null && "INITIATOR".equals(sw.role) && !db.hasEvent(hash, SwapDb.EV_SECRET_OUT)) db.logEvent(hash, SwapDb.EV_SECRET_OUT, "", "", "");
     }
 
     private long ethNowCache = 0, ethNowCacheAt = 0;
