@@ -167,12 +167,21 @@ public final class FillTxn {
                                     if (why != null) { fail("refused: " + why); return; }
                                     notInMempool(takerCoins, 0);
                                 }
+                                // `coins coinid:` only sees my node's unpruned window (~1024 blocks): a taker coin older than that
+                                // is not found at all - then valid.mmrproofs (already required) proves it unspent on chain, and
+                                // it is accepted. Only a coin I CAN see is also required to be out of the mempool.
                                 private void notInMempool(List<String> ids, int i) {
                                     if (i >= ids.size()) { sign(); return; }
-                                    node.cmdR("coins coinid:" + ids.get(i) + " checkmempool:true", new NodeApi.Cb() {
-                                        public void onResult(JSONObject cj) {
-                                            if (NodeApi.rows(cj).isEmpty()) { fail("refused: a taker input is already spent or in the mempool"); return; }
-                                            notInMempool(ids, i + 1);
+                                    node.cmdR("coins coinid:" + ids.get(i), new NodeApi.Cb() {
+                                        public void onResult(JSONObject any) {
+                                            if (NodeApi.rows(any).isEmpty()) { notInMempool(ids, i + 1); return; }   // outside my window
+                                            node.cmdR("coins coinid:" + ids.get(i) + " checkmempool:true", new NodeApi.Cb() {
+                                                public void onResult(JSONObject cj) {
+                                                    if (NodeApi.rows(cj).isEmpty()) { fail("refused: a taker input is already being spent (mempool)"); return; }
+                                                    notInMempool(ids, i + 1);
+                                                }
+                                                public void onError(String m) { fail("refused: cannot check the taker's inputs (" + m + ")"); }
+                                            });
                                         }
                                         public void onError(String m) { fail("refused: cannot check the taker's inputs (" + m + ")"); }
                                     });
