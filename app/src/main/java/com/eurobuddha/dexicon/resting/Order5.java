@@ -64,7 +64,9 @@ public final class Order5 {
                     JSONObject e = arr.optJSONObject(i);
                     if (e == null) continue;
                     int p = e.optInt("port", -1);
-                    if (p >= 0 && p < 9) st[p] = e.optString("data", null);
+                    // SECURITY (review 7 Nov): a transaction can carry a port twice; the covenant binds the FIRST entry
+                    // (KISS getPrevState), so keep the first — the book scan now asks for this array form.
+                    if (p >= 0 && p < 9 && st[p] == null) st[p] = e.optString("data", null);
                 }
             } else if (stateObj instanceof JSONObject) {   // simplestate:true map form
                 JSONObject map = (JSONObject) stateObj;

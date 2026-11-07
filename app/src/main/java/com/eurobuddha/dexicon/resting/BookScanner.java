@@ -16,7 +16,7 @@ import java.util.Map;
 /**
  * The bounded V5 book scan — TWO commands total (Limit fired ten):
  *
- *   1. coins simplestate:true order:desc depth:<SCAN_DEPTH> address:<V5>   — the book
+ *   1. coins order:desc depth:<SCAN_DEPTH> address:<V5>   — the book
  *   2. coins relevant:true address:<V5>                                    — ownership belt
  *
  * SCAN_DEPTH sits under the node's ~1024-block visibility trim and above EXPIRY_BLOCKS, so
@@ -63,7 +63,7 @@ public final class BookScanner {
             return;
         }
         int depth = Math.min(fromAge + width, DexContract.SCAN_DEPTH);
-        node.cmd("coins simplestate:true order:desc address:" + DexContract.ADDR_V5
+        node.cmd("coins order:desc address:" + DexContract.ADDR_V5
                 + " coinage:" + fromAge + " depth:" + depth, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 Object resp = json.opt("response");
