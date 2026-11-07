@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.99 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.0 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -61,6 +61,12 @@ public final class SwapEngine {
      *  ~CP_SECS / ~CP_BLOCKS left, far above these. */
     public static final long REVEAL_MIN_SECS            = 10 * 60;                           // 600
     public static final int  REVEAL_MIN_BLOCKS          = 12;                                // ~10 min
+    /** SECURITY (review 7 Nov, CRITICAL): HTLC v1.2 checks SHA2(secret) EQ hash on a secret of ANY length, while the vault's
+     *  withdraw(bytes32,bytes32) takes exactly 32 bytes. On an ETH-first take the TAKER makes the secret: a 40-byte one
+     *  claims my Minima counter-leg, and my USDT withdraw can never match it (the taker then refunds). Until a v1.3 script
+     *  asserts LEN(secret) EQ 32, a maker does not lock a Minima counter-leg against a USDT lock. Swaps already in flight
+     *  (a row exists) are untouched. Owner decision pending: flip to false only with HTLC v1.3. */
+    public static final boolean ETH_FIRST_PAUSED       = true;
     private static final int  NOTIFY_SCAN_DEPTH         = 256;                               // bounded notify scan
     private static final int  HTLC_SCAN_DEPTH           = 256;                               // bounded HTLC coin scan
     /** REFUND discovery only. The node's `coins depth:` is a walk-back over BLOCKS from the tip
@@ -2148,6 +2154,7 @@ public final class SwapEngine {
         // I don't know the secret → I'm an ERC20→mxUSDT responder; lock the mxUSDT counter-leg.
         if (io.isShutdown() || halted()) return;   // stopped host/key mismatch: no new liability
         if (db.haveSentCounterParty(hash)) return;
+        if (ETH_FIRST_PAUSED && db.getSwap(hash) == null) { declineNote(hash, "buys paid in USDT are paused on this maker until HTLC v1.3 (the v1.2 script cannot require a 32-byte secret)"); return; }
         // Persistent dedup (survives a restart / a lost txnpost response that the in-memory CP_LOCKING can't):
         // lockMinimaCounterLeg records the swap row BEFORE broadcast, so a row here means this hash is already
         // being (or was) locked — never re-lock it (the mxUSDT leg has no on-chain hash-uniqueness).

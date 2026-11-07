@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.99 app/src/main/java/com/eurobuddha/comms/QrUtil.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.0 app/src/main/java/com/eurobuddha/comms/QrUtil.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.comms;
 
 import android.graphics.Bitmap;
