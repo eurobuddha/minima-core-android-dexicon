@@ -598,13 +598,13 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         BigDecimal rest = amount.subtract(plan.totalMinima).max(BigDecimal.ZERO);
         StringBuilder sb = new StringBuilder();
         if (both) sb.append("SWEEP ").append(PriceMath.fmt(plan.totalMinima.add(fastQ))).append(" MINIMA, up to ").append(PriceMath.fmtPrice(price))
-                .append(", in two parts:\n  1. ").append(PriceMath.fmt(plan.totalMinima)).append(" on-chain now (below)\n  2. then up to ")
-                .append(PriceMath.fmt(fastQ)).append(" from FAST orders, best price first, the moment part 1 is posted\n");
+                .append(", in two parts:\n  1. up to ").append(PriceMath.fmt(fastQ)).append(" from FAST orders now, best price first — instant\n  2. then ")
+                .append(PriceMath.fmt(plan.totalMinima)).append(" on-chain (below), re-quoted at your limit the moment part 1 ends\n");
         if (both) {
             BigDecimal avg = sweepAvg(plan.totalMinima, plan.totalMxusd, fastQ, fastAvg(buy, price, fastQ));
             if (avg != null) sb.append("Average over both parts ≈ ").append(PriceMath.fmtPrice(avg)).append(" MxUSD per MINIMA (")
                     .append(PriceMath.fmt(plan.totalMxusd.add(fastQ.multiply(fastAvg(buy, price, fastQ))))).append(" MxUSD)\n");
-            sb.append("\nPART 1 — ");
+            sb.append("\nPART 2 — ");
         }
         sb.append(buy ? "Buying " : "Selling ").append(PriceMath.fmt(plan.totalMinima)).append(" MINIMA now from on-chain liquidity\n");
         sb.append("Effective ").append(PriceMath.fmtPrice(plan.effectivePrice)).append("  ·  ").append(PriceMath.fmt(plan.totalMxusd)).append(" MxUSD\n");
@@ -629,18 +629,22 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
               .append("\n     pool ").append(a.pool.address).append("\n");
         }
         if (fastBest != null) sb.append("\nBeats the best FAST ").append(buy ? "ask" : "bid").append(" @ ").append(fastBest.price).append(" for this size; FAST is not used in this trade.\n");
-        if (both) sb.append("\nPART 2 — FAST: up to ").append(PriceMath.fmt(fastQ)).append(" MINIMA, one maker after another, no further dialog; progress shows in the trade log. If part 1 fails, part 2 is not sent.\n");
+        if (both) sb.append("\nPART 1 — FAST: up to ").append(PriceMath.fmt(fastQ)).append(" MINIMA, one maker after another, no further dialog; progress shows in the trade log. Part 2 never uses part 1's coins; if its own coins are still confirming it waits for them by itself.\n");
         if (!both && rest.signum() > 0) sb.append("\nThe remaining ").append(PriceMath.fmt(rest)).append(" MINIMA is NOT traded or rested by this transaction — place it again once it confirms.\n");
         sb.append("\nOne atomic transaction, signed by your node; final after one block.");
         track(new AlertDialog.Builder(this, Design.dialogTheme())
                 .setTitle(both ? (buy ? "Confirm sweep buy · FAST + " : "Confirm sweep sell · FAST + ") + routeName(plan) : buy ? "Confirm buy · BOOK/POOL" : "Confirm sell · BOOK/POOL")
                 .setMessage(sb.toString())
                 .setPositiveButton("Execute", (d, w) -> {
+                    if (both && run != null) { toast("A FAST trade is still running — wait for it to finish"); return; }
                     if (both) {
-                        pendingBoth = () -> { logStep("Part 1 posted — part 2: FAST up to " + PriceMath.fmt(fastQ) + " MINIMA"); executeTake(buy, price, fastQ); };
-                        pendingBothUntil = System.currentTimeMillis() + 12 * 60_000L;   // autoFund may wait up to 10 blocks
-                    } else pendingBoth = null;
-                    executeComposite(plan, buy, amount, price, 0);
+                        // owner 7 Nov: FAST first (instant), then on-chain — the on-chain path already waits for confirming
+                        // coins and retries by itself (autoFund); the FAST path cannot.
+                        final BigDecimal chainQ = amount;
+                        pendingBoth = () -> bothPart2(buy, price, chainQ);
+                        pendingBothUntil = System.currentTimeMillis() + 10 * 60_000L;
+                        executeTake(buy, price, fastQ);
+                    } else { pendingBoth = null; executeComposite(plan, buy, amount, price, 0); }
                 })
                 .setNegativeButton("Back", null)
                 .show());
@@ -677,8 +681,6 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 JSONArray insArr = ids.optJSONArray("ins");
                 for (int i = 0; insArr != null && i < insArr.length(); i++) postedIns.add(insArr.optString(i).toLowerCase(java.util.Locale.ROOT));
                 walletCache.clear();   // the next FAST take re-reads the wallet: these inputs are spent in the mempool
-                Runnable both = pendingBoth; pendingBoth = null;
-                if (both != null && System.currentTimeMillis() < pendingBothUntil) ui.post(both);
                 // BOOK/POOL fills join HISTORY and the CSV like FAST fills; MakerService.settleFills settles them by output coin.
                 try {
                     db.saveFill(new JSONObject().put("role", "taker").put("orderId", "").put("side", buy ? "buy" : "sell")
@@ -701,8 +703,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                         || message.contains("needs more than") || message.contains("TxPoW size") || message.contains("too large")))
                     autoFund(buy, amount, price, buy ? Tokens.MXUSD() : Tokens.MINIMA, buy ? plan.totalMxusd : plan.totalMinima, message);
                 else {
-                    boolean dropped = pendingBoth != null; pendingBoth = null;
-                    toast(dropped ? message + " — part 2 (FAST) was not sent" : message);
+                    toast(message);
                 }
             }
         });
@@ -1176,7 +1177,36 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         }
     }
 
-    private void endRun() { run = null; busy = false; repaint(); }
+    private void endRun() {
+        run = null; busy = false; repaint();
+        Runnable both = pendingBoth; pendingBoth = null;   // a SWEEP's on-chain part follows its FAST part, however that ended
+        if (both != null && System.currentTimeMillis() < pendingBothUntil) ui.post(both);
+    }
+
+    /** A SWEEP's part 2: re-quote the on-chain share at the same limit NOW (the pools may have moved during part 1) and
+     *  run it through the usual confirmed-coins / consolidate retry. Never more than the share part 1 was planned beside;
+     *  coins still held by part 1's takes are reserved so the on-chain trade can never spend one. */
+    private void bothPart2(boolean buy, BigDecimal price, BigDecimal chainQ) {
+        final List<Order5> orders = new ArrayList<>(restingBook().values());
+        final List<Pool> pools = new ArrayList<>(restingPools());
+        final long block = chainBlock;
+        List<JSONObject> held = new ArrayList<>();
+        for (String id : pendingTakeCoins()) { try { held.add(new JSONObject().put("coinid", id)); } catch (Exception ignored) {} }
+        com.eurobuddha.dexicon.resting.CoinLock.reserve(held);
+        busy = true; setStage("Sweep part 2 · quoting on-chain"); repaint();
+        quoteExec.execute(() -> {
+            CompositeRouter.Plan p2;
+            try { p2 = CompositeRouter.plan(orders, pools, buy, chainQ, price, block); } catch (RuntimeException e) { p2 = null; }
+            final CompositeRouter.Plan plan = p2;
+            ui.post(() -> {
+                if (closed) return;
+                busy = false; setStage("");
+                if (plan == null || plan.isEmpty()) { logStep("Part 2: on-chain liquidity moved past your limit — nothing more was traded."); repaint(); return; }
+                logStep("Part 2: on-chain " + PriceMath.fmt(plan.totalMinima) + " MINIMA via " + routeName(plan) + " @ avg " + PriceMath.fmtPrice(plan.effectivePrice) + " — see ACTIVITY");
+                executeComposite(plan, buy, chainQ, price, 0);
+            });
+        });
+    }
 
     /** The sweep's last line: what was co-signed, what may still be, and that nothing rests. */
     private void finishSweep() {
@@ -1189,7 +1219,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         else if (r.got.signum() == 0 && r.unanswered.signum() == 0) logStep("Nothing was traded and no order was placed.");
         // review 7 Nov (M4): the field keeps only what is surely untraded, so a second click can never re-buy a take that
         // may still be co-signed
-        if ((r.got.signum() > 0 || r.unanswered.signum() > 0) && trade != null) trade.setAmount(open.max(BigDecimal.ZERO));
+        if (pendingBoth != null && trade != null) trade.setAmount(BigDecimal.ZERO);   // a SWEEP: part 2 follows; never leave a re-buyable amount
+        else if ((r.got.signum() > 0 || r.unanswered.signum() > 0) && trade != null) trade.setAmount(open.max(BigDecimal.ZERO));
         endRun();
     }
 

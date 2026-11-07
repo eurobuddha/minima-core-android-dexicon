@@ -516,7 +516,7 @@ public final class TradeView extends LinearLayout {
                 boolean sweepBest = sAvg != null && better(sAvg, fAvg) && better(sAvg, qAvg);
                 cta(cta3Btn, !poolsShown ? "SWEEP · " + r3 + " PRICES LOADING…"
                         : "SWEEP " + side + Util.fmt(s3.chainQ.add(s3.fastQ)) + " · " + r3 + " + FAST · avg " + (sAvg == null ? "—" : Util.fmtPrice(sAvg))
-                          + "\n" + Util.fmt(s3.chainQ) + " on-chain, then up to " + Util.fmt(s3.fastQ) + " instant" + (sweepBest ? "  ★ best price" : ""),
+                          + "\nup to " + Util.fmt(s3.fastQ) + " instant, then " + Util.fmt(s3.chainQ) + " on-chain" + (sweepBest ? "  ★ best price" : ""),
                         free && poolsShown);
                 if (sweepBest) {   // the star moves to the sweep
                     ctaBtn.setText(ctaBtn.getText().toString().replace("\n★ best price", ""));
