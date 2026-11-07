@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.0 app/src/main/java/com/eurobuddha/atomix/swap/PriceOracle.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.1 app/src/main/java/com/eurobuddha/atomix/swap/PriceOracle.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.content.SharedPreferences;
@@ -42,7 +42,7 @@ public final class PriceOracle {
      *  identical for both — only {@link #fetchOnce()} branches on the model. */
     public static String source() { return TradingContext.active().pricingParity ? "Parity" : "MEXC"; }
     private static final double PARITY_MID = 1.0;   // mxUSDT ↔ ERC20 USDT mid (no external feed)
-    private static final String DEPTH_URL = "https://api.mexc.com/api/v3/depth?symbol=MINIMAUSDT&limit=20";
+    private static final String DEPTH_URL = "https://api.mexc.com/api/v3/depth?symbol=MINIMAUSDT&limit=50";
     private static final String BOOK_URL  = "https://api.mexc.com/api/v3/ticker/bookTicker?symbol=MINIMAUSDT";
 
     public static final long FRESH_MS = 5 * 60_000;          // ≤ this old → peg TIGHT at the configured step
@@ -50,8 +50,12 @@ public final class PriceOracle {
     private static final long WITHDRAW_GRACE_MS = 60_000;    // must have been TRYING this long (this process) first
     private static final long FETCH_GAP_MS = 30_000;         // min gap between fetch attempts
     private static final long MIN_REPRICE_GAP_MS = 3 * 60_000;   // chain-spam floor between peg republishes
-    private static final double JUMP_FRACTION = 0.5;         // a >50% move needs two consecutive agreeing reads
-    private static final double DEPTH_MIN_USDT = 25;         // effective bid/ask = book level where cumulative notional ≥ this
+    /** SECURITY (review 7 Nov, port of Dexicon MexcFeed's 30 Oct hardening): a >3% move is taken only once reads stay on the
+     *  same side beyond it for CONFIRM_MS, and the effective bid/ask needs 100 USDT of depth. While a jump is pending the
+     *  maker declines new takes ({@link #jumpPending}) — its published levels may be priced off an outdated mid. */
+    private static final double JUMP_FRACTION = 0.03;
+    private static final long CONFIRM_MS = 60_000;
+    private static final double DEPTH_MIN_USDT = 100;        // effective bid/ask = book level where cumulative notional ≥ this
 
     // Stay-live-with-defensive-widening: when the feed is STALE but we still have a last-good mid, keep the
     // market up (so a phone that sleeps overnight keeps supplying liquidity) but widen the spread the longer
@@ -91,6 +95,7 @@ public final class PriceOracle {
     private static long goodAtMs = 0;                     // when the last good read landed
     private static long lastTryMs = 0, firstTryMs = 0;    // fetch pacing / staleness baseline before first success
     private static double suspect = 0;                    // big-jump candidate awaiting a confirming read
+    private static long suspectAtMs = 0;
     private static boolean fetching = false;
     private static String lastError = null;
     private static SharedPreferences sPrefs;              // set by init(); only P_LAST_OK is written from here
@@ -155,7 +160,9 @@ public final class PriceOracle {
         }
     }
 
-    public static boolean fresh() { return mid() > 0 && ageMs() <= FRESH_MS; }
+    public static boolean fresh() { return mid() > 0 && ageMs() <= FRESH_MS && !jumpPending(); }
+    /** A >3% MEXC move is being confirmed: the published peg may be priced off an outdated mid (review 7 Nov). */
+    public static boolean jumpPending() { synchronized (LOCK) { return suspect > 0; } }
 
     /** Feed down past the HARD ceiling: withdraw even with a last-good price (bounds a multi-day-outage
      *  pick-off). Distinct from {@link #feedDownPastLimit} (the no-price tombstone window). */
@@ -275,11 +282,12 @@ public final class PriceOracle {
             synchronized (LOCK) {
                 if (staleForActive(false)) return;   // switched away from the MINIMA/MEXC currency mid-fetch → drop
                 if (price > 0 && Math.abs(m - price) / price > JUMP_FRACTION) {
-                    // Suspect glitch: only accept once a SECOND consecutive read lands within 10% of it.
-                    if (!(suspect > 0 && Math.abs(m - suspect) / suspect < 0.10)) {
-                        suspect = m; lastError = "suspect jump " + fmt(price) + "→" + fmt(m);
-                        return;
-                    }
+                    // Suspect move: taken only once reads stay on the SAME side beyond JUMP_FRACTION for CONFIRM_MS.
+                    long nowMs = System.currentTimeMillis();
+                    boolean sameSide = suspect > 0 && Math.signum(m - price) == Math.signum(suspect - price);
+                    if (!sameSide) suspectAtMs = nowMs;
+                    suspect = m;
+                    if (!sameSide || nowMs - suspectAtMs < CONFIRM_MS) { lastError = "suspect jump " + fmt(price) + "→" + fmt(m) + " — held until it holds for 60 s"; return; }
                 }
                 suspect = 0;
                 price = m; bid = b; ask = a;

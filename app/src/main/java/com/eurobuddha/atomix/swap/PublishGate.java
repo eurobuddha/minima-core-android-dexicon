@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.0 app/src/main/java/com/eurobuddha/atomix/swap/PublishGate.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.1 app/src/main/java/com/eurobuddha/atomix/swap/PublishGate.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.SystemClock;
