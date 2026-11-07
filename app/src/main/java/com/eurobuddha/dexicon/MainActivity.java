@@ -904,7 +904,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         final String actId = ActivityLog.newId("fast_");
         final long t = System.currentTimeMillis();
         boolean takerBuys = "sell".equals(order.side);
-        r.act = actId; r.orderId = order.orderId; r.order = order;
+        r.act = actId; r.orderId = order.orderId; r.order = order; r.taking = BigDecimal.ZERO;   // set once signed: nothing is counted for a take never sent
         try {
             ActivityLog.add(db, new JSONObject().put("id", actId).put("route", "FAST").put("role", "taker").put("side", takerBuys ? "buy" : "sell")
                     .put("amount", plan.filled).put("price", order.price).put("mxusd", takerBuys ? plan.takerGives : plan.makerGives)
@@ -914,6 +914,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         liveActId = actId;
         logStep("  signing your side…");
         FillTxn.build(node, plan, (err, hex) -> {
+            // review 7 Nov (L): the sweep ended (gate shut, …) while this was signing — never send it, never touch a later run
+            if (run != r) { if (run == null) busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "not sent: the trade was stopped")); return; }
             if (err != null) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "build failed: " + err)); logStep("  build failed: " + err); finishSweep(); return; }
             logStep(String.format(java.util.Locale.ROOT, "  signed in %.1fs", (System.currentTimeMillis() - t) / 1000.0));
             r.taking = new BigDecimal(plan.filled); r.left = r.left.subtract(r.taking);   // counted from here: it can be co-signed
@@ -1520,7 +1522,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     /** The gate shut: end a one-click run, forget a pending remainder or retry, close confirm / edit dialogs. */
     private void haltTrading() {
         gateGen++;
-        if (run != null) endRun();
+        // review 7 Nov (L): end a sweep the normal way, so a take still waiting counts as possibly filled and the amount
+        // field keeps only what is surely untraded (a full amount left there invites a second, over-buying click)
+        if (run != null) { if (run.act != null) { run.unanswered = run.unanswered.add(run.taking); run.act = null; } finishSweep(); }
         if (db != null) { db.setMeta("rest_due", ""); db.setMeta("retry", ""); db.setMeta("retry_due", ""); }
         dismissDialogs();
         stopCcyGlow();
