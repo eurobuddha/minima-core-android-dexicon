@@ -46,10 +46,11 @@ public final class MakerEngine {
     public interface RefreshDone { void done(String err, int republished, String relockTxpowid); }
     public interface CoinsCb { void done(String err, List<Coin> coins); }
 
-    /** Owner 7 Nov, the maker heartbeat: orders live 45 min and are re-signed (fresh seq) once under 30 min remain, so a
-     *  maker that goes silent drops off every relay within 45 min, and takers hide it after {@link
+    /** Owner 7 Nov, the maker heartbeat: orders live 60 min and are re-signed (fresh seq) once under 50 min remain — about
+     *  every 10 min awake, at every 15-min Doze alarm — so two missed alarms in a row are survived (review 7 Nov M2). A
+     *  maker that goes silent drops off every relay within 60 min, and takers hide it after {@link
      *  com.eurobuddha.dexicon.relay.RelayClient#LIVE_SECONDS}. Was 23 h: a dead maker's offer stayed takeable all day. */
-    public static final long EXPIRY_SECONDS = 45 * 60, REFRESH_BEFORE_SECONDS = 30 * 60;
+    public static final long EXPIRY_SECONDS = 60 * 60, REFRESH_BEFORE_SECONDS = 50 * 60;
     public static final int MAX_COINS = 32;
     private static final Pattern SIMPLE = Pattern.compile("^RETURN SIGNEDBY\\(0x[0-9A-Fa-f]{64}\\)$");
     private static final Pattern DECIMAL = Pattern.compile("^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,8})?$");
@@ -539,7 +540,8 @@ public final class MakerEngine {
             }
             if (!needRepub) { step[0].run(); return; }
             o.seq = nextSeq(o); o.expiry = now() + EXPIRY_SECONDS;
-            publish(o, e -> { db.saveOrder(o); n[0]++; step[0].run(); });
+            // review 7 Nov (M2): only a re-sign some relay accepted is saved — a rejected one stays due, retried next pass
+            publish(o, e -> { if (e == null) { db.saveOrder(o); n[0]++; } step[0].run(); });
         };
         step[0].run();
     }

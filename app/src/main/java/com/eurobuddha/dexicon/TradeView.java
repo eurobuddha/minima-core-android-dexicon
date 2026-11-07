@@ -453,6 +453,7 @@ public final class TradeView extends LinearLayout {
     void paintCtaPublic() { paintCta(); }
     void paintLog() { if (logTv == null) return; String t = act.takeLog(); logTv.setText(t.trim()); logTv.setVisibility(t.isEmpty() ? GONE : VISIBLE); }
     void clearAmount() { if (amountIn != null) amountIn.setText(""); }
+    void setAmount(BigDecimal a) { if (amountIn != null) amountIn.setText(a.signum() > 0 ? a.stripTrailingZeros().toPlainString() : ""); }
 
     private void submit() {
         BigDecimal price = Util.dec(priceIn.getText().toString()), amount = Util.dec(amountIn.getText().toString());

@@ -58,7 +58,7 @@ public class RelayClientTest {
         assertTrue(c.applyOrderStrict(old));
         assertEquals("silent maker: hidden", 0, c.orders("sell").size());
         String resigned = Envelopes.order(maker, "MINIMA/MxUSD", "sell", "0.00308", "1000", Arrays.asList(COIN), new ArrayList<>(), ADDR,
-                "0x0000000000000007", TestIds.NOW - 5, TestIds.NOW + 3600);
+                "0x0000000000000007", TestIds.NOW - 5, TestIds.NOW + 2 * 3600);
         assertTrue(c.applyOrderStrict(resigned));
         assertEquals("heard again: shown", 1, c.orders("sell").size());
         now[0] = TestIds.NOW - 5 + RelayClient.LIVE_SECONDS;
@@ -69,7 +69,7 @@ public class RelayClientTest {
                 "0x0000000000000008", now[0] + RelayClient.FUTURE_SLACK_SECONDS + 60, now[0] + 600);
         assertTrue(c.applyOrderStrict(future));
         assertEquals("a far-future seq is not a heartbeat", 0, c.orders("sell").size());
-        assertEquals(45 * 60, com.eurobuddha.dexicon.maker.MakerEngine.EXPIRY_SECONDS);
+        assertEquals(60 * 60, com.eurobuddha.dexicon.maker.MakerEngine.EXPIRY_SECONDS);
         assertTrue("re-signed (plus one 15-min Doze heartbeat of lag) before the takers' window closes",
                 com.eurobuddha.dexicon.maker.MakerEngine.EXPIRY_SECONDS - com.eurobuddha.dexicon.maker.MakerEngine.REFRESH_BEFORE_SECONDS + 15 * 60 < RelayClient.LIVE_SECONDS);
     }

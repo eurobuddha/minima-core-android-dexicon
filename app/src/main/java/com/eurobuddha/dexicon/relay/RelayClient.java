@@ -108,7 +108,7 @@ public final class RelayClient {
      *  {@link com.eurobuddha.dexicon.maker.MakerEngine#REFRESH_BEFORE_SECONDS}; an order not re-signed within this
      *  window has a silent maker (phone off, app gone) and is hidden — nobody can co-sign it. A seq far in the future
      *  (a clock-gaming maker) is hidden too. */
-    public static final long LIVE_SECONDS = 50 * 60, FUTURE_SLACK_SECONDS = 10 * 60;
+    public static final long LIVE_SECONDS = 65 * 60, FUTURE_SLACK_SECONDS = 10 * 60;
     public static boolean heard(Envelope e, long nowSeconds) { return e.seq >= nowSeconds - LIVE_SECONDS && e.seq <= nowSeconds + FUTURE_SLACK_SECONDS; }
 
     /** Live orders for the market: not cancelled, not expired, maker heard from recently; side optional. Bids first (desc), then asks (asc). */

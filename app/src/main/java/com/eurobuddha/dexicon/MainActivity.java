@@ -941,11 +941,15 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                     int ok = 0; for (RelayClient.PublishResult x : results) if (x.ok) ok++;
                     final int okCount = ok, total = results.size(); final String firstErr = results.isEmpty() ? "no relays" : results.get(0).error;
                     ui.post(() -> {
-                        busy = false;
+                        // review 7 Nov (M1/L1): the slowest relay can return long after a fast maker answered and the
+                        // sweep moved on — a late callback must never touch the NEXT take or a later run
+                        final boolean current = run == r && actId.equals(r.act);
+                        if (current) busy = false;
                         if (okCount == 0) {
                             // security review 7 Nov: a relay that says "failed" may still have passed my signed half on —
                             // the take stays pending so the void pass spends my coin back to me after VOID_AFTER_MS
-                            ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "no relay accepted the take: " + firstErr));
+                            ActivityLog.update(db, actId, a -> { if (ActivityLog.BUILDING.equals(a.optString("stage")) || ActivityLog.SENT.equals(a.optString("stage"))) a.put("stage", ActivityLog.FAILED).put("reason", "no relay accepted the take: " + firstErr); });
+                            if (!current) return;
                             r.unanswered = r.unanswered.add(r.taking);   // a relay that said "failed" may still have passed it on
                             logStep("  no relay accepted the take: " + firstErr); finishSweep(); return;
                         }
@@ -953,7 +957,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                             a.put("relays", okCount).put("sentMs", pt.optLong("sent"));
                             if (ActivityLog.BUILDING.equals(a.optString("stage"))) a.put("stage", ActivityLog.SENT).put("reason", "");
                         });
-                        if (run == r && r.act.equals(actId)) logStep("  sent to " + okCount + "/" + total + " relays · waiting for the maker's node to co-sign…");
+                        if (!current) return;
+                        logStep("  sent to " + okCount + "/" + total + " relays · waiting for the maker's node to co-sign…");
                         followTake();
                         ui.postDelayed(() -> {
                             if (run == r && actId.equals(r.act) && db.pending(order.orderId) != null) {
@@ -986,11 +991,13 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 String why = a.optString("reason");
                 for (String id : r.order.coins) makerCoinCache.remove(id);
                 db.setMeta("retry_due", "");
-                r.left = r.left.add(r.taking);   // refused: not traded, that amount is still wanted
-                logStep("  maker refused: " + why + (why.matches(MakerService.MOVE_ON) ? " — next order" : ""));
+                // review 7 Nov (H1): "refused" is the maker's word, not proof — it could have posted my signed half anyway.
+                // Until the void spends my coin back the take may still fill, so it stays counted: never re-bought.
+                r.unanswered = r.unanswered.add(r.taking);
+                logStep("  maker refused: " + why + (why.matches(MakerService.MOVE_ON) ? " — counted as possibly filled until voided; next order" : ""));
                 if (why.matches(MakerService.MOVE_ON)) { r.act = null; nextOrder(); } else finishSweep();
             } else if (ActivityLog.FAILED.equals(st) || ActivityLog.LOST.equals(st)) {
-                r.left = r.left.add(r.taking);
+                r.unanswered = r.unanswered.add(r.taking);   // same rule: not co-signed is not proof of not filled
                 logStep("  " + a.optString("reason")); finishSweep();
             }
         }
@@ -1015,7 +1022,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         BigDecimal open = r.amount.subtract(r.got).subtract(r.unanswered);
         if (open.signum() > 0 && (r.got.signum() > 0 || r.unanswered.signum() > 0)) logStep(open.stripTrailingZeros().toPlainString() + " MINIMA not traded; nothing was placed as an order.");
         else if (r.got.signum() == 0 && r.unanswered.signum() == 0) logStep("Nothing was traded and no order was placed.");
-        if (r.got.signum() > 0 && trade != null) trade.clearAmount();
+        // review 7 Nov (M4): the field keeps only what is surely untraded, so a second click can never re-buy a take that
+        // may still be co-signed
+        if ((r.got.signum() > 0 || r.unanswered.signum() > 0) && trade != null) trade.setAmount(open.max(BigDecimal.ZERO));
         endRun();
     }
 
