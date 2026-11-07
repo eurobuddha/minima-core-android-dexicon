@@ -375,7 +375,7 @@ public class MakerService extends Service {
     private void onReply(JSONObject inner) {
         String orderId = inner.optString("orderId", "");
         JSONObject pt = db.pending(orderId);
-        if (pt == null) return;
+        if (pt == null || pt.optBoolean("taken", false)) return;   // answered already; the void pass settles it
         // security review 30 Oct: only this order's maker may answer for it, with a real txpowid; the coin ids I track
         // are my own (recorded from my half at send time), never the ones the reply names
         String maker = pt.optString("maker", pt.optJSONObject("order") == null ? "" : pt.optJSONObject("order").optString("pubId", ""));
@@ -413,7 +413,10 @@ public class MakerService extends Service {
             changed();
             return;
         }
-        db.removePending(orderId);
+        // Security review 7 Nov (HIGH): "taken" is the maker's word, not proof. A maker could answer "taken" with any
+        // txpowid, never post, and keep my signed half as a free option. The take stays pending: voidStaleTakes later
+        // finds my coin spent (the fill really landed → done) or unspent (never posted → spent back to me, voided).
+        try { db.savePending(orderId, pt.put("taken", true)); } catch (Exception ignored) {}
         changed();
     }
 

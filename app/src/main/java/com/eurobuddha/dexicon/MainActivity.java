@@ -828,6 +828,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         // exactly 1 (what you asked beyond that rests as yours); an order that can't be part-taken is skipped
         BigDecimal now = FillPlan.floorTake(r.amount.min(new BigDecimal(o.amount)), new BigDecimal(o.amount)), rest = r.amount.subtract(now);
         r.tried.add(o.orderId);
+        // security review 7 Nov: pending takes are keyed by order id — a second take of the same order would overwrite
+        // the first record and that signed half would never be voided
+        if (db.pending(o.orderId) != null) { logStep("Order " + o.orderId + ": your earlier take of it is still settling — next order"); nextOrder(); return; }
         if (now.signum() <= 0) { logStep("Order " + o.orderId + ": a partial take would leave under " + FillPlan.MIN_REM.toPlainString() + " MINIMA — next order"); nextOrder(); return; }
         if (now.compareTo(r.amount.min(new BigDecimal(o.amount))) < 0) logStep("  taking " + now.toPlainString() + " so " + FillPlan.MIN_REM.toPlainString() + " MINIMA stays on the maker's order (minimum remainder)");
         logStep("Order " + o.orderId + " @ " + o.price + " · " + o.amount + " MINIMA · maker " + o.address);
@@ -915,7 +918,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                     ui.post(() -> {
                         busy = false;
                         if (okCount == 0) {
-                            db.removePending(order.orderId); ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "no relay accepted the take: " + firstErr));
+                            // security review 7 Nov: a relay that says "failed" may still have passed my signed half on —
+                            // the take stays pending so the void pass spends my coin back to me after VOID_AFTER_MS
+                            ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "no relay accepted the take: " + firstErr));
                             logStep("  no relay accepted the take: " + firstErr); endRun(); return;
                         }
                         ActivityLog.update(db, actId, a -> {   // a fast maker can answer (via another relay) before the slowest publish returns

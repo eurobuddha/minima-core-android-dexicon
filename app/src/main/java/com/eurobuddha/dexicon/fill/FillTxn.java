@@ -42,8 +42,47 @@ public final class FillTxn {
         return "txnoutput id:" + id + " amount:" + o.amount + " address:" + o.address + (Tokens.isMinima(o.tokenid) ? "" : " tokenid:" + o.tokenid);
     }
 
-    /** Taker: register the maker's scripts, build, sign own inputs, export. cb(err, hex). */
+    /**
+     * Security review 7 Nov (CRITICAL): the order names the "maker" coins and scripts, so a hostile order could list MY
+     * coins (signed by publickey:auto, the take came back complete and the "maker" just posted it) or MY script (newscript
+     * REPLACES an existing row as non-simple, key 0x00 — my address drops out of send/balance). Against the node's fresh
+     * `scripts` table: refuse a maker coin at any of my key addresses and an order script equal to one of mine, and return
+     * the keys of MY input addresses — the only keys I sign with. Returns the refusal, or null with {@code keysOut} filled.
+     */
+    static String takerGuard(List<JSONObject> rows, FillPlan.Plan p, List<String> keysOut) {
+        java.util.Map<String, String> myKeyByAddr = new java.util.HashMap<>();
+        java.util.Set<String> myScripts = new java.util.HashSet<>();
+        for (JSONObject r : rows) {
+            String pk = r.optString("publickey", "");
+            if (!r.optBoolean("simple", false) || !pk.matches("0x[0-9A-Fa-f]{64}")) continue;   // newscript rows: simple:false, key 0x00
+            myKeyByAddr.put(r.optString("address", "").toLowerCase(java.util.Locale.ROOT), pk);
+            myScripts.add(norm(r.optString("script", "")));
+        }
+        for (String s : p.scripts) if (myScripts.contains(norm(s))) return "refused: the order lists one of your own scripts";
+        for (String a : p.makerAddrs) if (myKeyByAddr.containsKey(a)) return "refused: the order lists a coin at one of your own addresses";
+        for (String a : p.takerAddrs) {
+            String pk = myKeyByAddr.get(a);
+            if (pk == null) return "refused: no signing key for your coin address " + a;
+            if (!keysOut.contains(pk)) keysOut.add(pk);
+        }
+        return keysOut.isEmpty() ? "refused: none of your coins to sign" : null;
+    }
+    private static String norm(String s) { return s == null ? "" : s.trim().replaceAll("\\s+", " ").toUpperCase(java.util.Locale.ROOT); }
+
+    /** Taker: check the order against my wallet, register the maker's scripts, build, sign MY inputs only, export. */
     public static void build(NodeApi node, FillPlan.Plan p, HexCb cb) {
+        node.cmdR("scripts", new NodeApi.Cb() {
+            public void onResult(JSONObject sj) {
+                List<String> keys = new ArrayList<>();
+                String refusal = takerGuard(NodeApi.rows(sj), p, keys);
+                if (refusal != null) { cb.done(refusal, null); return; }
+                buildSigned(node, p, keys, cb);
+            }
+            public void onError(String m) { cb.done("cannot read your wallet scripts: " + m, null); }
+        });
+    }
+
+    private static void buildSigned(NodeApi node, FillPlan.Plan p, List<String> keys, HexCb cb) {
         SignGate.submit(release -> {
             final String id = txnId("dx");
             List<String> steps = new ArrayList<>();
@@ -51,7 +90,7 @@ public final class FillTxn {
             steps.add("txncreate id:" + id);
             for (String c : p.inputs) steps.add("txninput id:" + id + " coinid:" + c + " scriptmmr:true");
             for (FillPlan.Output o : p.outputs) steps.add(outputCmd(id, o));
-            steps.add("txnsign id:" + id + " publickey:auto");
+            for (String k : keys) steps.add("txnsign id:" + id + " publickey:" + k);   // never auto: only MY input keys
             node.seq(steps, new NodeApi.Cb() {
                 public void onResult(JSONObject j) {
                     node.cmdR("txnexport id:" + id, new NodeApi.Cb() {
@@ -111,6 +150,17 @@ public final class FillTxn {
                     final String id = txnId("dm");
                     node.cmdR("txnimport id:" + id + " data:" + hex, new NodeApi.Cb() {
                         public void onResult(JSONObject j) {
+                            // security review 7 Nov: check BEFORE signing — a take with invented inputs (no valid MMR proof)
+                            // or bad amounts used to cost a one-time key leaf per order key and fail only at the post
+                            node.cmdR("txncheck id:" + id, new NodeApi.Cb() {
+                                public void onResult(JSONObject pre) {
+                                    if (!preSignValid(pre.optJSONObject("response"))) { fail("refused: the take's inputs or amounts are not valid"); return; }
+                                    sign();
+                                }
+                                public void onError(String m) { fail("txncheck: " + m); }
+                            });
+                        }
+                        private void sign() {
                             signEach(node, id, keys, 0, new NodeApi.Cb() {
                                 public void onResult(JSONObject j2) {
                                     node.cmdR("txncheck id:" + id, new NodeApi.Cb() {
@@ -158,6 +208,13 @@ public final class FillTxn {
             public void onResult(JSONObject j) { signEach(node, id, keys, i + 1, cb); }
             public void onError(String m) { cb.onError(m); }
         });
+    }
+
+    /** Pre-signature gate: everything txncheck can prove before my signature exists (basic, MMR proofs, amounts). */
+    static boolean preSignValid(JSONObject chk) {
+        if (chk == null) return false;
+        JSONObject v = chk.optJSONObject("valid");
+        return v != null && v.optBoolean("basic") && v.optBoolean("mmrproofs") && chk.optBoolean("validamounts");
     }
 
     /** txncheck gate: valid.basic && valid.mmrproofs && valid.scripts && validamounts && every signature valid. */

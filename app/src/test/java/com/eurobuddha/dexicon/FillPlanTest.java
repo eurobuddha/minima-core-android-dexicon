@@ -78,6 +78,14 @@ public class FillPlanTest {
         assertFalse(FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(stolen), false, oS, oS.coins, "100", mine).ok);
         // transaction state
         assertFalse(FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(p), true, oS, oS.coins, "100", mine).ok);
+        // security review 7 Nov: "change" to an address that is in my scripts table but not one I spent from (the
+        // AtomiX HTLC, a counterparty script newscript registered) is not my change — the take is a near-total fill
+        String htlc = TestIds.hex("0c", 32), attacker = TestIds.hex("ab", 32);
+        for (String sink : Arrays.asList(htlc, attacker)) {
+            List<FillPlan.Output> diverted = new ArrayList<>(p.outputs); diverted.set(1, out(sink, "26.66666667", Tokens.MINIMA));
+            FillPlan.Verdict dv = FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(diverted), false, oS, oS.coins, "100", Arrays.asList(MCOINADDR, MADDR, htlc, attacker));
+            assertFalse("change diverted to " + sink + " must be refused", dv.ok);
+        }
     }
 
     /** Security review 30 Oct: a taker paid MxUSD to my pay-to address, then listed that coin (now mine) as its own input

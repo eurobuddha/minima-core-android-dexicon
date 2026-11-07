@@ -81,6 +81,9 @@ public final class FillPlan {
         public final List<String> inputs = new ArrayList<>();
         public final List<Output> outputs = new ArrayList<>();
         public final List<String> scripts = new ArrayList<>();
+        /** Addresses of the maker's and the taker's inputs (security review 7 Nov: the taker refuses "maker" coins at its
+         *  own addresses and signs only with the keys of its own input addresses — never publickey:auto). */
+        public final Set<String> makerAddrs = new HashSet<>(), takerAddrs = new HashSet<>();
         public String filled, makerGives, takerGives, payToken, recvToken, makerChange, takerChange;
     }
 
@@ -120,8 +123,9 @@ public final class FillPlan {
         Pick t = pick(tc, takerGives, 20);
         if (t == null) throw new IllegalArgumentException("your wallet does not cover " + plain(takerGives) + (sell ? " MxUSD" : " MINIMA"));
         Plan p = new Plan();
-        for (Coin c : m.coins) p.inputs.add(c.coinid);
-        for (Coin c : t.coins) p.inputs.add(c.coinid);
+        for (Coin c : m.coins) { p.inputs.add(c.coinid); p.makerAddrs.add(c.address.toLowerCase(Locale.ROOT)); }
+        for (Coin c : t.coins) { p.inputs.add(c.coinid); p.takerAddrs.add(c.address.toLowerCase(Locale.ROOT)); }
+        for (String a : p.makerAddrs) if (p.takerAddrs.contains(a)) throw new IllegalArgumentException("the order lists a coin at one of your own addresses");
         // maker → taker
         p.outputs.add(new Output(takerAddress, plain(makerGives), makerTok));
         BigDecimal makerChange = fit64(m.sum.subtract(makerGives));
@@ -167,7 +171,11 @@ public final class FillPlan {
         BigDecimal myChange = BigDecimal.ZERO, received = BigDecimal.ZERO;
         for (Coin out : outputs) {
             String addr = out.address.toLowerCase(Locale.ROOT);
-            if (out.sameToken(myTok) && (myInAddrs.contains(addr) || mine.contains(addr) || eq(out.address, order.address))) myChange = myChange.add(out.value);
+            // Security review 7 Nov (CRITICAL): change counts ONLY at the addresses my spent coins came from, or my
+            // pay-to address. `mine` (the node's whole `scripts` table) also holds scripts I cannot spend: the AtomiX
+            // HTLC (stateless coins there are burnt) and every counterparty script `newscript` ever registered (the
+            // attacker spends them). It classifies INPUTS only, never change.
+            if (out.sameToken(myTok) && (myInAddrs.contains(addr) || eq(out.address, order.address))) myChange = myChange.add(out.value);
             if (out.sameToken(wantTok) && eq(out.address, order.address)) received = received.add(out.value);
         }
         BigDecimal filled = myIn.subtract(myChange);
