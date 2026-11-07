@@ -438,10 +438,15 @@ public class MakerService extends Service {
         if (orderId.isEmpty() || engine == null || !voiding.add(orderId)) return;
         final String coin = mine == null || mine.length() == 0 ? "" : mine.optString(0, "");
         if (!coin.matches("0x[0-9A-Fa-f]{64}")) { voiding.remove(orderId); db.removePending(orderId); changed(); return; }   // pre-0.1.51 take: nothing recorded to spend
-        node.cmd("coins relevant:true checkmempool:true coinid:" + coin, new NodeApi.Cb() {
+        // review 7 Nov (R3-4): only an ON-CHAIN spend settles the take. A spend seen only in the mempool may never mine
+        // (the maker would keep its option), so then wait and look again next pass; relock only a coin unspent everywhere.
+        node.cmd("coins relevant:true coinid:" + coin, new NodeApi.Cb() {
+            public void onResult(JSONObject onChain) {
+                if (NodeApi.rows(onChain).isEmpty()) { done("Your coin in this take is already spent — the maker may have posted it; check HISTORY."); return; }
+                node.cmd("coins relevant:true checkmempool:true coinid:" + coin, new NodeApi.Cb() {
             public void onResult(JSONObject j) {
                 List<JSONObject> rows = NodeApi.rows(j);
-                if (rows.isEmpty()) { done("Your coin in this take is already spent — the maker may have posted it; check HISTORY."); return; }
+                if (rows.isEmpty()) { voiding.remove(orderId); return; }   // spent in the mempool only: wait for it to mine or drop
                 com.eurobuddha.dexicon.fill.Coin c = com.eurobuddha.dexicon.fill.Coin.of(rows.get(0));
                 node.cmd("getaddress", new NodeApi.Cb() {
                     public void onResult(JSONObject a) {
@@ -453,6 +458,9 @@ public class MakerService extends Service {
                         }));
                     }
                     public void onError(String m) { voiding.remove(orderId); }
+                });
+            }
+            public void onError(String m) { voiding.remove(orderId); }
                 });
             }
             public void onError(String m) { voiding.remove(orderId); }
