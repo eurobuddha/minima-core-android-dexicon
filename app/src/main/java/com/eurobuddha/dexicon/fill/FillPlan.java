@@ -194,6 +194,9 @@ public final class FillPlan {
             if (filled.compareTo(down8(received.multiply(price, MC))) > 0) return Verdict.bad("I would pay " + plain(filled) + " MxUSD for " + plain(received) + " MINIMA, above my price");
         }
         // PandaDEX's min-remainder floor (port 8, default 1 MINIMA): a partial fill may not leave less than MIN_REM behind
+        // review 7 Nov (L-1): relays accept 8 decimals only; a finer fill left a remaining size no relay would carry, so the
+        // order vanished from the book while still showing live here
+        if ((sell ? filled : received).stripTrailingZeros().scale() > 8) return Verdict.bad("the fill size has more than 8 decimals");
         BigDecimal left = rem.subtract(sell ? filled : received);
         if (left.signum() > 0 && left.compareTo(MIN_REM) < 0) return Verdict.bad("the fill would leave " + plain(left) + " MINIMA, below the " + plain(MIN_REM) + " MINIMA minimum remainder — take it all or leave at least " + plain(MIN_REM));
         if (hasState) return Verdict.bad("unexpected transaction state");

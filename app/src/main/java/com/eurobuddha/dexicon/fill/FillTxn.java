@@ -158,7 +158,24 @@ public final class FillTxn {
                             node.cmdR("txncheck id:" + id, new NodeApi.Cb() {
                                 public void onResult(JSONObject pre) {
                                     if (!preSignValid(pre.optJSONObject("response"))) { fail("refused: the take's inputs or amounts are not valid"); return; }
-                                    sign();
+                                    // review 7 Nov (H-1): never sign for a taker who has not. Every input that is not mine must
+                                    // be a plain RETURN SIGNEDBY(key) coin already carrying that key's valid signature, and
+                                    // must not be in the mempool - else a free unsigned (or double-spent) take made me spend a
+                                    // one-time key use per order key on every try, until the key wore out.
+                                    List<String> takerCoins = new ArrayList<>();
+                                    String why = takerAuthorised(resp, pre.optJSONObject("response"), wallet, takerCoins);
+                                    if (why != null) { fail("refused: " + why); return; }
+                                    notInMempool(takerCoins, 0);
+                                }
+                                private void notInMempool(List<String> ids, int i) {
+                                    if (i >= ids.size()) { sign(); return; }
+                                    node.cmdR("coins coinid:" + ids.get(i) + " checkmempool:true", new NodeApi.Cb() {
+                                        public void onResult(JSONObject cj) {
+                                            if (NodeApi.rows(cj).isEmpty()) { fail("refused: a taker input is already spent or in the mempool"); return; }
+                                            notInMempool(ids, i + 1);
+                                        }
+                                        public void onError(String m) { fail("refused: cannot check the taker's inputs (" + m + ")"); }
+                                    });
                                 }
                                 public void onError(String m) { fail("txncheck: " + m); }
                             });
@@ -211,6 +228,45 @@ public final class FillTxn {
             public void onResult(JSONObject j) { signEach(node, id, keys, i + 1, cb); }
             public void onError(String m) { cb.onError(m); }
         });
+    }
+
+    /** Review 7 Nov (H-1): the taker must have signed before I do. {@code view} is the txnview response (transaction +
+     *  witness), {@code pre} the pre-sign txncheck response. Every input not at one of {@code wallet}'s addresses must sit at
+     *  a witness script of exactly {@code RETURN SIGNEDBY(0x..)} whose key has a VALID signature; there must be at least
+     *  one such input, and no signature present may be invalid. Returns null when authorised, else the reason; fills
+     *  {@code takerCoins} with the taker's input coin ids. */
+    static String takerAuthorised(JSONObject view, JSONObject pre, java.util.Set<String> wallet, List<String> takerCoins) {
+        if (view == null || pre == null) return "no transaction to check";
+        JSONObject txn = view.optJSONObject("transaction"), wit = view.optJSONObject("witness"), valid = pre.optJSONObject("valid");
+        JSONArray ins = txn == null ? null : txn.optJSONArray("inputs");
+        JSONArray scripts = wit == null ? null : wit.optJSONArray("scripts");
+        JSONArray sigs = valid == null ? null : valid.optJSONArray("signatures");
+        if (ins == null || scripts == null || sigs == null) return "the take carries no taker signature";
+        java.util.Map<String, String> scriptAt = new java.util.HashMap<>();
+        for (int i = 0; i < scripts.length(); i++) {
+            JSONObject sc = scripts.optJSONObject(i);
+            if (sc != null) scriptAt.put(sc.optString("address", "").toLowerCase(java.util.Locale.ROOT), sc.optString("script", "").trim());
+        }
+        java.util.Set<String> signed = new java.util.HashSet<>();
+        for (int i = 0; i < sigs.length(); i++) {
+            JSONObject sg = sigs.optJSONObject(i);
+            if (sg == null || !sg.optBoolean("valid", false)) return "a signature on the take is not valid";
+            signed.add(sg.optString("publickey", "").toUpperCase(java.util.Locale.ROOT));
+        }
+        java.util.regex.Pattern simple = java.util.regex.Pattern.compile("^RETURN SIGNEDBY\\(0[xX]([0-9A-Fa-f]+)\\)$");
+        for (int i = 0; i < ins.length(); i++) {
+            JSONObject in = ins.optJSONObject(i);
+            String addr = in == null ? "" : in.optString("address", "").toLowerCase(java.util.Locale.ROOT);
+            if (addr.isEmpty()) return "an input has no address";
+            if (wallet.contains(addr)) continue;
+            String script = scriptAt.get(addr);
+            java.util.regex.Matcher m = script == null ? null : simple.matcher(script);
+            if (m == null || !m.matches()) return "a taker input is not a plain signed coin";
+            if (!signed.contains("0X" + m.group(1).toUpperCase(java.util.Locale.ROOT))) return "the taker has not signed its input";
+            takerCoins.add(in.optString("coinid", ""));
+        }
+        if (takerCoins.isEmpty()) return "the take has no taker input";
+        return null;
     }
 
     /** Pre-signature gate: everything txncheck can prove before my signature exists (basic, MMR proofs, amounts). */
