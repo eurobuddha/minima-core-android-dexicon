@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.84 app/src/main/java/com/eurobuddha/pandapools/BlockOwnerRecovery.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.86 app/src/main/java/com/eurobuddha/pandapools/BlockOwnerRecovery.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONArray;
@@ -170,6 +170,27 @@ final class BlockOwnerRecovery {
         String pk = r == null ? "" : r.optString("publickey");
         return BLOCK_PROBE.equalsIgnoreCase(pk) ? Mode.BLOCK : CLASSIC_PROBE.equalsIgnoreCase(pk) ? Mode.CLASSIC : Mode.UNKNOWN;
     }
+    /** Every live recipe's owner key is on this node with a usable counter and the current mode's tree shape. */
+    static boolean backupOwnersMatch(String json, JSONObject keys, String mode) {
+        try {
+            JSONArray pools=new JSONObject(json).getJSONArray("pools");
+            for(int i=0;i<pools.length();i++){
+                JSONObject p=pools.getJSONObject(i);String owner=p.getString("opk");
+                Integer uses=KeyUses.extractUses(keys,owner);
+                JSONObject row=BlockOwnerRecovery.row(keys,owner);
+                // review 7 Nov (R2-4): a CLOSED pool whose owner key belongs to another wallet (e.g. closed on PandaBear
+                // before moving to BlackBear) no longer makes every backup on this wallet unverifiable forever. Its
+                // recipe still travels in the bundle; live pools must still have their key here.
+                if(p.optBoolean("retired",false)&&uses==null&&row==null)continue;
+                int size="block".equals(mode)?128:64,depth="block".equals(mode)?4:3;
+                if(uses==null||uses<0||uses<p.optInt("opkuses",-1)||row==null
+                        ||row.optInt("size")!=size||row.optInt("depth")!=depth)return false;
+            }
+            return true;
+        }catch(Exception invalid){return false;}
+    }
+
+
     static JSONObject row(JSONObject keys, String owner) {
         JSONArray rows = TxPost.truthy(keys, "status") ? KeyUses.rows(keys) : null;
         if (rows != null) for (int i = 0; i < rows.length(); i++) {

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.84 app/src/main/java/com/eurobuddha/pandapools/NodeBackupCapture.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.86 app/src/main/java/com/eurobuddha/pandapools/NodeBackupCapture.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.Context;
@@ -70,20 +70,7 @@ final class NodeBackupCapture {
                 public void onError(String ignored){fail("KEY_MODE_UNKNOWN: node did not answer the key-mode check.");}
             });
         }
-        boolean ownersMatch(JSONObject keys) {
-            try {
-                JSONArray pools=new JSONObject(json).getJSONArray("pools");
-                for(int i=0;i<pools.length();i++){
-                    JSONObject p=pools.getJSONObject(i);String owner=p.getString("opk");
-                    Integer uses=KeyUses.extractUses(keys,owner);
-                    JSONObject row=BlockOwnerRecovery.row(keys,owner);
-                    int size="block".equals(mode)?128:64,depth="block".equals(mode)?4:3;
-                    if(uses==null||uses<0||uses<p.optInt("opkuses",-1)||row==null
-                            ||row.optInt("size")!=size||row.optInt("depth")!=depth)return false;
-                }
-                return true;
-            }catch(Exception invalid){return false;}
-        }
+        boolean ownersMatch(JSONObject keys) { return BlockOwnerRecovery.backupOwnersMatch(json, keys, mode); }
         void createNodeBackup() {
             requested=true;
             node.cmd("backup file:"+name+" password:"+inner+" confirm:"+inner, new NodeApi.Cb() {

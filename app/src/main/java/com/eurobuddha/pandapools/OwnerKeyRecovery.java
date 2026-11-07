@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.84 app/src/main/java/com/eurobuddha/pandapools/OwnerKeyRecovery.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.86 app/src/main/java/com/eurobuddha/pandapools/OwnerKeyRecovery.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.Context;
@@ -136,10 +136,15 @@ public final class OwnerKeyRecovery {
         return Reason.SIGNING_QUARANTINED;
     }
 
-    /** Peek at the outstanding exit exemption without consuming it. */
-    private static boolean exitPermits(List<String> cmds, Pool p) {
-        ExitTicket t = ExitAuthority.current();
-        return t != null && t.permits(cmds, p);
+    /** Review 7 Nov (R2-1): the exemption is per OWNER KEY. A migrated lineage shares one $OPK across the live pool and
+     *  its retired predecessors; when the live ticket permits these exact commands for ANY recipe of a key, that key's
+     *  quarantined siblings no longer veto the one bounded close (they must still pass baseSigningAllowed). The
+     *  signature itself is still only for the ticket-verified command list. Peek only — never consumes. */
+    static Set<String> exitKeys(ExitTicket t, List<String> cmds, List<Pool> recipes) {
+        Set<String> keys = new java.util.HashSet<>();
+        if (t == null || cmds == null || recipes == null) return keys;
+        for (Pool p : recipes) if (p != null && p.opk != null && t.permits(cmds, p)) keys.add(p.opk.toLowerCase(Locale.ROOT));
+        return keys;
     }
 
     /** The single most important reason in a set, for one summary line. */
@@ -204,6 +209,7 @@ public final class OwnerKeyRecovery {
         // Index the stored recipes by owner key. One key can carry several pools (migrate shares an $OPK), and
         // ANY of them being blocked blocks the key — so keep the most severe finding across that group.
         Map<String, Blocked> out = new LinkedHashMap<>();
+        final Set<String> exempt = ctx == null ? new java.util.HashSet<>() : exitKeys(ExitAuthority.current(), cmds, OwnPoolStore.all(ctx));
         if (ctx != null) for (Pool p : OwnPoolStore.all(ctx)) {
             if (p.opk == null) continue;
             String key = p.opk.toLowerCase(Locale.ROOT);
@@ -213,7 +219,7 @@ public final class OwnerKeyRecovery {
             if (signingAllowed(p, uses, cap)) continue;
             // A pre-flight must not CONSUME the single-use grant — that belongs to the signature boundary — so it
             // only peeks at the shape. baseSigningAllowed still has to hold in full.
-            if (baseSigningAllowed(p, uses, cap) && cmds != null && exitPermits(cmds, p)) continue;
+            if (baseSigningAllowed(p, uses, cap) && exempt.contains(key)) continue;   // R2-1: per key, not per recipe
             Blocked b = new Blocked(key, classify(readable, held.contains(key), uses, cap, p,
                     OwnPoolStore.confirmationFailed(p.opk)), uses, p.minimumOwnerUses, p.address);
             Blocked prev = out.get(key);
@@ -338,6 +344,8 @@ public final class OwnerKeyRecovery {
                     boolean readable = TxPost.truthy(reply, "status") && KeyUses.rows(reply) != null;
                     if (!readable || !unavailableKeys(reply, wanted).isEmpty()) { cb.accept("Could not verify signing keys. Nothing signed."); return; }
                     Set<String> held = pubkeys(reply);
+                    final ExitTicket ticket = ExitAuthority.current();
+                    final Set<String> exempt = exitKeys(ticket, cmds, current);   // R2-1: per owner key
                     for (Pool p : current) {
                         if (p.opk == null) continue;
                         String key = p.opk.toLowerCase(Locale.ROOT);
@@ -349,11 +357,12 @@ public final class OwnerKeyRecovery {
                         // pool back to the owner, and nothing else. Everything in baseSigningAllowed still has to
                         // hold, and the shape is verified against the ACTUAL command list — the exemption is
                         // looked up here, never passed in, so no caller can assert its way past this.
-                        if (baseSigningAllowed(p, uses, cap) && cmds != null && ExitAuthority.permits(cmds, p)) continue;
+                        if (baseSigningAllowed(p, uses, cap) && exempt.contains(key)) continue;
                         Reason r = classify(true, held.contains(key), uses, cap, p, OwnPoolStore.confirmationFailed(p.opk));
                         cb.accept("Nothing signed.\n\n" + new Blocked(key, r, uses, p.minimumOwnerUses, p.address).message());
                         return;
                     }
+                    if (!exempt.isEmpty()) ExitAuthority.revoke(ticket);   // the single-use grant is consumed at the boundary
                     cb.accept(null);
                 }
                 public void onError(String m) { cb.accept("Could not verify signing keys. Nothing signed."); }
