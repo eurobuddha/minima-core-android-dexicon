@@ -11,8 +11,8 @@ android {
         minSdk 28
         targetSdk 35
         // Every code change bumps BOTH (pre-commit hook .githooks/pre-commit enforces it).
-        versionCode 271
-        versionName "0.2.71"
+        versionCode 272
+        versionName "0.2.72"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
