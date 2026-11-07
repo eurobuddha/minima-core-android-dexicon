@@ -146,7 +146,7 @@ public final class Ledger {
         it.id = "act_" + a.optString("id");
         it.sortMs = ts;
         it.live = !ActivityLog.settled(a, chainBlock);
-        it.icon = failed ? "!" : it.live ? "●" : buy ? "↓" : "↑";
+        it.icon = failed ? "!" : it.live ? "●" : buy ? "↑" : "↓";
         it.tone = failed ? Tone.BAD : it.live ? Tone.LIVE : buy ? Tone.OK : Tone.BAD;
         it.title = (confirmed ? (buy ? "Bought" : "Sold") : (buy ? "Buy" : "Sell")) + " MINIMA"
                 + (maker ? (confirmed ? " · you were the maker" : " · you are the maker") : "");
@@ -217,7 +217,7 @@ public final class Ledger {
         long ms = f.optLong("ts", 0) * 1000;
         it.id = "fill_" + f.optString("txpowid");
         it.sortMs = ms;
-        it.icon = buy ? "↓" : "↑";
+        it.icon = buy ? "↑" : "↓";
         it.tone = buy ? Tone.OK : Tone.BAD;
         it.title = buy ? "Bought" : "Sold";
         it.amount = f.optString("filled") + " MINIMA";

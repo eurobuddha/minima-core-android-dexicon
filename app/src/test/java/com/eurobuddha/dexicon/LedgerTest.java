@@ -64,7 +64,7 @@ public class LedgerTest {
         it = Ledger.activity(a, 104, TS, UTC);
         assertFalse(it.live);
         assertEquals("Bought MINIMA", it.title);
-        assertEquals("↓", it.icon);
+        assertEquals("owner 7 Nov: buy points up", "↑", it.icon);
         assertEquals("CONFIRMED", it.chip);
         assertEquals(Ledger.Tone.OK, it.chipTone);
         assertTrue(steps(it), steps(it).endsWith("OK  In block 101, OK 07:38:20 Confirmed — 3 confirmations]"));
