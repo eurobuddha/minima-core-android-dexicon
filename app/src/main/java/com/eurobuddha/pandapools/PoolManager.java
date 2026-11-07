@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.87 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.88 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONArray;
@@ -439,17 +439,31 @@ public class PoolManager {
                         count = Math.addExact(count, n);
                     }
                 } catch (Exception invalid) { cb.onFailed("Invalid owner-address coin count."); return; }
-                if (!FundingCoins.listIsSafe(count)) {
-                    cb.onFailed("Owner address has " + count + " coins. Collection is paused because this node cannot safely list that group."); return;
+                String limit = ownerCoinsLimit(count, recovery != null);
+                if (limit == null) {
+                    cb.onFailed("Owner address has " + count + " coins. Recovery collection is paused because this node cannot safely list that group."); return;
                 }
-                forwardSmallAddress(oadr, recovery, count, cb);
+                forwardSmallAddress(oadr, limit.isEmpty() ? recovery : null, limit.isEmpty() ? count : -1, limit, cb);
             }
             public void onError(String error) { cb.onFailed(error); }
         });
     }
 
-    private void forwardSmallAddress(String oadr, Pool recovery, int expected, ForwardResult cb) {
-        node.cmd("coins relevant:true sendable:true checkmempool:true coinage:3 address:" + oadr, new NodeApi.Cb() {
+    /** D-3: coins forwarded per pass when the payout address holds more than a list can safely carry. */
+    static final int MAX_FORWARD_BATCH = 8;
+
+    /** Review 7 Nov (D-3): anyone can send dust to the public payout address. Up to SAFE_COINS: list them all ("").
+     *  More: forward a bounded batch (" max:8" - never a reply big enough to crash a pre-1.6.9 node); every collect
+     *  pass moves the next batch home, so dust can delay but no longer block collection (a node without `max:` refuses
+     *  the command and collection pauses as before). The recovery continuation needs ALL payout coins at once: null =
+     *  paused (resolve by hand). */
+    static String ownerCoinsLimit(int count, boolean recovery) {
+        if (FundingCoins.listIsSafe(count)) return "";
+        return recovery ? null : " max:" + MAX_FORWARD_BATCH;
+    }
+
+    private void forwardSmallAddress(String oadr, Pool recovery, int expected, String limit, ForwardResult cb) {
+        node.cmd("coins relevant:true sendable:true checkmempool:true coinage:3 address:" + oadr + limit, new NodeApi.Cb() {
             @Override public void onResult(JSONObject j) {
                 JSONArray arr = FundingCoins.rows(j);
                 if (arr == null) { cb.onFailed("Could not read owner-address coins."); return; }
