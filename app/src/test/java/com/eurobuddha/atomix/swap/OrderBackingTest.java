@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.3 app/src/test/java/com/eurobuddha/atomix/swap/OrderBackingTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.4 app/src/test/java/com/eurobuddha/atomix/swap/OrderBackingTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import com.eurobuddha.atomix.TradingContext;
@@ -18,14 +18,14 @@ import static org.mockito.ArgumentMatchers.*;
 public class OrderBackingTest {
     TradingContext saved;NodeApi node;LazySodium sodium;NodeApi.Cb read;CommsTransport.SendCb result;
     CommsIdentity identity;String signed;
-    @Before public void setup(){
+    @Before public void setup(){ SwapEngine.ETH_FIRST_PAUSED=false;   // the normal publish path (asks advertised)
         saved=TradingContext.active();TradingContext.setActive(TradingContext.MINIMA,null);
         node=mock(NodeApi.class);sodium=mock(LazySodium.class);result=mock(CommsTransport.SendCb.class);
         identity=CommsIdentity.fromKeys(new byte[32],new byte[32],new byte[32],new byte[64]);
         doAnswer(i->{read=i.getArgument(1);return null;}).when(node).cmd(anyString(),any());
         when(sodium.cryptoSignDetached(any(),any(),anyLong(),any())).thenAnswer(i->{signed=new String((byte[])i.getArgument(1),StandardCharsets.UTF_8);return true;});
     }
-    @After public void restore(){TradingContext.setActive(saved,null);}
+    @After public void restore(){TradingContext.setActive(saved,null); SwapEngine.ETH_FIRST_PAUSED=true;}
     static Order order(double amount){Order o=new Order();o.minimaAvail=5000;o.pairs.put("USDT",new Order.Pair(true,1.25,0,1));o.pairs.get("USDT").asks.add(new Order.Level(1.25,amount));return o;}
     JSONObject balance(String amount)throws Exception{return new JSONObject().put("status",true).put("response",new JSONArray().put(new JSONObject().put("tokenid",TradingContext.active().tokenId).put("coins","1").put("sendable",amount)));}
     JSONObject free(String amount)throws Exception {

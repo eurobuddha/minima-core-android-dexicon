@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.3 app/src/test/java/com/eurobuddha/atomix/swap/OrderMarketContextTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.4 app/src/test/java/com/eurobuddha/atomix/swap/OrderMarketContextTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import com.eurobuddha.atomix.TradingContext;
@@ -17,8 +17,8 @@ import static org.mockito.ArgumentMatchers.*;
 /** Reuses OTC callback fixtures and the existing synthetic signed order format. */
 public class OrderMarketContextTest {
     private TradingContext saved;
-    @Before public void save() { saved = TradingContext.active(); }
-    @After public void restore() { TradingContext.setActive(saved, null); }
+    @Before public void save() { saved = TradingContext.active(); SwapEngine.ETH_FIRST_PAUSED = false; }   // the normal publish path (asks advertised)
+    @After public void restore() { TradingContext.setActive(saved, null); SwapEngine.ETH_FIRST_PAUSED = true; }
     private static Order local() {
         Order o = new Order(); o.minimaPublicKey = "0x1234"; o.ethAddress = "0x" + "12".repeat(20);
         o.commsPublicId = "peer"; o.minimaAvail = 5; o.usdtAvail = 10;
