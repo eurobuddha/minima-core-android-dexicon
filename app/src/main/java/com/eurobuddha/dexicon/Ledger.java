@@ -182,6 +182,7 @@ public final class Ledger {
         if (block > 0) {
             it.step(Mark.OK, "", "In block " + block);
             if (depth >= ActivityLog.CONFIRM_BLOCKS) it.step(Mark.OK, hms(a.optLong("settledMs"), tz), (fast ? "Done" : "Confirmed") + " — " + ActivityLog.confirmationText(depth));
+            else if (fast && !failed) it.step(Mark.OK, "", "Done — " + ActivityLog.confirmationText(depth));   // FAST = MinimaXT: no confirmation wait
             else if (!failed) it.step(Mark.WAIT, "", "Confirming — " + ActivityLog.confirmationText(depth) + " of " + ActivityLog.CONFIRM_BLOCKS);
         } else if (ActivityLog.POSTED.equals(stage) || ActivityLog.COSIGNED.equals(stage)) {
             String w = ActivityLog.waiting(a, chainBlock);
@@ -222,7 +223,8 @@ public final class Ledger {
         it.amount = f.optString("filled") + " MINIMA";
         it.sub = "@ " + Util.fmtPrice(Util.dec(f.optString("price", "0"))) + " · " + (maker ? "you were the maker" : fastTaker ? "fast book" : routeWord(cp));
         it.time = hm(ms, tz);
-        if (!"done".equals(st)) { it.chip = "lost".equals(st) ? "LOST" : st.toUpperCase(Locale.ROOT); it.chipTone = "lost".equals(st) ? Tone.BAD : Tone.LIVE; }
+        // a FAST fill is done when it is co-signed and posted (MinimaXT); "settling" only means not yet deep in the chain
+        if (!"done".equals(st) && !"settling".equals(st)) { it.chip = "lost".equals(st) ? "LOST" : st.toUpperCase(Locale.ROOT); it.chipTone = "lost".equals(st) ? Tone.BAD : Tone.LIVE; }
 
         String usd = maker ? f.optString(buy ? "paid" : "received", "") : f.optString(buy ? "gave" : "got", "");
         it.fact(buy ? "You paid" : "You got", usd.isEmpty() ? "" : usd + " MxUSD");

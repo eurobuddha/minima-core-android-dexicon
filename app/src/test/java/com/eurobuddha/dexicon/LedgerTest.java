@@ -81,7 +81,7 @@ public class LedgerTest {
         assertEquals("[OK 07:33:20 Built and signed your side, WAIT 07:33:22 Take sent to 3 relays — waiting for the maker to co-sign (7s)]", steps(it));
         a.put("stage", ActivityLog.COSIGNED).put("cosignMs", 8_600L).put("txpowid", TX).put("outs", new JSONArray().put(OUT1));
         it = Ledger.activity(a, 0, TS, UTC);
-        assertEquals("CO-SIGNED", it.chip);
+        assertEquals("DONE", it.chip);   // FAST = MinimaXT: done at co-sign
         assertTrue(steps(it), steps(it).contains("OK 07:33:22 Take sent to 3 relays, OK 07:33:30 The maker co-signed in 8.6s, WAIT  In the node's mempool, waiting for a block]"));
         a.put("block", 50L);
         it = Ledger.activity(a, 53, TS, UTC);
@@ -264,7 +264,7 @@ public class LedgerTest {
                 .put("ts", TS / 1000).put("status", "settling");
         Ledger.Item it = Ledger.fill(m, new JSONObject().put("cosignMs", 8_600L), UTC);
         assertEquals("Sold", it.title); assertEquals("@ 0.003675 · you were the maker", it.sub);
-        assertEquals("SETTLING", it.chip); assertEquals(Ledger.Tone.LIVE, it.chipTone);
+        assertEquals("", it.chip);   // FAST = MinimaXT: a co-signed, posted fill is done; no SETTLING chip
         assertEquals("You got=1.6749915 MxUSD|Route=Fast book · a taker took your order|Co-signed=in 8.6s|Settled=waiting for a block|When=26 Oct 2026 07:33:20|", facts(it));
         assertTrue(proof(it).contains("Your order=" + ORDER + ", Taker ID=" + TAKER));
 

@@ -64,8 +64,10 @@ public final class ActivityLog {
         String s = a.optString("stage");
         if (failedTerminal(a)) return s;
         long d = depth(a, chainBlock);
-        if (d >= CONFIRM_BLOCKS) return fast(a) ? "DONE" : "CONFIRMED";
-        if (d >= 0) return fast(a) ? "SETTLING" : "IN BLOCK";
+        // FAST = MinimaXT: the trade is done the moment the maker co-signs and posts it; block depth is detail, not a wait
+        if (fast(a) && (d >= 0 || COSIGNED.equals(s) || POSTED.equals(s))) return "DONE";
+        if (d >= CONFIRM_BLOCKS) return "CONFIRMED";
+        if (d >= 0) return "IN BLOCK";
         if (COSIGNED.equals(s)) return "CO-SIGNED";
         return s;
     }
@@ -81,8 +83,15 @@ public final class ActivityLog {
             default:
         }
         long d = depth(a, chainBlock), block = a.optLong("block", 0);
-        if (d >= CONFIRM_BLOCKS) return (fast(a) ? "Done" : "Confirmed") + " · block " + block + " · " + confirmationText(d);
-        if (d >= 0) return (fast(a) ? "Settling · in block " : "In block ") + block + " · " + confirmationText(d);
+        if (fast(a) && (d >= 0 || COSIGNED.equals(s) || POSTED.equals(s))) {
+            String tx = a.optString("txpowid", ""), who = !COSIGNED.equals(s) ? ""
+                    : "maker".equals(a.optString("role")) ? " · co-signed for " + a.optString("counterparty") + " in " + secs(a.optLong("cosignMs"))
+                    : " · maker co-signed in " + secs(a.optLong("cosignMs"));
+            return "Done" + who + (tx.isEmpty() ? "" : " · txpow " + tx)
+                    + (d >= 0 ? " · in block " + block + " · " + confirmationText(d) : " · " + waiting(a, chainBlock));
+        }
+        if (d >= CONFIRM_BLOCKS) return "Confirmed · block " + block + " · " + confirmationText(d);
+        if (d >= 0) return "In block " + block + " · " + confirmationText(d);
         switch (s) {
             case BUILDING: return why.isEmpty() ? "Building and signing…" : why;
             case SENT: return "Take sent to " + a.optInt("relays") + " relay" + (a.optInt("relays") == 1 ? "" : "s")
