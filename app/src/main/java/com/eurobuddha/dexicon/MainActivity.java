@@ -420,13 +420,16 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
      * PandaDEX's composite transaction (quoted off the UI thread, exactly as PandaDEX TradeView.submit). Nothing
      * crosses → the order rests on the relays as a FAST order.
      */
-    void placeOrder(boolean buy, BigDecimal price, BigDecimal amount, String shownRoute) {
+    /** Owner 7 Nov: which liquidity a button uses — FAST (relay orders only) or POOL (on-chain BOOK + pools only). */
+    public static final int SRC_FAST = 0, SRC_POOL = 1;
+
+    void placeOrder(boolean buy, BigDecimal price, BigDecimal amount, String shownRoute, int source) {
         if (gateRefuses()) return;
         if (me == null || engine == null) { toast("Identity not ready — is Dexicon enabled in Minima Core?"); return; }
         if (busy) { toast("A transaction is in progress"); return; }
-        final Envelope best = bestFastCross(buy, price);
-        final List<Order5> orders = new ArrayList<>(restingBook().values());
-        final List<Pool> pools = new ArrayList<>(restingPools());
+        final Envelope best = source == SRC_POOL ? null : bestFastCross(buy, price);
+        final List<Order5> orders = source == SRC_FAST ? new ArrayList<>() : new ArrayList<>(restingBook().values());
+        final List<Pool> pools = source == SRC_FAST ? new ArrayList<>() : new ArrayList<>(restingPools());
         final long block = chainBlock;
         busy = true; setStage("Calculating quote…"); repaint();
         quoteExec.execute(() -> {
@@ -438,6 +441,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 // owner 7 Nov: the button names the route; the click never takes a route the button did not show
                 if (shownRoute != null && !shownRoute.equals(d.route)) { toast("The best route just changed to " + d.route + " — the button shows it now. Tap again to trade."); return; }
                 if (d.full != null) confirmComposite(d.full, buy, amount, price, best);
+                else if (source == SRC_POOL) toast("No BOOK or POOL liquidity crosses this price — nothing was traded");
                 else placeFast(buy, price, amount, best);
             });
         });
@@ -465,31 +469,47 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         return plan.orderMinima.signum() > 0 && plan.poolMinima.signum() > 0 ? "BOOK+POOL" : plan.poolMinima.signum() > 0 ? "POOL" : "BOOK";
     }
 
-    // The CTA's route, quoted off the UI thread whenever the inputs or the liquidity change; null while quoting.
-    private String routeKey = "", routeReadyKey = "", routeLabel;
-    String routeFor(boolean buy, BigDecimal price, BigDecimal amount) {
-        final Envelope best = bestFastCross(buy, price);
-        final List<Order5> orders = new ArrayList<>(restingBook().values());
-        final List<Pool> pools = new ArrayList<>(restingPools());
+    // Each button's quote, worked out off the UI thread whenever the inputs or the liquidity change; null while
+    // the first quote for a source is running (later re-quotes keep the previous one — a stale click is refused).
+    private final String[] routeKey = {"", ""}, routeReadyKey = {"", ""};
+    private final Decision[] routeDec = new Decision[2];
+    Decision routeFor(boolean buy, BigDecimal price, BigDecimal amount, int source) {
+        final Envelope best = source == SRC_POOL ? null : bestFastCross(buy, price);
+        final List<Order5> orders = source == SRC_FAST ? new ArrayList<>() : new ArrayList<>(restingBook().values());
+        final List<Pool> pools = source == SRC_FAST ? new ArrayList<>() : new ArrayList<>(restingPools());
         final long block = chainBlock;
         StringBuilder k = new StringBuilder().append(buy).append('|').append(price.toPlainString()).append('|').append(amount.toPlainString()).append('|').append(block);
         if (best != null) k.append('|').append(best.orderId).append(':').append(best.seq).append(':').append(best.amount);
-        for (String id : new java.util.TreeSet<>(restingBook().keySet())) k.append('|').append(id);
+        for (Order5 o : orders) k.append('|').append(o.coinid);
         for (Pool pl : pools) k.append('|').append(pl.coinidM).append(':').append(pl.coinidT);
         final String key = k.toString();
-        if (key.equals(routeReadyKey)) return routeLabel;
-        if (!key.equals(routeKey)) {
-            routeKey = key;
+        if (key.equals(routeReadyKey[source])) return routeDec[source];
+        if (!key.equals(routeKey[source])) {
+            routeKey[source] = key;
             quoteExec.execute(() -> {
                 final Decision d = decide(buy, price, amount, best, orders, pools, block);
                 ui.post(() -> {
-                    if (closed || !key.equals(routeKey)) return;
-                    routeReadyKey = key; routeLabel = d.error != null ? "?" : d.route;   // "?": the click shows the quote error
+                    if (closed || !key.equals(routeKey[source])) return;
+                    routeReadyKey[source] = key; routeDec[source] = d;
                     if (trade != null) trade.paintCtaPublic();
                 });
             });
         }
-        return routeReadyKey.isEmpty() ? null : routeLabel;   // the previous label while re-quoting (no flicker); a click on a stale label is refused by placeOrder
+        return routeReadyKey[source].isEmpty() ? null : routeDec[source];
+    }
+
+    /** Volume-weighted price of the crossing FAST orders (best first) that {@code amount} would take, or null. */
+    BigDecimal fastAvg(boolean buy, BigDecimal price, BigDecimal amount) {
+        BigDecimal left = amount, qty = BigDecimal.ZERO, cost = BigDecimal.ZERO;
+        for (Envelope e : relay.orders(buy ? "sell" : "buy")) {
+            if (left.signum() <= 0) break;
+            if (isMine(e) || e.coins.isEmpty()) continue;
+            BigDecimal p = new BigDecimal(e.price);
+            if (buy ? p.compareTo(price) > 0 : p.compareTo(price) < 0) continue;
+            BigDecimal q = left.min(new BigDecimal(e.amount));
+            qty = qty.add(q); cost = cost.add(q.multiply(p)); left = left.subtract(q);
+        }
+        return qty.signum() == 0 ? null : cost.divide(qty, 8, java.math.RoundingMode.HALF_UP);
     }
 
     /** The FAST path: a crossing fast order is taken at once (one click, no dialog), else the order rests as a fast order. */

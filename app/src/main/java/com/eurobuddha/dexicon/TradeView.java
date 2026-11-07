@@ -68,7 +68,10 @@ public final class TradeView extends LinearLayout {
     /** Pool depth for the current pools is on the ladder (false while SyntheticDepth re-samples). */
     private boolean poolsShown = true;
     /** The route the CTA showed when it was last painted — the click must take this route or nothing. */
-    private String shownRoute;
+    private String shownRoute, shownRoute2;
+    private int ctaSource = MainActivity.SRC_FAST;
+    /** Owner 7 Nov: when FAST and BOOK/POOL both cross, the button splits — the button you tap IS the choice. */
+    private TextView cta2Btn;
     private EditText priceIn, amountIn;
     private final Runnable totalTask = this::updateTotal;
 
@@ -347,10 +350,19 @@ public final class TradeView extends LinearLayout {
         c.addView(tv("Crosses FAST orders → the button IS the trade: one click takes them best-first up to your amount, no dialog, progress in the log below; what they can't cover is not traded. BOOK/POOL on-chain liquidity still shows a confirm. Nothing crosses → rests on the relays as your FAST order.", 9.5f, Design.DIM2(), Design.sans()));
         ctaBtn = tv("BUY MINIMA", 14f, Design.ON_ACCENT(), Design.sansBold());
         ctaBtn.setGravity(Gravity.CENTER); ctaBtn.setPadding(0, dp(12), 0, dp(12));
+        cta2Btn = tv("", 14f, Design.ON_ACCENT(), Design.sansBold());
+        cta2Btn.setGravity(Gravity.CENTER); cta2Btn.setPadding(dp(4), dp(12), dp(4), dp(12));
+        ctaBtn.setPadding(dp(4), dp(12), dp(4), dp(12));
+        LinearLayout ctaRow = new LinearLayout(getContext());
+        LayoutParams c1 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f), c2 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f);
+        c2.leftMargin = dp(6);
+        ctaRow.addView(ctaBtn, c1); ctaRow.addView(cta2Btn, c2);
+        cta2Btn.setVisibility(GONE);
         LayoutParams cl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); cl.topMargin = dp(8);
-        c.addView(ctaBtn, cl);
-        ctaBtn.setOnClickListener(v -> submit());
-        Design.pressable(ctaBtn);
+        c.addView(ctaRow, cl);
+        ctaBtn.setOnClickListener(v -> submit(ctaSource, shownRoute));
+        cta2Btn.setOnClickListener(v -> submit(MainActivity.SRC_POOL, shownRoute2));
+        Design.pressable(ctaBtn); Design.pressable(cta2Btn);
         logTv = tv("", 10.5f, Design.TEXT(), Design.mono());
         logTv.setPadding(dp(10), dp(8), dp(10), dp(8));
         logTv.setBackground(Design.stroked(getContext(), Design.SURFACE2(), 8));
@@ -392,6 +404,7 @@ public final class TradeView extends LinearLayout {
         sellTab.setTextColor(!buy ? Color.WHITE : Design.DIM());
         ctaBtn.setText(buy ? "BUY MINIMA" : "SELL MINIMA");
         ctaBtn.setBackground(Design.ripple(Design.roundBg(getContext(), buy ? Design.IN() : Design.RED(), 12)));
+        cta2Btn.setBackground(Design.ripple(Design.roundBg(getContext(), buy ? Design.IN() : Design.RED(), 12)));
         updateTotal();
     }
 
@@ -446,32 +459,48 @@ public final class TradeView extends LinearLayout {
 
     private void paintCta() {
         if (ctaBtn == null) return;
+        cta2Btn.setVisibility(GONE);
         if (act.taking()) { ctaBtn.setText("TRADING… " + act.takingSecs() + "s"); ctaBtn.setEnabled(false); ctaBtn.setAlpha(0.75f); return; }
         BigDecimal p = Util.dec(priceIn.getText().toString()), a = Util.dec(amountIn.getText().toString());
-        // owner 7 Nov: the button names the route the click will take (the same decide() the click runs) — a pool
-        // route is never taken while its prices are still missing from the ladder.
-        String route = p.signum() > 0 && a.signum() > 0 ? act.routeFor(buyMode, p, a) : "REST";
-        shownRoute = route;
         String side = buyMode ? "BUY " : "SELL ";
-        boolean wait = route == null || (!"FAST".equals(route) && !"REST".equals(route) && !"?".equals(route) && !poolsShown);
-        if (route == null) ctaBtn.setText("QUOTING…");
-        else if (wait) ctaBtn.setText("POOL PRICES LOADING…");
-        else if ("FAST".equals(route)) ctaBtn.setText(side + Util.fmt(a.min(act.offered(buyMode, p))) + " MINIMA NOW · FAST");
-        else if ("REST".equals(route) || "?".equals(route)) ctaBtn.setText(buyMode ? "BUY MINIMA" : "SELL MINIMA");
-        else ctaBtn.setText(side + Util.fmt(a) + " MINIMA · " + route + " (on-chain, ~3 min)");
-        boolean ok = canAfford && !act.isBusy() && !wait;
-        ctaBtn.setEnabled(ok); ctaBtn.setAlpha(ok ? 1f : 0.45f);
+        boolean free = canAfford && !act.isBusy();
+        ctaSource = MainActivity.SRC_FAST; shownRoute = "REST"; shownRoute2 = null;
+        if (p.signum() <= 0 || a.signum() <= 0) { cta(ctaBtn, buyMode ? "BUY MINIMA" : "SELL MINIMA", free); return; }
+        // Owner 7 Nov: each button names its route and its price — the same decide() its click runs, per source.
+        MainActivity.Decision f = act.routeFor(buyMode, p, a, MainActivity.SRC_FAST), q = act.routeFor(buyMode, p, a, MainActivity.SRC_POOL);
+        boolean fast = f != null && "FAST".equals(f.route), pool = q != null && q.full != null;
+        if (!fast && !pool) {
+            if (f == null || q == null) cta(ctaBtn, "QUOTING…", false);
+            else cta(ctaBtn, buyMode ? "BUY MINIMA" : "SELL MINIMA", free);   // nothing crosses: rests as your FAST order
+            return;
+        }
+        BigDecimal fAvg = fast ? act.fastAvg(buyMode, p, a) : null, qAvg = pool ? q.full.effectivePrice : null;
+        boolean poolBest = pool && (fAvg == null || (buyMode ? qAvg.compareTo(fAvg) < 0 : qAvg.compareTo(fAvg) > 0));
+        boolean both = fast && pool;
+        String star = "\n★ best price";
+        String fastText = side + Util.fmt(a.min(act.offered(buyMode, p))) + " NOW · FAST\ninstant · " + (fAvg == null ? "" : Util.fmtPrice(fAvg)) + (both && !poolBest ? star : "");
+        String route = pool ? MainActivity.routeName(q.full) : null;
+        String poolText = !pool ? null : !poolsShown ? route + " PRICES LOADING…"
+                : side + Util.fmt(q.full.totalMinima) + " · " + route + "\non-chain ~3 min · " + Util.fmtPrice(qAvg) + (both && poolBest ? star : "");
+        if (fast) { shownRoute = "FAST"; cta(ctaBtn, fastText, free); }
+        if (pool) {
+            TextView b = both ? cta2Btn : ctaBtn;
+            if (both) cta2Btn.setVisibility(VISIBLE); else ctaSource = MainActivity.SRC_POOL;
+            if (both) shownRoute2 = route; else shownRoute = route;
+            cta(b, poolText, free && poolsShown);   // a pool route is never taken while its prices are missing from the ladder
+        }
     }
+    private static void cta(TextView b, String text, boolean ok) { b.setText(text); b.setEnabled(ok); b.setAlpha(ok ? 1f : 0.45f); }
     void paintCtaPublic() { paintCta(); }
     void paintLog() { if (logTv == null) return; String t = act.takeLog(); logTv.setText(t.trim()); logTv.setVisibility(t.isEmpty() ? GONE : VISIBLE); }
     void clearAmount() { if (amountIn != null) amountIn.setText(""); }
     void setAmount(BigDecimal a) { if (amountIn != null) amountIn.setText(a.signum() > 0 ? a.stripTrailingZeros().toPlainString() : ""); }
 
-    private void submit() {
+    private void submit(int source, String route) {
         BigDecimal price = Util.dec(priceIn.getText().toString()), amount = Util.dec(amountIn.getText().toString());
         if (price.signum() <= 0 || amount.signum() <= 0) { act.toast("Enter a price and amount"); return; }
         if (price.scale() > 8 || amount.scale() > 8) { act.toast("At most 8 decimals"); return; }
-        act.placeOrder(buyMode, price, amount, "?".equals(shownRoute) ? null : shownRoute);
+        act.placeOrder(buyMode, price, amount, route, source);
     }
 
     // ---- my open orders ----
