@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.6 app/src/test/java/com/eurobuddha/atomix/swap/Htlc13Test.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.7 app/src/test/java/com/eurobuddha/atomix/swap/Htlc13Test.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import static org.junit.Assert.*;
@@ -24,7 +24,8 @@ import java.util.List;
  * The maker's counter-leg of a USDT-paid take locks at v1.3 for v1.3 takers; every scan covers both addresses; the order
  * hides v1.3-only asks from older clients by moving the ask balance to bal.m13.
  * (Script → address was checked on a node: runscript gives {@link MinimaHtlc#HTLC_ADDRESS_V13}; 32-byte secret claims,
- * 31 and 40 are refused.)
+ * 31 and 40 are refused; 0.2.7 adds the HEX type check — a 32-character STRING secret, ASCII or 48-byte UTF-8, is refused,
+ * where v1.3 as first written let it through. New address re-derived on the node.)
  */
 public class Htlc13Test {
     private final List<String> commands = new ArrayList<>();
@@ -58,9 +59,11 @@ public class Htlc13Test {
 
     @Test public void v13IsV12PlusTheLengthCheckOnly() {
         String v12 = MinimaHtlc.HTLC_SCRIPT.replace("LET version=1.2 ", "");
-        String v13 = MinimaHtlc.HTLC_SCRIPT_V13.replace("LET version=1.3 ", "").replace("ASSERT LEN(secret) EQ 32 ", "");
+        String v13 = MinimaHtlc.HTLC_SCRIPT_V13.replace("LET version=1.3 ", "").replace("ASSERT HEX(secret) EQ secret ASSERT LEN(secret) EQ 32 ", "");
         assertEquals(v12, v13);
         assertTrue(MinimaHtlc.HTLC_SCRIPT_V13.indexOf("ASSERT LEN(secret) EQ 32") < MinimaHtlc.HTLC_SCRIPT_V13.indexOf("SHA2(secret)"));
+        // 0.2.7: LEN counts a STRING's characters, SHA2 its UTF-8 bytes — the HEX type check must come first
+        assertTrue(MinimaHtlc.HTLC_SCRIPT_V13.contains("ASSERT HEX(secret) EQ secret ASSERT LEN(secret) EQ 32 "));
         assertTrue("the refund branch runs before the new check",
                 MinimaHtlc.HTLC_SCRIPT_V13.indexOf("SIGNEDBY(owner) AND (@BLOCK GT timelock)") < MinimaHtlc.HTLC_SCRIPT_V13.indexOf("LEN(secret)"));
     }

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.6 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.7 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -37,19 +37,22 @@ public final class MinimaHtlc {
 
     /** SECURITY (review 7 Nov, HTLC v1.3): v1.2 never checks the secret's length, but the Ethereum vault's withdraw takes
      *  exactly 32 bytes — so on a USDT-paid take a 40-byte secret claimed the maker's Minima lock while the maker could never
-     *  withdraw the USDT. v1.3 = v1.2 plus ONE line, {@code ASSERT LEN(secret) EQ 32}, before the secret is used (the refund
-     *  branch above it is unchanged). Tested in the KISS VM: 32 bytes claims; 31 and 40 are refused. The maker's counter-leg
+     *  withdraw the USDT. v1.3 = v1.2 plus {@code ASSERT HEX(secret) EQ secret ASSERT LEN(secret) EQ 32}, before the secret
+     *  is used (the refund branch above it is unchanged). The HEX type check comes first because for a STRING, LEN counts
+     *  characters while SHA2 hashes the UTF-8 bytes: 32 characters of "é" plus ASCII is 48 bytes and passed LEN alone
+     *  (0.2.7, independent review); EQ across value types throws, so a STRING or NUMBER secret fails the script. Tested in
+     *  the KISS VM: a 32-byte HEX claims; 31/40-byte HEX and 32-character STRINGs (ASCII or UTF-8) are refused. The maker's counter-leg
      *  on a USDT-paid take locks here, and only for a taker whose handshake says it understands v1.3. Every scan, claim and
      *  refund covers BOTH addresses, so a lock at either one always settles. */
     public static final String HTLC_SCRIPT_V13 =
             "LET version=1.3 LET owner=PREVSTATE(0) LET requestamount=PREVSTATE(1) LET requesttoken=PREVSTATE(2) "
           + "LET timelock=PREVSTATE(3) LET counterparty=PREVSTATE(4) LET hash=PREVSTATE(5) LET ownerethkey=PREVSTATE(6) "
           + "IF SIGNEDBY(owner) AND (@BLOCK GT timelock) THEN RETURN TRUE ENDIF LET secret=STATE(100) "
-          + "ASSERT LEN(secret) EQ 32 "
+          + "ASSERT HEX(secret) EQ secret ASSERT LEN(secret) EQ 32 "
           + "ASSERT SIGNEDBY(counterparty) AND (SHA2(secret) EQ hash) ASSERT STATE(101) EQ hash "
           + "ASSERT STATE(102) EQ STRING(owner) ASSERT STATE(103) EQ STRING(counterparty) "
           + "RETURN VERIFYOUT(@INPUT 0xFFEEDD9999 0.0001 @TOKENID TRUE)";
-    public static final String HTLC_ADDRESS_V13 = "MxG0855DQH577SS5FE1N756PJSQMR301NDHVV9FW7QCGUNQ3TWAFNYUKVR0Q79H";
+    public static final String HTLC_ADDRESS_V13 = "MxG0832NN9BNMM4FG9JQWHANJ47R1Y723VK1KKA3R6WTT63Y6JSERYYEMT9PTA7";
     /** Every address a swap lock can sit at: scans, refunds and the market feed walk all of them. */
     public static final String[] HTLC_ADDRESSES = {HTLC_ADDRESS, HTLC_ADDRESS_V13};
     public static boolean isHtlcAddress(String mx) {
