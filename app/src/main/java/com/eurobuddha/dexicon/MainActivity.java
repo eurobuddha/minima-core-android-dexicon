@@ -420,34 +420,76 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
      * PandaDEX's composite transaction (quoted off the UI thread, exactly as PandaDEX TradeView.submit). Nothing
      * crosses → the order rests on the relays as a FAST order.
      */
-    void placeOrder(boolean buy, BigDecimal price, BigDecimal amount) {
+    void placeOrder(boolean buy, BigDecimal price, BigDecimal amount, String shownRoute) {
         if (gateRefuses()) return;
         if (me == null || engine == null) { toast("Identity not ready — is Dexicon enabled in Minima Core?"); return; }
         if (busy) { toast("A transaction is in progress"); return; }
         final Envelope best = bestFastCross(buy, price);
         final List<Order5> orders = new ArrayList<>(restingBook().values());
         final List<Pool> pools = new ArrayList<>(restingPools());
-        if (orders.isEmpty() && pools.isEmpty()) { placeFast(buy, price, amount, best); return; }
         final long block = chainBlock;
-        final BigDecimal fastQty = best == null ? null : amount.min(new BigDecimal(best.amount));
         busy = true; setStage("Calculating quote…"); repaint();
         quoteExec.execute(() -> {
-            CompositeRouter.Plan full = null, head = null;
-            String error = null;
-            try {
-                full = CompositeRouter.plan(orders, pools, buy, amount, price, block);
-                head = fastQty == null ? full : CompositeRouter.plan(orders, pools, buy, fastQty, price, block);
-            } catch (RuntimeException invalid) { error = "Could not calculate this quote. Refresh and check the amounts."; }
-            final CompositeRouter.Plan fFull = full, fHead = head; final String fError = error;
+            final Decision d = decide(buy, price, amount, best, orders, pools, block);
             ui.post(() -> {
                 if (closed) return;
                 busy = false; setStage(""); repaint();
-                if (fError != null) { toast(fError); return; }
-                if (SourcePick.restingFirst(fHead, fastQty, best == null ? null : new BigDecimal(best.price), buy))
-                    confirmComposite(fFull, buy, amount, price, best);
+                if (d.error != null) { toast(d.error); return; }
+                // owner 7 Nov: the button names the route; the click never takes a route the button did not show
+                if (shownRoute != null && !shownRoute.equals(d.route)) { toast("The best route just changed to " + d.route + " — the button shows it now. Tap again to trade."); return; }
+                if (d.full != null) confirmComposite(d.full, buy, amount, price, best);
                 else placeFast(buy, price, amount, best);
             });
         });
+    }
+
+    /** One click's route: FAST (sweep the relay orders), BOOK / POOL / BOOK+POOL (on-chain composite) or REST (nothing
+     *  crosses). Pure; runs on quoteExec. The CTA label and the click both use it, so they always agree. */
+    static final class Decision {
+        final String route; final CompositeRouter.Plan full; final String error;
+        Decision(String route, CompositeRouter.Plan full, String error) { this.route = route; this.full = full; this.error = error; }
+    }
+    static Decision decide(boolean buy, BigDecimal price, BigDecimal amount, Envelope best, List<Order5> orders, List<Pool> pools, long block) {
+        String fast = best != null ? "FAST" : "REST";
+        if (orders.isEmpty() && pools.isEmpty()) return new Decision(fast, null, null);
+        BigDecimal fastQty = best == null ? null : amount.min(new BigDecimal(best.amount));
+        CompositeRouter.Plan full, head;
+        try {
+            full = CompositeRouter.plan(orders, pools, buy, amount, price, block);
+            head = fastQty == null ? full : CompositeRouter.plan(orders, pools, buy, fastQty, price, block);
+        } catch (RuntimeException invalid) { return new Decision(null, null, "Could not calculate this quote. Refresh and check the amounts."); }
+        if (SourcePick.restingFirst(head, fastQty, best == null ? null : new BigDecimal(best.price), buy)) return new Decision(routeName(full), full, null);
+        return new Decision(fast, null, null);
+    }
+    static String routeName(CompositeRouter.Plan plan) {
+        return plan.orderMinima.signum() > 0 && plan.poolMinima.signum() > 0 ? "BOOK+POOL" : plan.poolMinima.signum() > 0 ? "POOL" : "BOOK";
+    }
+
+    // The CTA's route, quoted off the UI thread whenever the inputs or the liquidity change; null while quoting.
+    private String routeKey = "", routeReadyKey = "", routeLabel;
+    String routeFor(boolean buy, BigDecimal price, BigDecimal amount) {
+        final Envelope best = bestFastCross(buy, price);
+        final List<Order5> orders = new ArrayList<>(restingBook().values());
+        final List<Pool> pools = new ArrayList<>(restingPools());
+        final long block = chainBlock;
+        StringBuilder k = new StringBuilder().append(buy).append('|').append(price.toPlainString()).append('|').append(amount.toPlainString()).append('|').append(block);
+        if (best != null) k.append('|').append(best.orderId).append(':').append(best.seq).append(':').append(best.amount);
+        for (String id : new java.util.TreeSet<>(restingBook().keySet())) k.append('|').append(id);
+        for (Pool pl : pools) k.append('|').append(pl.coinidM).append(':').append(pl.coinidT);
+        final String key = k.toString();
+        if (key.equals(routeReadyKey)) return routeLabel;
+        if (!key.equals(routeKey)) {
+            routeKey = key;
+            quoteExec.execute(() -> {
+                final Decision d = decide(buy, price, amount, best, orders, pools, block);
+                ui.post(() -> {
+                    if (closed || !key.equals(routeKey)) return;
+                    routeReadyKey = key; routeLabel = d.error != null ? "?" : d.route;   // "?": the click shows the quote error
+                    if (trade != null) trade.paintCtaPublic();
+                });
+            });
+        }
+        return routeReadyKey.isEmpty() ? null : routeLabel;   // the previous label while re-quoting (no flicker); a click on a stale label is refused by placeOrder
     }
 
     /** The FAST path: a crossing fast order is taken at once (one click, no dialog), else the order rests as a fast order. */
@@ -508,7 +550,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         if (gateRefuses()) { setStage(""); return; }
         if (busy) { toast("A transaction is in progress"); return; }
         busy = true;
-        final String route = plan.orderMinima.signum() > 0 && plan.poolMinima.signum() > 0 ? "BOOK+POOL" : plan.poolMinima.signum() > 0 ? "POOL" : "BOOK";
+        final String route = routeName(plan);
         final String actId = ActivityLog.newId("slow_");
         final JSONObject[] posted = {new JSONObject()};
         try {

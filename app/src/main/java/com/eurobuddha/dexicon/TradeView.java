@@ -65,6 +65,10 @@ public final class TradeView extends LinearLayout {
     private java.util.List<OrderPreview.Lvl> lastAsks = new ArrayList<>(), lastBids = new ArrayList<>();
     private BigDecimal lastMid;
     private boolean canAfford = true;
+    /** Pool depth for the current pools is on the ladder (false while SyntheticDepth re-samples). */
+    private boolean poolsShown = true;
+    /** The route the CTA showed when it was last painted — the click must take this route or nothing. */
+    private String shownRoute;
     private EditText priceIn, amountIn;
     private final Runnable totalTask = this::updateTotal;
 
@@ -444,10 +448,18 @@ public final class TradeView extends LinearLayout {
         if (ctaBtn == null) return;
         if (act.taking()) { ctaBtn.setText("TRADING… " + act.takingSecs() + "s"); ctaBtn.setEnabled(false); ctaBtn.setAlpha(0.75f); return; }
         BigDecimal p = Util.dec(priceIn.getText().toString()), a = Util.dec(amountIn.getText().toString());
-        // the sweep (owner 7 Nov): one click takes every crossing FAST order up to the amount — the button names that total
-        BigDecimal offer = p.signum() > 0 && a.signum() > 0 ? act.offered(buyMode, p) : BigDecimal.ZERO;
-        ctaBtn.setText(offer.signum() > 0 ? (buyMode ? "BUY " : "SELL ") + Util.fmt(a.min(offer)) + " MINIMA NOW" : buyMode ? "BUY MINIMA" : "SELL MINIMA");
-        boolean ok = canAfford && !act.isBusy();
+        // owner 7 Nov: the button names the route the click will take (the same decide() the click runs) — a pool
+        // route is never taken while its prices are still missing from the ladder.
+        String route = p.signum() > 0 && a.signum() > 0 ? act.routeFor(buyMode, p, a) : "REST";
+        shownRoute = route;
+        String side = buyMode ? "BUY " : "SELL ";
+        boolean wait = route == null || (!"FAST".equals(route) && !"REST".equals(route) && !"?".equals(route) && !poolsShown);
+        if (route == null) ctaBtn.setText("QUOTING…");
+        else if (wait) ctaBtn.setText("POOL PRICES LOADING…");
+        else if ("FAST".equals(route)) ctaBtn.setText(side + Util.fmt(a.min(act.offered(buyMode, p))) + " MINIMA NOW · FAST");
+        else if ("REST".equals(route) || "?".equals(route)) ctaBtn.setText(buyMode ? "BUY MINIMA" : "SELL MINIMA");
+        else ctaBtn.setText(side + Util.fmt(a) + " MINIMA · " + route + " (on-chain, ~3 min)");
+        boolean ok = canAfford && !act.isBusy() && !wait;
         ctaBtn.setEnabled(ok); ctaBtn.setAlpha(ok ? 1f : 0.45f);
     }
     void paintCtaPublic() { paintCta(); }
@@ -459,7 +471,7 @@ public final class TradeView extends LinearLayout {
         BigDecimal price = Util.dec(priceIn.getText().toString()), amount = Util.dec(amountIn.getText().toString());
         if (price.signum() <= 0 || amount.signum() <= 0) { act.toast("Enter a price and amount"); return; }
         if (price.scale() > 8 || amount.scale() > 8) { act.toast("At most 8 decimals"); return; }
-        act.placeOrder(buyMode, price, amount);
+        act.placeOrder(buyMode, price, amount, "?".equals(shownRoute) ? null : shownRoute);
     }
 
     // ---- my open orders ----
@@ -509,6 +521,7 @@ public final class TradeView extends LinearLayout {
         String key = depthKey(pools, tick);
         requestDepth(pools, tick, key);
         boolean poolsReady = pools.isEmpty() || key.equals(readyDepthKey);
+        poolsShown = poolsReady;
         if (key.equals(readyDepthKey)) {
             for (SyntheticDepth.Row r : readyPoolAsks) { Level lv = asks.computeIfAbsent(r.price, k -> new Level()); lv.pool = lv.pool.add(r.poolMinima); if (lv.exact == null) lv.exact = r.price; }
             for (SyntheticDepth.Row r : readyPoolBids) { Level lv = bids.computeIfAbsent(r.price, k -> new Level()); lv.pool = lv.pool.add(r.poolMinima); if (lv.exact == null) lv.exact = r.price; }
