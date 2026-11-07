@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.82 app/src/main/java/com/eurobuddha/pandapools/OwnPoolStore.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.83 app/src/main/java/com/eurobuddha/pandapools/OwnPoolStore.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.Context;
@@ -259,6 +259,37 @@ public final class OwnPoolStore {
             o.put("last_coinid_m", p.coinidM).put("last_coinid_t", p.coinidT);
             return prefs(c).edit().putString(key(p.address), o.toString()).commit();
         } catch (Exception invalid) { return false; }
+    }
+
+    /** Review 7 Nov (D-1): my own refresh/deposit/migrate/create recreate a pool's reserves; record the new coin ids (fixed
+     *  before mining — txnpost's reply carries them) so a later read can find the reserves by id even when dust coins at
+     *  the pool address push the coin count past the bounded-read limit. Hints are an accelerator, never authority:
+     *  ReserveRecovery still checks the coins it reads. */
+    static synchronized void rememberPosted(Context c, JSONObject postReply) {
+        if (c == null || postReply == null) return;
+        JSONObject r = postReply.optJSONObject("response");
+        if (r != null && r.optJSONObject("txpow") != null) r = r.optJSONObject("txpow");
+        JSONObject body = r == null ? null : r.optJSONObject("body");
+        JSONObject txn = body == null ? null : body.optJSONObject("txn");
+        org.json.JSONArray outs = txn == null ? null : txn.optJSONArray("outputs");
+        if (outs == null) return;
+        for (Pool p : all(c)) {
+            String m = null, t = null;
+            for (int i = 0; i < outs.length(); i++) {
+                JSONObject o = outs.optJSONObject(i);
+                if (o == null || p.address == null || !p.address.equalsIgnoreCase(o.optString("address"))) continue;
+                if ("0x00".equalsIgnoreCase(o.optString("tokenid"))) m = o.optString("coinid");
+                else if (p.tok != null && p.tok.equalsIgnoreCase(o.optString("tokenid"))) t = o.optString("coinid");
+            }
+            if (!FundingCoins.hex(m) || !FundingCoins.hex(t)) continue;
+            String previous = prefs(c).getString(key(p.address), "");
+            if (previous.isEmpty()) continue;
+            try {
+                JSONObject o = new JSONObject(previous);
+                o.put("last_coinid_m", m).put("last_coinid_t", t);
+                prefs(c).edit().putString(key(p.address), o.toString()).commit();
+            } catch (Exception ignore) { /* hints only */ }
+        }
     }
 
     private static String reconstruct(Pool p) {

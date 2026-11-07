@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.82 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.83 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONArray;
@@ -396,7 +396,7 @@ public class PoolManager {
      */
     public void forwardOwnerFunds(final String oadr, final ForwardResult cb) {
         if (!FundingCoins.hex(oadr)) { cb.onFailed("Invalid owner address."); return; }
-        Pool recovery = ExitStore.recoveryPool(node.context(), oadr);
+        Pool recovery = ExitStore.outstandingRecovery(node.context(), oadr);   // review 7 Nov (R2-2)
         if (recovery != null) { forwardRecovery(recovery, cb); return; }
         List<String> owners = new ArrayList<>();
         for (Pool p : OwnPoolStore.all(node.context())) if (oadr.equalsIgnoreCase(p.oadr)) owners.add(p.opk);

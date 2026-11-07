@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.82 app/src/main/java/com/eurobuddha/pandapools/TxPost.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.83 app/src/main/java/com/eurobuddha/pandapools/TxPost.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONObject;
@@ -151,6 +151,7 @@ public final class TxPost {
                             node.cmd("txndelete id:" + txid, NOOP);
                             String postedId = Util.extractTxpowid(j, txid);
                             ActivityLog.rememberSubmission(node.context(), j, postedId);
+                            OwnPoolStore.rememberPosted(node.context(), j);   // review 7 Nov (D-1): hints follow the reserves I just created
                             done.ok(postedId);
                         }
                         else {
