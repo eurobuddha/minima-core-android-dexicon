@@ -12,7 +12,7 @@ import java.math.BigDecimal;
 import java.util.Set;
 
 /**
- * One live order coin on the V5 book. Parsed defensively from a `coins` row: token coin
+ * One live order coin on the book (V6 for new orders, V5 until its coins are gone). Parsed defensively from a `coins` row: token coin
  * VALUE is `tokenamount` (raw `amount` is the sub-grain coloured underlying — reading it is
  * a fund bug, see usdtSwap lesson); price is ALWAYS derived from port 2 / locked amount
  * (port 6 is display-only and taker-writable on remainders).
@@ -20,6 +20,9 @@ import java.util.Set;
 public final class Order5 {
 
     public final String coinid;
+    /** The covenant this coin sits at (DexContract.ADDR_V6 or ADDR_V5, canonical 0x form): a partial fill puts the
+     *  remainder back HERE and an owner relock keeps it here, so V5 orders keep working after new ones move to V6. */
+    public final String addr;
     public final String ownerPk;      // port 0
     public final String wantAddr;     // port 1
     public final BigDecimal wantAmt;  // port 2
@@ -34,10 +37,11 @@ public final class Order5 {
     private String sourceJson;       // exact parsed coin, reused by durable recovery
     private boolean relevant;         // node-side ownership belt (coins relevant:true)
 
-    private Order5(String coinid, String ownerPk, String wantAddr, BigDecimal wantAmt,
+    private Order5(String coinid, String addr, String ownerPk, String wantAddr, BigDecimal wantAmt,
                    String wantTok, String orderId, boolean sell, boolean gtc,
                    BigDecimal minRem, BigDecimal locked, String lockedTok, long created) {
         this.coinid = coinid;
+        this.addr = addr;
         this.ownerPk = ownerPk;
         this.wantAddr = wantAddr;
         this.wantAmt = wantAmt;
@@ -56,6 +60,12 @@ public final class Order5 {
         try {
             String coinid = coin.optString("coinid", "");
             if (coinid.isEmpty()) return null;
+            // A row with no address at all (pre-V6 stored records) can only be a V5 order; any address given must be
+            // one of the two order covenants — a coin anywhere else is not an order.
+            String a = coin.optString("address", ""), mx = coin.optString("miniaddress", "");
+            String addr = a.isEmpty() && mx.isEmpty() ? DexContract.ADDR_V5
+                    : DexContract.orderAddr(a.isEmpty() ? mx : a);
+            if (addr == null) return null;
             String[] st = new String[9];
             Object stateObj = coin.opt("state");
             if (stateObj instanceof JSONArray) {
@@ -89,7 +99,7 @@ public final class Order5 {
             if (minRem == null) return null;
             long created = positiveLong(coin, "created");
             String wantTok = st[3] == null ? "0x00" : st[3];
-            Order5 order = new Order5(coinid, st[0], st[1], want, wantTok, st[4], sell, gtc, minRem,
+            Order5 order = new Order5(coinid, addr, st[0], st[1], want, wantTok, st[4], sell, gtc, minRem,
                     locked, tokenid, created);
             order.sourceJson = coin.toString();
             return order;
@@ -171,7 +181,7 @@ public final class Order5 {
         String expectedLocked = sell ? "0x00" : DexContract.MXUSD_ID;
         if (!expectedLocked.equalsIgnoreCase(lockedTok)) return false;
         if (wantAddr == null || !wantAddr.startsWith("0x") || wantAddr.length() != 66) return false;
-        if (wantAddr.equalsIgnoreCase(DexContract.ADDR_V5)) return false;
+        if (DexContract.isOrderAddr(wantAddr)) return false;
         int wantDp = sell ? PriceMath.MXUSD_DP : PriceMath.MINIMA_DP;
         if (wantAmt.stripTrailingZeros().scale() > wantDp) return false;
         int lockDp = sell ? PriceMath.MINIMA_DP : PriceMath.MXUSD_DP;

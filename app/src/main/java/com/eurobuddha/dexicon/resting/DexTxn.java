@@ -223,11 +223,7 @@ public class DexTxn {
                     + (Util.MINIMA_TOKENID.equals(p[2]) ? "" : " tokenid:" + p[2]) + " storestate:false");
         }
         if (prep.partial != null) {
-            Order5 o = prep.partial.order;
-            steps.add("txnoutput id:" + txid + " amount:" + prep.partialRem.toPlainString()
-                    + " address:" + DexContract.ADDR_V5
-                    + (Util.MINIMA_TOKENID.equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok)
-                    + " storestate:true");
+            steps.add(covenantOutput(txid, prep.partial.order, prep.partialRem));
         }
         String proceedsTok = takerBuys ? Util.MINIMA_TOKENID : DexContract.MXUSD_ID;
         BigDecimal proceeds = takerBuys ? plan.totalMinima : plan.totalMxusd;
@@ -281,6 +277,13 @@ public class DexTxn {
             }
             @Override public void onError(String m) { fail.accept(m); }
         });
+    }
+
+    /** A coin put back at the covenant (partial-fill remainder) goes to THE ORDER'S OWN address: the covenant demands
+     *  @ADDRESS, so a V5 order stays at V5 and a V6 order at V6 (port of pandadex-mds 0.4.25 / PandaDEX 0.4.28). */
+    static String covenantOutput(String txid, Order5 o, BigDecimal amount) {
+        return "txnoutput id:" + txid + " amount:" + amount.toPlainString() + " address:" + o.addr
+                + (Util.MINIMA_TOKENID.equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok) + " storestate:true";
     }
 
     static String poolScriptRegisterCommand(Pool p, String script) {

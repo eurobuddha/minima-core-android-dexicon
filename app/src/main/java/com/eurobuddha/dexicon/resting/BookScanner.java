@@ -14,10 +14,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The bounded V5 book scan — TWO commands total (Limit fired ten):
+ * The bounded book scan, one pass per covenant (Limit fired ten):
  *
- *   1. coins order:desc depth:<SCAN_DEPTH> address:<V5>   — the book
- *   2. coins relevant:true address:<V5>                                    — ownership belt
+ *   coins order:desc depth:<SCAN_DEPTH> address:<V6>   — new orders
+ *   coins order:desc depth:<SCAN_DEPTH> address:<V5>   — old orders, served until they are gone
  *
  * SCAN_DEPTH sits under the node's ~1024-block visibility trim and above EXPIRY_BLOCKS, so
  * the scan sees every live order: GTC renewal keeps
@@ -41,7 +41,9 @@ public final class BookScanner {
      *  ceiling — at roughly 800 bytes a row that is ~300 orders. */
     private static final int MIN_SLICE_BLOCKS = 12;
 
-    public static void scan(NodeApi node, Cb cb) {
+    public static void scan(NodeApi node, Cb cb) { scan(node::cmd, cb); }
+
+    static void scan(FundingCoins.Command node, Cb cb) {
         final Map<String, Order5> found = new LinkedHashMap<>();
         final java.util.List<String> raw = new java.util.ArrayList<>();
         final boolean[] truncated = {false};
@@ -49,21 +51,25 @@ public final class BookScanner {
         // is the normal case — slicing unconditionally would issue five queries every poll and
         // make the node re-walk the chain for each. We only pay that cost once the book has
         // actually outgrown the IPC ceiling, which previously froze the book permanently.
-        slice(node, found, truncated, raw, 0, DexContract.SCAN_DEPTH, cb);
+        slice(node, found, truncated, raw, 0, 0, DexContract.SCAN_DEPTH, cb);
     }
 
     /**
      * Walk SCAN_DEPTH in windows of [coinage, coinage+width]. `depth:D coinage:C` selects the
      * block range between them, so consecutive windows tile the whole range.
      */
-    private static void slice(NodeApi node, Map<String, Order5> found, boolean[] truncated,
-                              List<String> raw, int fromAge, int width, Cb cb) {
-        if (fromAge >= DexContract.SCAN_DEPTH) {          // whole range covered
+    private static void slice(FundingCoins.Command node, Map<String, Order5> found, boolean[] truncated,
+                              List<String> raw, int book, int fromAge, int width, Cb cb) {
+        if (fromAge >= DexContract.SCAN_DEPTH) {          // whole range covered for this covenant
+            if (book + 1 < DexContract.BOOK_ADDRS.length) {
+                slice(node, found, truncated, raw, book + 1, 0, DexContract.SCAN_DEPTH, cb);
+                return;
+            }
             cb.onBook(found, truncated[0], raw);
             return;
         }
         int depth = Math.min(fromAge + width, DexContract.SCAN_DEPTH);
-        node.cmd("coins order:desc address:" + DexContract.ADDR_V5
+        node.run("coins order:desc address:" + DexContract.BOOK_ADDRS[book]
                 + " coinage:" + fromAge + " depth:" + depth, new NodeApi.Cb() {
             @Override public void onResult(JSONObject json) {
                 Object resp = json.opt("response");
@@ -87,14 +93,14 @@ public final class BookScanner {
                         raw.add(c.toString());
                     }
                 }
-                slice(node, found, truncated, raw, depth, width, cb);
+                slice(node, found, truncated, raw, book, depth, width, cb);
             }
             @Override public void onError(String message) {
                 // An oversized reply is killed by the IPC ceiling and surfaces here. Halving
                 // the window is the difference between a book that recovers and one that
                 // freezes on its last good cache forever once it outgrows a single reply.
                 if (NodeApi.ERR_TOO_LONG.equals(message) && width > MIN_SLICE_BLOCKS) {
-                    slice(node, found, truncated, raw, fromAge, Math.max(MIN_SLICE_BLOCKS, width / 2), cb);
+                    slice(node, found, truncated, raw, book, fromAge, Math.max(MIN_SLICE_BLOCKS, width / 2), cb);
                     return;
                 }
                 truncated[0] = true;                     // even the narrowest window failed
