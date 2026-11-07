@@ -511,15 +511,25 @@ public final class TradeView extends LinearLayout {
                 shownRoute3 = "BOTH";
                 String r3 = MainActivity.routeName(s3.full);
                 cta3Btn.setVisibility(VISIBLE);
+                // owner 7 Nov: the sweep shows its own average — on-chain MxUSD + the FAST orders' MxUSD over all MINIMA
+                BigDecimal sAvg = MainActivity.sweepAvg(s3.full.totalMinima, s3.full.totalMxusd, s3.fastQ, act.fastAvg(buyMode, p, s3.fastQ));
+                boolean sweepBest = sAvg != null && better(sAvg, fAvg) && better(sAvg, qAvg);
                 cta(cta3Btn, !poolsShown ? "SWEEP · " + r3 + " PRICES LOADING…"
-                        : "SWEEP " + side + Util.fmt(s3.chainQ.add(s3.fastQ)) + " · " + r3 + " + FAST\n" + Util.fmt(s3.chainQ) + " on-chain, then up to " + Util.fmt(s3.fastQ) + " instant",
+                        : "SWEEP " + side + Util.fmt(s3.chainQ.add(s3.fastQ)) + " · " + r3 + " + FAST · avg " + (sAvg == null ? "—" : Util.fmtPrice(sAvg))
+                          + "\n" + Util.fmt(s3.chainQ) + " on-chain, then up to " + Util.fmt(s3.fastQ) + " instant" + (sweepBest ? "  ★ best price" : ""),
                         free && poolsShown);
+                if (sweepBest) {   // the star moves to the sweep
+                    ctaBtn.setText(ctaBtn.getText().toString().replace("\n★ best price", ""));
+                    cta2Btn.setText(cta2Btn.getText().toString().replace("\n★ best price", ""));
+                }
                 ctaBtn.setTextSize(11f); cta2Btn.setTextSize(11f);
                 ctaBtn.setText(ctaBtn.getText().toString().replace(" NOW · FAST", " · FAST only"));
                 cta2Btn.setText(cta2Btn.getText().toString().replaceFirst(" · " + java.util.regex.Pattern.quote(route), " · " + route + " only"));
             }
         }
     }
+    /** Is {@code a} a better average than {@code b} for this side (lower to buy, higher to sell)? A missing b loses. */
+    private boolean better(BigDecimal a, BigDecimal b) { return b == null || (buyMode ? a.compareTo(b) <= 0 : a.compareTo(b) >= 0); }
     private static void cta(TextView b, String text, boolean ok) { b.setText(text); b.setEnabled(ok); b.setAlpha(ok ? 1f : 0.45f); }
     void paintCtaPublic() { paintCta(); }
     void paintLog() { if (logTv == null) return; String t = act.takeLog(); logTv.setText(t.trim()); logTv.setVisibility(t.isEmpty() ? GONE : VISIBLE); }

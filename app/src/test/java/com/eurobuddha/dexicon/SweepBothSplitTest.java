@@ -28,4 +28,10 @@ public class SweepBothSplitTest {
         BigDecimal[] fastCovers = MainActivity.split(d("100"), d("0"), d("1000"), d("0"));
         eq("0", fastCovers[0]); eq("100", fastCovers[1]);   // nothing on-chain: no BOTH (decideBoth returns NONE)
     }
+
+    @Test public void sweepAverageWeighsBothParts() {
+        // 7604 on-chain for 23.96 MxUSD, then 2479 FAST @ 0.0032: (23.96 + 7.9328) / 10083
+        eq("0.00316303", MainActivity.sweepAvg(d("7604"), d("23.96"), d("2479"), d("0.0032")));
+        assertNull(MainActivity.sweepAvg(d("1"), d("1"), d("1"), null));
+    }
 }

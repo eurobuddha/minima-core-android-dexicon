@@ -479,6 +479,13 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         return new BigDecimal[]{chainQ, fastQ};
     }
 
+    /** Average MxUSD per MINIMA over both parts of a sweep (on-chain totals + the FAST part at its own average); null when unknown. */
+    static BigDecimal sweepAvg(BigDecimal chainMinima, BigDecimal chainMxusd, BigDecimal fastQ, BigDecimal fastAvg) {
+        if (fastAvg == null) return null;
+        BigDecimal q = chainMinima.add(fastQ);
+        return q.signum() == 0 ? null : chainMxusd.add(fastQ.multiply(fastAvg)).divide(q, 8, java.math.RoundingMode.HALF_UP);
+    }
+
     static Decision decideBoth(boolean buy, BigDecimal price, BigDecimal amount, Envelope best, BigDecimal fastOffered,
                                List<Order5> orders, List<Pool> pools, long block) {
         if (best == null || fastOffered.signum() <= 0 || (orders.isEmpty() && pools.isEmpty())) return new Decision("NONE", null, null);
@@ -592,7 +599,13 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         StringBuilder sb = new StringBuilder();
         if (both) sb.append("SWEEP ").append(PriceMath.fmt(plan.totalMinima.add(fastQ))).append(" MINIMA, up to ").append(PriceMath.fmtPrice(price))
                 .append(", in two parts:\n  1. ").append(PriceMath.fmt(plan.totalMinima)).append(" on-chain now (below)\n  2. then up to ")
-                .append(PriceMath.fmt(fastQ)).append(" from FAST orders, best price first, the moment part 1 is posted\n\nPART 1 — ");
+                .append(PriceMath.fmt(fastQ)).append(" from FAST orders, best price first, the moment part 1 is posted\n");
+        if (both) {
+            BigDecimal avg = sweepAvg(plan.totalMinima, plan.totalMxusd, fastQ, fastAvg(buy, price, fastQ));
+            if (avg != null) sb.append("Average over both parts ≈ ").append(PriceMath.fmtPrice(avg)).append(" MxUSD per MINIMA (")
+                    .append(PriceMath.fmt(plan.totalMxusd.add(fastQ.multiply(fastAvg(buy, price, fastQ))))).append(" MxUSD)\n");
+            sb.append("\nPART 1 — ");
+        }
         sb.append(buy ? "Buying " : "Selling ").append(PriceMath.fmt(plan.totalMinima)).append(" MINIMA now from on-chain liquidity\n");
         sb.append("Effective ").append(PriceMath.fmtPrice(plan.effectivePrice)).append("  ·  ").append(PriceMath.fmt(plan.totalMxusd)).append(" MxUSD\n");
         if (plan.orderMinima.signum() > 0) {
