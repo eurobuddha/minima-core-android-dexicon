@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.5 app/src/main/java/com/eurobuddha/atomix/swap/SwapTake.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.6 app/src/main/java/com/eurobuddha/atomix/swap/SwapTake.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -28,6 +28,35 @@ public final class SwapTake {
      *  that market — an untagged one re-armed after a currency switch was priced against the other market's
      *  ladder. Untagged entries from before 0.1.89 are unattributable and are dropped on the next write. */
     public static final String P_PENDING = "incoming_hashlocks";
+
+    /** HTLC v1.3 (review 7 Nov): a taker's handshake says {@code "htlc":"1.3"} when it can find and claim a lock at the v1.3
+     *  address. A maker locks its counter-leg of a USDT-paid take ONLY for such a taker (an older one would never see the
+     *  lock and both sides would refund). The hashes are persisted so a restart between handshake and lock keeps it. */
+    public static final String HTLC = "1.3";
+    public static final String P_HTLC13 = "htlc13_takers";
+    public static boolean says13(JSONObject handshake) { return handshake != null && HTLC.equals(handshake.optString("htlc", "")); }
+    /** {@code stored} plus {@code hash}, newest last, at most 256 entries. */
+    public static String remember13(String stored, String hash) {
+        java.util.LinkedHashSet<String> all = parse13(stored);
+        all.remove(MinimaHtlc.normKey(hash)); all.add(MinimaHtlc.normKey(hash));
+        java.util.List<String> keep = new java.util.ArrayList<>(all);
+        return String.join(",", keep.subList(Math.max(0, keep.size() - 256), keep.size()));
+    }
+    /** Host side of a received handshake: if it says v1.3, persist that and tell the engines. */
+    public static void note13(android.content.SharedPreferences prefs, JSONObject handshake, String hash) {
+        if (!says13(handshake) || !MinimaHtlc.isHex(hash)) return;
+        prefs.edit().putString(P_HTLC13, remember13(prefs.getString(P_HTLC13, ""), hash)).apply();
+        SwapEngine.takerUnderstands13(hash);
+    }
+    /** After a restart: re-arm every persisted v1.3 taker. */
+    public static void load13(android.content.SharedPreferences prefs) {
+        for (String h : parse13(prefs.getString(P_HTLC13, ""))) SwapEngine.takerUnderstands13(h);
+    }
+    public static java.util.LinkedHashSet<String> parse13(String stored) {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        if (stored != null) for (String e : stored.split(",")) if (MinimaHtlc.isHex(e)) out.add(MinimaHtlc.normKey(e));
+        return out;
+    }
 
     /** The pending hashlocks persisted for {@code market}. */
     public static java.util.Set<String> pending(String stored, TradingContext market) {
@@ -59,7 +88,7 @@ public final class SwapTake {
         if (market == null) { cb.onFailed(SwapOrderBook.MARKET_ERROR); return; }
         final String destination = market.takeAddr;
         try {
-            JSONObject j = new JSONObject().put("to", makerPublicId).put("from", myPublicId).put("hash", hash);
+            JSONObject j = new JSONObject().put("to", makerPublicId).put("from", myPublicId).put("hash", hash).put("htlc", HTLC);
             String blob = crypto.seal(makerPublicId, j.toString().getBytes(StandardCharsets.UTF_8));
             CommsTransport.postBlob(node, destination, CommsTransport.MESSAGE_AMOUNT, CommsTransport.NATIVE, blob, null, cb);
         } catch (Exception e) {

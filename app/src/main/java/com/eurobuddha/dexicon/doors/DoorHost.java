@@ -581,6 +581,7 @@ public final class DoorHost {
             if (opened.fromPublicId == null || !opened.fromPublicId.equals(from)) return false;
             if (j.has("notice")) return engine.onMakerNotice(hash, from, j.optString("notice"), j.optString("reason"));
             if (m != market || switching) return false;
+            SwapTake.note13(prefs, j, hash);   // HTLC v1.3: a USDT-paid take is answered only for a taker that says it
             java.util.Set<String> set = incomingHashlocks();
             boolean isNew = true;
             for (String e : set) if (hashOf(e).equals(hash)) { isNew = false; break; }
@@ -619,6 +620,7 @@ public final class DoorHost {
     private void loadIncoming() {
         if (incomingLoaded) return;
         incomingLoaded = true;
+        SwapTake.load13(prefs);
         java.util.Set<String> set = incomingHashlocks();
         boolean pruned = false;
         for (java.util.Iterator<String> it = set.iterator(); it.hasNext(); ) {

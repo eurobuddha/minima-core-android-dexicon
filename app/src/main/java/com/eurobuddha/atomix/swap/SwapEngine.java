@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.5 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.6 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -65,7 +65,9 @@ public final class SwapEngine {
      *  withdraw(bytes32,bytes32) takes exactly 32 bytes. On an ETH-first take the TAKER makes the secret: a 40-byte one
      *  claims my Minima counter-leg, and my USDT withdraw can never match it (the taker then refunds). Until a v1.3 script
      *  asserts LEN(secret) EQ 32, a maker does not lock a Minima counter-leg against a USDT lock. Swaps already in flight
-     *  (a row exists) are untouched. Owner decision pending: flip to false only with HTLC v1.3. */
+     *  (a row exists) are untouched. HTLC v1.3 (0.2.6): while true, a USDT-paid take IS answered when the taker's handshake
+     *  says it understands v1.3 — and then only with a lock at the v1.3 address; asks go out as bal.m13 so older clients
+     *  never see them. False (tests only) restores the pre-review behaviour for takers without the capability. */
     public static volatile boolean ETH_FIRST_PAUSED    = true;   // volatile, not final: tests of the normal publish path turn it off
     private static final int  NOTIFY_SCAN_DEPTH         = 256;                               // bounded notify scan
     private static final int  HTLC_SCAN_DEPTH           = 256;                               // bounded HTLC coin scan
@@ -513,6 +515,12 @@ public final class SwapEngine {
     /** A taker told us (via the sealed handshake) the hashlock of a USDT lock addressed to us. We discover it
      *  by deterministic contractId via getContract (free-RPC-safe) instead of eth_getLogs, then respond. */
     public void addIncomingHashlock(String hash) { addIncomingHashlock(hash, null); }
+
+    /** Hashes whose taker handshake said it understands HTLC v1.3 (see {@link SwapTake#HTLC}). Static: the fg and bg
+     *  engines share one decision, like CP_LOCKING. Hosts fill it from the handshake and from the persisted pref. */
+    static final java.util.Set<String> HTLC13_TAKERS = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    public static void takerUnderstands13(String hash) { if (MinimaHtlc.isHex(hash)) HTLC13_TAKERS.add(MinimaHtlc.normKey(hash)); }
+    static boolean takerHas13(String hash) { return hash != null && HTLC13_TAKERS.contains(MinimaHtlc.normKey(hash)); }
     /** {@code fromPublicId} = the taker's comms id from the sealed handshake: where a decline notice goes back to. */
     public void addIncomingHashlock(String hash, String fromPublicId) {
         if (hash == null || hash.isEmpty()) return;
@@ -1262,14 +1270,14 @@ public final class SwapEngine {
                     if (presentLock(coins, hash, block)) return;
                     noteLockGone(hash, SwapDb.EV_LOCK_SPENT, owner, "coins relevant:true coinid:" + id
                             + " returned no unspent coin (owner " + owner + ") and coins relevant:true address:"
-                            + MinimaHtlc.HTLC_ADDRESS + " state:" + MinimaHtlc.normKey(hash) + " returned no lock of mine");
+                            + String.join("|", MinimaHtlc.HTLC_ADDRESSES) + " state:" + MinimaHtlc.normKey(hash) + " returned no lock of mine");
                 }, e -> SwapLog.w("lock read " + hash + " ERR: " + e + " (unknown, not spent)"));
             }, e -> SwapLog.w("lock coin read " + id + " ERR: " + e + " (unknown, not spent)"));
         } else {
             if (myMinimaPk == null || !myPubkeys.contains(MinimaHtlc.normKey(myMinimaPk))) return;
             minima.findMyLockByHash(hash, coins -> {
                 if (presentLock(coins, hash, block)) return;
-                noteLockGone(hash, SwapDb.EV_LOCK_ABSENT, myMinimaPk, "coins relevant:true address:" + MinimaHtlc.HTLC_ADDRESS
+                noteLockGone(hash, SwapDb.EV_LOCK_ABSENT, myMinimaPk, "coins relevant:true address:" + String.join("|", MinimaHtlc.HTLC_ADDRESSES)
                         + " state:" + MinimaHtlc.normKey(hash) + " returned no lock of mine (keys " + myMinimaPk + ")");
             }, e -> SwapLog.w("lock read " + hash + " ERR: " + e + " (unknown, not absent)"));
         }
@@ -2181,8 +2189,11 @@ public final class SwapEngine {
         // I don't know the secret → I'm an ERC20→mxUSDT responder; lock the mxUSDT counter-leg.
         if (io.isShutdown() || halted()) return;   // stopped host/key mismatch: no new liability
         if (db.haveSentCounterParty(hash)) return;
-        if (!ETH_FIRST_PAUSED && db.getSwap(hash) == null && !secondEndpointAgrees(eth, c.contractId, c)) return;   // a new liability never rests on one RPC's word
-        if (ETH_FIRST_PAUSED && db.getSwap(hash) == null) { declineNote(hash, "buys paid in USDT are paused on this maker until HTLC v1.3 (the v1.2 script cannot require a 32-byte secret)"); return; }
+        // HTLC v1.3 (review 7 Nov): a USDT-paid take is answered only with a v1.3 lock, and only for a taker that said it can
+        // claim one. The v1.2 script cannot require a 32-byte secret, so a v1.2 counter-leg could be claimed with a secret
+        // the Ethereum vault refuses — the maker would lose its Minima side and never collect the USDT.
+        if (ETH_FIRST_PAUSED && db.getSwap(hash) == null && !takerHas13(hash)) { declineNote(hash, "your AtomiX is too old for this maker: update it to buy with USDT (HTLC v1.3)"); return; }
+        if (db.getSwap(hash) == null && !secondEndpointAgrees(eth, c.contractId, c)) return;   // a new liability never rests on one RPC's word
         // Persistent dedup (survives a restart / a lost txnpost response that the in-memory CP_LOCKING can't):
         // lockMinimaCounterLeg records the swap row BEFORE broadcast, so a row here means this hash is already
         // being (or was) locked — never re-lock it (the mxUSDT leg has no on-chain hash-uniqueness).
@@ -2303,7 +2314,7 @@ public final class SwapEngine {
                 }
                 notifier.onSwapsChanged();
                 minima.lockFromCoins(pickIds, totalSel, reqMinimaHuman, reqMinimaHuman, "minima", receiverPubkey,
-                        myEth(), hash, timelock, "FALSE", attempt::authorized, new MinimaHtlc.PostCb() {
+                        myEth(), hash, timelock, "FALSE", attempt::authorized, takerHas13(hash), new MinimaHtlc.PostCb() {
                     @Override public void ok(String txpowid) {
                         db.logEvent(hash, SwapDb.EV_CPSENT, "minima", reqMinimaHuman, txpowid);
                         notifier.notify("Locked your " + attempt.market.coinLabel, "Waiting for the counterparty to reveal the secret");

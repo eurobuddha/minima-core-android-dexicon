@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.5 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.6 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -34,6 +34,28 @@ public final class MinimaHtlc {
           + "RETURN VERIFYOUT(@INPUT 0xFFEEDD9999 0.0001 @TOKENID TRUE)";
 
     public static final String HTLC_ADDRESS = "MxG080CRJB1D4NHGRYGNF7Q52FK7023UM3FUUPVD1W1WCQZSA8MDQ25982N842G";
+
+    /** SECURITY (review 7 Nov, HTLC v1.3): v1.2 never checks the secret's length, but the Ethereum vault's withdraw takes
+     *  exactly 32 bytes — so on a USDT-paid take a 40-byte secret claimed the maker's Minima lock while the maker could never
+     *  withdraw the USDT. v1.3 = v1.2 plus ONE line, {@code ASSERT LEN(secret) EQ 32}, before the secret is used (the refund
+     *  branch above it is unchanged). Tested in the KISS VM: 32 bytes claims; 31 and 40 are refused. The maker's counter-leg
+     *  on a USDT-paid take locks here, and only for a taker whose handshake says it understands v1.3. Every scan, claim and
+     *  refund covers BOTH addresses, so a lock at either one always settles. */
+    public static final String HTLC_SCRIPT_V13 =
+            "LET version=1.3 LET owner=PREVSTATE(0) LET requestamount=PREVSTATE(1) LET requesttoken=PREVSTATE(2) "
+          + "LET timelock=PREVSTATE(3) LET counterparty=PREVSTATE(4) LET hash=PREVSTATE(5) LET ownerethkey=PREVSTATE(6) "
+          + "IF SIGNEDBY(owner) AND (@BLOCK GT timelock) THEN RETURN TRUE ENDIF LET secret=STATE(100) "
+          + "ASSERT LEN(secret) EQ 32 "
+          + "ASSERT SIGNEDBY(counterparty) AND (SHA2(secret) EQ hash) ASSERT STATE(101) EQ hash "
+          + "ASSERT STATE(102) EQ STRING(owner) ASSERT STATE(103) EQ STRING(counterparty) "
+          + "RETURN VERIFYOUT(@INPUT 0xFFEEDD9999 0.0001 @TOKENID TRUE)";
+    public static final String HTLC_ADDRESS_V13 = "MxG0855DQH577SS5FE1N756PJSQMR301NDHVV9FW7QCGUNQ3TWAFNYUKVR0Q79H";
+    /** Every address a swap lock can sit at: scans, refunds and the market feed walk all of them. */
+    public static final String[] HTLC_ADDRESSES = {HTLC_ADDRESS, HTLC_ADDRESS_V13};
+    public static boolean isHtlcAddress(String mx) {
+        for (String a : HTLC_ADDRESSES) if (a.equalsIgnoreCase(mx)) return true;
+        return false;
+    }
     public static final String NOTIFY = "0xFFEEDD9999";
     /** The two Minima-side traded assets AtomiX supports. The vault script + address are token-independent
      *  (unchanged), so PUBLISHING/liquidity/market-feed scans filter on {@link #activeToken} to isolate the
@@ -81,7 +103,8 @@ public final class MinimaHtlc {
      * forever, so it survives restarts.
      */
     public void setup(final String savedAddress, final String savedPubkey, final SetupCb cb) {
-        cmd("newscript script:\"" + HTLC_SCRIPT + "\" trackall:false", r1 -> {
+        // Register BOTH scripts: a node that knows only v1.2 cannot attach the v1.3 script to a claim or refund.
+        cmd("newscript script:\"" + HTLC_SCRIPT + "\" trackall:false", r0 -> cmd("newscript script:\"" + HTLC_SCRIPT_V13 + "\" trackall:false", r1 -> {
             if (savedAddress != null && !savedAddress.isEmpty() && savedPubkey != null && !savedPubkey.isEmpty()) {
                 // Verify the node still OWNS the persisted identity, then ADOPT IT EITHER WAY and let
                 // IdentityWatch halt the app if it is orphaned.
@@ -109,7 +132,7 @@ public final class MinimaHtlc {
                 return;
             }
             pickFreshIdentity(cb);
-        }, cb::err);
+        }, cb::err), cb::err);
     }
 
     /** First run only (nothing persisted yet): take one of the node's default keys as our identity. */
@@ -273,14 +296,23 @@ public final class MinimaHtlc {
                               String reqToken, String receiverPubkey, String ownerEthKey, String hashlock,
                               int timelockBlock, String otc, PostCb cb) {
         lockFromCoins(coinids, totalSelected, amount, requestAmount, reqToken, receiverPubkey,
-                ownerEthKey, hashlock, timelockBlock, otc, null, cb);
+                ownerEthKey, hashlock, timelockBlock, otc, null, false, cb);
+    }
+
+    public void lockFromCoins(List<String> coinids, String totalSelected, String amount, String requestAmount,
+                              String reqToken, String receiverPubkey, String ownerEthKey, String hashlock,
+                              int timelockBlock, String otc, java.util.function.BooleanSupplier authorized, PostCb cb) {
+        lockFromCoins(coinids, totalSelected, amount, requestAmount, reqToken, receiverPubkey,
+                ownerEthKey, hashlock, timelockBlock, otc, authorized, false, cb);
     }
 
     /** New responder liabilities retain their authorization through SignGate and the node worker. */
     public void lockFromCoins(List<String> coinids, String totalSelected, String amount, String requestAmount,
                               String reqToken, String receiverPubkey, String ownerEthKey, String hashlock,
-                              int timelockBlock, String otc, java.util.function.BooleanSupplier authorized, PostCb cb) {
+                              int timelockBlock, String otc, java.util.function.BooleanSupplier authorized,
+                              boolean htlc13, PostCb cb) {
         final String token = activeToken;
+        final String htlcAddress = htlc13 ? HTLC_ADDRESS_V13 : HTLC_ADDRESS;
         final java.util.function.BooleanSupplier current = authorized == null ? null
                 : () -> token.equals(activeToken) && authorized.getAsBoolean();
         if (!ready()) { cb.err("Minima wallet not ready"); return; }
@@ -313,7 +345,7 @@ public final class MinimaHtlc {
         seq.add("txnstate id:" + id + " port:5 value:" + hashlock);
         seq.add("txnstate id:" + id + " port:6 value:" + ownerEthKey);
         seq.add("txnstate id:" + id + " port:7 value:" + otc);
-        seq.add("txnoutput id:" + id + " amount:" + amount + " address:" + HTLC_ADDRESS + " tokenid:" + token + " storestate:true");
+        seq.add("txnoutput id:" + id + " amount:" + amount + " address:" + htlcAddress + " tokenid:" + token + " storestate:true");
         if (positive(change)) seq.add("txnoutput id:" + id + " amount:" + change + " address:" + myAddress + " tokenid:" + token + " storestate:false");
         seq.add("txnsign id:" + id + " publickey:auto");
         addValidation(seq, id);
@@ -443,11 +475,7 @@ public final class MinimaHtlc {
      *  state[5]. A non-list reply is an error, never "none". */
     public void findMyLockByHash(String hash, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
         if (!isHex(hash)) { err.accept("scan: non-hex hash"); return; }   // interpolated into the coins command
-        cmd("coins relevant:true simplestate:true address:" + HTLC_ADDRESS + " state:" + normKey(hash), r -> {
-            Object resp = r.opt("response");
-            if (!(resp instanceof org.json.JSONArray)) { err.accept("coins: no coin list"); return; }
-            ok.accept((org.json.JSONArray) resp);
-        }, err);
+        acrossAddresses(a -> "coins relevant:true simplestate:true address:" + a + " state:" + normKey(hash), true, ok, err);
     }
 
     /** Is there any UNCONFIRMED native mxUSDT in my wallet (a split/lock/payment still settling)? The chain's
@@ -562,14 +590,11 @@ public final class MinimaHtlc {
      * crash the node over the IPC). Includes the upstream miniSwap dapp's locks (same contract).
      */
     public void scanAllHtlcCoins(int coinageMin, int depth, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
-        cmd("coinnotify action:add address:" + HTLC_ADDRESS, r -> doScanAllHtlc(coinageMin, depth, ok, err), e -> doScanAllHtlc(coinageMin, depth, ok, err));
+        notifyAll(() -> doScanAllHtlc(coinageMin, depth, ok, err));
     }
 
     private void doScanAllHtlc(int coinageMin, int depth, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
-        cmd("coins coinage:" + coinageMin + " tokenid:" + activeToken + " simplestate:true depth:" + depth + " address:" + HTLC_ADDRESS, r -> {
-            Object resp = r.opt("response");
-            ok.accept(resp instanceof org.json.JSONArray ? (org.json.JSONArray) resp : new org.json.JSONArray());
-        }, err);
+        acrossAddresses(a -> "coins coinage:" + coinageMin + " tokenid:" + activeToken + " simplestate:true depth:" + depth + " address:" + a, false, ok, err);
     }
 
     /** Find HTLC coin(s) carrying a specific hashlock (state[5]==hash) via the reliable coinnotify-add +
@@ -586,9 +611,7 @@ public final class MinimaHtlc {
      *  this behaves exactly like scanHtlcByHash. On a MegaMMR node a coin I locked is findable at ANY age, which
      *  is the only way to refund a lock older than the ~1024-block tree. */
     public void scanHtlcByHashDeep(String hash, int coinageMin, int depth, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
-        cmd("coinnotify action:add address:" + HTLC_ADDRESS,
-            r -> doScanHtlcByState(hash, coinageMin, depth, true, ok, err),
-            e -> doScanHtlcByState(hash, coinageMin, depth, true, ok, err));
+        notifyAll(() -> doScanHtlcByState(hash, coinageMin, depth, true, ok, err));
     }
 
     /** All open HTLC coins carrying MY key (owner state[0] for coins I locked, or receiver state[4] for coins
@@ -599,9 +622,7 @@ public final class MinimaHtlc {
     }
 
     private void scanHtlcByState(String value, int coinageMin, int depth, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
-        cmd("coinnotify action:add address:" + HTLC_ADDRESS,
-            r -> doScanHtlcByState(value, coinageMin, depth, false, ok, err),
-            e -> doScanHtlcByState(value, coinageMin, depth, false, ok, err));
+        notifyAll(() -> doScanHtlcByState(value, coinageMin, depth, false, ok, err));
     }
 
     private void doScanHtlcByState(String value, int coinageMin, int depth, boolean megammr, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
@@ -610,11 +631,8 @@ public final class MinimaHtlc {
         // reply, so this stays cheap; and dropping the token filter is what lets a claim/refund find an in-flight
         // swap's coin in EITHER currency after the user switched the active currency. claim()/refund() read the
         // coin's own tokenid, so both mxUSDT and native-MINIMA legs settle correctly.
-        cmd("coins coinage:" + coinageMin + " simplestate:true state:" + normKey(value)
-          + " address:" + HTLC_ADDRESS + " depth:" + depth + (megammr ? " megammr:true" : ""), r -> {
-            Object resp = r.opt("response");
-            ok.accept(resp instanceof org.json.JSONArray ? (org.json.JSONArray) resp : new org.json.JSONArray());
-        }, err);
+        acrossAddresses(a -> "coins coinage:" + coinageMin + " simplestate:true state:" + normKey(value)
+          + " address:" + a + " depth:" + depth + (megammr ? " megammr:true" : ""), false, ok, err);
     }
 
     // (removed scanMyHtlcCoins: relevant:true reads the node's one-shot block-time relevance set, which is
@@ -647,6 +665,43 @@ public final class MinimaHtlc {
             Object resp = r.opt("response");
             ok.accept(resp instanceof org.json.JSONArray ? (org.json.JSONArray) resp : new org.json.JSONArray());
         }, err);
+    }
+
+    /** {@code coinnotify} every HTLC address (a shared address returns 0 coins until tracked), then run {@code next}.
+     *  A failed add is not fatal, as before: the scan still runs. */
+    private void notifyAll(Runnable next) { notifyFrom(0, next); }
+    private void notifyFrom(int i, Runnable next) {
+        if (i >= HTLC_ADDRESSES.length) { next.run(); return; }
+        cmd("coinnotify action:add address:" + HTLC_ADDRESSES[i], r -> notifyFrom(i + 1, next), e -> notifyFrom(i + 1, next));
+    }
+
+    /** Run one {@code coins} query per HTLC address and return the rows of all of them. {@code strict}: a non-list reply
+     *  is an error (never "none"); otherwise it counts as empty, as the single-address scans always did. */
+    static void acrossAddresses(java.util.function.Function<String, String> query, boolean strict,
+                                java.util.function.BiConsumer<String, Consumer<org.json.JSONArray>> runOne,
+                                Consumer<org.json.JSONArray> ok, Consumer<String> err) {
+        final org.json.JSONArray all = new org.json.JSONArray();
+        step(0, query, runOne, all, ok, err);
+    }
+    private static void step(int i, java.util.function.Function<String, String> query,
+                             java.util.function.BiConsumer<String, Consumer<org.json.JSONArray>> runOne,
+                             org.json.JSONArray all, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
+        if (i >= HTLC_ADDRESSES.length) { ok.accept(all); return; }
+        runOne.accept(query.apply(HTLC_ADDRESSES[i]), rows -> {
+            for (int k = 0; k < rows.length(); k++) all.put(rows.opt(k));
+            step(i + 1, query, runOne, all, ok, err);
+        });
+    }
+    private void acrossAddresses(java.util.function.Function<String, String> query, boolean strict,
+                                 Consumer<org.json.JSONArray> ok, Consumer<String> err) {
+        final boolean[] failed = {false};
+        acrossAddresses(query, strict, (command, rows) -> cmd(command, r -> {
+            if (failed[0]) return;
+            Object resp = r.opt("response");
+            if (resp instanceof org.json.JSONArray) rows.accept((org.json.JSONArray) resp);
+            else if (strict) { failed[0] = true; err.accept("coins: no coin list"); }
+            else rows.accept(new org.json.JSONArray());
+        }, e -> { if (!failed[0]) { failed[0] = true; err.accept(e); } }), ok, err);
     }
 
     // ---- command plumbing ----

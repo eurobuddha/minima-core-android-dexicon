@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.5 app/src/main/java/com/eurobuddha/atomix/swap/Order.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.6 app/src/main/java/com/eurobuddha/atomix/swap/Order.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONArray;
@@ -39,6 +39,10 @@ public final class Order {
     public long ts;                  // maker's timestamp (ms) — freshest order per signer wins
     public double minimaAvail;       // maker's available mxUSDT at publish time (liquidity, ask side)
     public double usdtAvail;         // maker's available USDT at publish time (liquidity, bid side)
+    /** HTLC v1.3 (review 7 Nov): this maker answers USDT-paid takes (its asks) only with a v1.3 lock, for v1.3 takers.
+     *  On the wire the ask-side balance then travels as {@code bal.m13} and {@code bal.m} is 0, so an older client — which
+     *  shows nothing on a side with no advertised funds — never offers a take this maker would decline. */
+    public boolean asksNeedHtlc13;
     public final Map<String, Pair> pairs = new LinkedHashMap<>();   // "USDT" -> rate
 
     // Local creation/scan market. Peer JSON cannot choose this attribution.
@@ -268,7 +272,9 @@ public final class Order {
         o.put("eth", ethAddress);
         o.put("cid", commsPublicId);
         o.put("ts", ts);
-        o.put("bal", new JSONObject().put("m", minimaAvail).put("u", usdtAvail));
+        JSONObject bal = new JSONObject().put("u", usdtAvail);
+        if (asksNeedHtlc13) bal.put("m", 0).put("m13", minimaAvail); else bal.put("m", minimaAvail);
+        o.put("bal", bal);
         JSONObject p = new JSONObject();
         for (Map.Entry<String, Pair> e : pairs.entrySet()) p.put(e.getKey(), pairToJson(e.getValue()));
         o.put("pairs", p);
@@ -294,7 +300,10 @@ public final class Order {
         r.commsPublicId = o.optString("cid", "");
         r.ts = o.optLong("ts", 0);
         JSONObject bal = o.optJSONObject("bal");
-        if (bal != null) { r.minimaAvail = finite(bal.optDouble("m", 0)); r.usdtAvail = finite(bal.optDouble("u", 0)); }
+        if (bal != null) {
+            r.asksNeedHtlc13 = bal.has("m13");
+            r.minimaAvail = finite(bal.optDouble(r.asksNeedHtlc13 ? "m13" : "m", 0)); r.usdtAvail = finite(bal.optDouble("u", 0));
+        }
         JSONObject p = o.optJSONObject("pairs");
         if (p != null) {
             for (Iterator<String> it = p.keys(); it.hasNext(); ) {

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.5 app/src/main/java/com/eurobuddha/atomix/swap/SwapOrderBook.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.6 app/src/main/java/com/eurobuddha/atomix/swap/SwapOrderBook.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import com.goterl.lazysodium.LazySodium;
@@ -66,9 +66,9 @@ public final class SwapOrderBook {
                         try {
                             java.math.BigDecimal free=available.min(freeCoinBalance(coins,token));
                             if("0x00".equals(token))free=free.subtract(new java.math.BigDecimal(CommsTransport.MESSAGE_AMOUNT)).max(java.math.BigDecimal.ZERO);
-                            // review 7 Nov (R3-3): while ETH-first (USDT-paid) takes are paused, advertise no asks — a taker would
-                            // lock USDT, be declined and pay gas to refund
-                            if(SwapEngine.ETH_FIRST_PAUSED) free=java.math.BigDecimal.ZERO;
+                            // review 7 Nov (R3-3, HTLC v1.3): USDT-paid takes are answered only for v1.3 takers, so the ask
+                            // balance goes out as bal.m13 — older clients see no asks instead of locking USDT into a decline
+                            base.asksNeedHtlc13=SwapEngine.ETH_FIRST_PAUSED;
                             base.minimaAvail=free.doubleValue();base.clampAsksToBalance(free);
                         } catch(RuntimeException invalid) { cb.onFailed(BALANCE_ERROR);return; }
                         publish(node, ls, id, base, generation, authorized, cb);
