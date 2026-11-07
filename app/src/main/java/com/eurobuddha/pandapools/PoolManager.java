@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.89 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.90 app/src/main/java/com/eurobuddha/pandapools/PoolManager.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONArray;
@@ -467,7 +467,9 @@ public class PoolManager {
         return recovery ? null : " max:" + MAX_FORWARD_BATCH;
     }
 
-    private static final java.util.concurrent.atomic.AtomicInteger BATCH_TURN = new java.util.concurrent.atomic.AtomicInteger();
+    /** One turn counter PER payout address: a shared counter let a fixed sweep order starve one address of a token. */
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger> BATCH_TURN =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     /** The owned tokens a payout address can hold - MINIMA and each own pool's token - taken in turn, one per pass. */
     String batchToken(String oadr) {
@@ -476,7 +478,9 @@ public class PoolManager {
         for (Pool p : OwnPoolStore.all(node.context()))
             if (oadr.equalsIgnoreCase(p.oadr) && FundingCoins.hex(p.tok) && !toks.contains(p.tok.toLowerCase(java.util.Locale.ROOT)))
                 toks.add(p.tok.toLowerCase(java.util.Locale.ROOT));
-        return toks.get(Math.floorMod(BATCH_TURN.getAndIncrement(), toks.size()));
+        java.util.concurrent.atomic.AtomicInteger turn = BATCH_TURN.computeIfAbsent(oadr.toLowerCase(java.util.Locale.ROOT),
+                k -> new java.util.concurrent.atomic.AtomicInteger());
+        return toks.get(Math.floorMod(turn.getAndIncrement(), toks.size()));
     }
 
     private void forwardSmallAddress(String oadr, Pool recovery, int expected, String limit, boolean allowState, ForwardResult cb) {

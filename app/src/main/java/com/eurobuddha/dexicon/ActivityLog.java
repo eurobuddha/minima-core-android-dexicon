@@ -55,6 +55,15 @@ public final class ActivityLog {
     /** Nothing more can change: terminal failure, or buried CONFIRM_BLOCKS deep. */
     public static boolean settled(JSONObject a, long chainBlock) { return failedTerminal(a) || confirmed(a, chainBlock); }
     static boolean fast(JSONObject a) { return "FAST".equals(a.optString("route")); }
+    /** FAST = MinimaXT: the MAKER posted the trade itself, so it is done at co-sign; the TAKER only has the maker's word
+     *  until the trade is in a block (a broken or hostile maker could say "taken" and never post), so it is done once the
+     *  node sees it in a block - one block, not three. */
+    static boolean fastDone(JSONObject a, long depth) {
+        if (!fast(a)) return false;
+        if (depth >= 0) return true;
+        String s = a.optString("stage");
+        return "maker".equals(a.optString("role")) && (COSIGNED.equals(s) || POSTED.equals(s));
+    }
 
     /** PandaPools ActivityLog.confirmationText. */
     static String confirmationText(long depth) { return depth + (depth == 1 ? " confirmation" : " confirmations"); }
@@ -65,7 +74,7 @@ public final class ActivityLog {
         if (failedTerminal(a)) return s;
         long d = depth(a, chainBlock);
         // FAST = MinimaXT: the trade is done the moment the maker co-signs and posts it; block depth is detail, not a wait
-        if (fast(a) && (d >= 0 || COSIGNED.equals(s) || POSTED.equals(s))) return "DONE";
+        if (fastDone(a, d)) return "DONE";
         if (d >= CONFIRM_BLOCKS) return "CONFIRMED";
         if (d >= 0) return "IN BLOCK";
         if (COSIGNED.equals(s)) return "CO-SIGNED";
@@ -83,7 +92,7 @@ public final class ActivityLog {
             default:
         }
         long d = depth(a, chainBlock), block = a.optLong("block", 0);
-        if (fast(a) && (d >= 0 || COSIGNED.equals(s) || POSTED.equals(s))) {
+        if (fastDone(a, d)) {
             String tx = a.optString("txpowid", ""), who = !COSIGNED.equals(s) ? ""
                     : "maker".equals(a.optString("role")) ? " · co-signed for " + a.optString("counterparty") + " in " + secs(a.optLong("cosignMs"))
                     : " · maker co-signed in " + secs(a.optLong("cosignMs"));

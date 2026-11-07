@@ -81,7 +81,7 @@ public class LedgerTest {
         assertEquals("[OK 07:33:20 Built and signed your side, WAIT 07:33:22 Take sent to 3 relays — waiting for the maker to co-sign (7s)]", steps(it));
         a.put("stage", ActivityLog.COSIGNED).put("cosignMs", 8_600L).put("txpowid", TX).put("outs", new JSONArray().put(OUT1));
         it = Ledger.activity(a, 0, TS, UTC);
-        assertEquals("DONE", it.chip);   // FAST = MinimaXT: done at co-sign
+        assertEquals("CO-SIGNED", it.chip);   // taker: done once in a block
         assertTrue(steps(it), steps(it).contains("OK 07:33:22 Take sent to 3 relays, OK 07:33:30 The maker co-signed in 8.6s, WAIT  In the node's mempool, waiting for a block]"));
         a.put("block", 50L);
         it = Ledger.activity(a, 53, TS, UTC);

@@ -74,10 +74,10 @@ public class ActivityLogTest {
                 .put("price", "0.01").put("ts", 0L).put("stage", ActivityLog.SENT).put("relays", 3).put("sentMs", 10_000L);
         assertEquals("Take sent to 3 relays · waiting for the maker to co-sign (4s)", ActivityLog.statusText(a, 0, 14_000L));
         a.put("stage", ActivityLog.COSIGNED).put("cosignMs", 3_240L).put("outs", new JSONArray().put(OUT));
-        assertEquals("DONE", ActivityLog.chip(a, 0));   // FAST = MinimaXT: done once the maker co-signs and posts
+        assertEquals("CO-SIGNED", ActivityLog.chip(a, 0));   // taker: only the maker's word so far
         assertTrue(ActivityLog.observe(a, 500, false, 0, 20_000L));      // first tip seen becomes the post block
         assertEquals(500, a.optLong("postBlock"));
-        assertEquals("Done · maker co-signed in 3.2s · in the node's mempool, waiting for a block", ActivityLog.statusText(a, 500, 0));
+        assertEquals("Maker co-signed in 3.2s · in the node's mempool, waiting for a block", ActivityLog.statusText(a, 500, 0));
         assertTrue(ActivityLog.observe(a, 501, false, 501, 20_000L));
         assertEquals("DONE", ActivityLog.chip(a, 502));
         assertEquals("Done · maker co-signed in 3.2s · in block 501 · 1 confirmation", ActivityLog.statusText(a, 502, 0));
