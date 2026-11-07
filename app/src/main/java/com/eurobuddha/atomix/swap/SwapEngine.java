@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.2 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.3 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -1834,6 +1834,7 @@ public final class SwapEngine {
                 }
             }
             if (!revealWindowOk(hash, gc.timelock)) return;       // SECURITY (review 7 Nov): never reveal into a closing window
+            if (iMadeTheSecret(hash) && !secondEndpointAgrees(eth, contractId, gc)) return;   // …nor on one RPC's word
             broadcastEthWithdraw(eth, contractId, hash, secret);   // retryable; confirmed next cycle via gc.withdrawn
         } else if (iAmSender) {
             if (gc.withdrawn) {
@@ -2106,6 +2107,32 @@ public final class SwapEngine {
         return false;
     }
 
+    /** SECURITY (review 7 Nov, known-open "single ETH RPC"): a lying endpoint could invent a counterparty lock and make
+     *  me reveal my secret (even a reverted withdraw publishes it) or take on a liability. Before either, the SAME
+     *  contract must read identically on a second, independent keyless endpoint. No second answer = skip this cycle. */
+    boolean secondEndpointAgrees(EthHtlc eth, String contractId, EthHtlc.Contract seen) {
+        String primary = rpc == null ? "" : String.valueOf(rpc.url());
+        int asked = 0;
+        for (String ep : EthRpc.fallbacks()) {
+            if (ep.equalsIgnoreCase(primary)) continue;
+            if (asked++ >= 3) break;
+            try {
+                EthHtlc.Contract c = eth.getContractOn(ep, contractId);
+                if (c == null) { SwapLog.w("second endpoint " + ep + " does not see contract " + contractId + " yet — not acting this cycle"); return false; }
+                if (sameContract(seen, c)) return true;
+                SwapLog.w("endpoints disagree on contract " + contractId + " (" + ep + ") — not acting");
+                return false;
+            } catch (Exception unreachable) { /* try the next endpoint */ }
+        }
+        return false;
+    }
+    static boolean sameContract(EthHtlc.Contract a, EthHtlc.Contract b) {
+        return eqI(a.owner, b.owner) && eqI(a.receiver, b.receiver) && eqI(a.tokenContract, b.tokenContract) && eqI(a.hashlock, b.hashlock)
+                && java.util.Objects.equals(a.amount, b.amount) && java.util.Objects.equals(a.requestAmount, b.requestAmount)
+                && a.timelock == b.timelock && a.withdrawn == b.withdrawn && a.refunded == b.refunded;
+    }
+    private static boolean eqI(String x, String y) { return x != null && y != null && x.equalsIgnoreCase(y); }
+
     /** True while this swap's secret is mine and has never gone out: I initiated it (I generated the secret) and no
      *  claim/withdraw of mine has carried it yet. Once one has (review 7 Nov R2-1), it is public and a retry — e.g. a
      *  claim that did not mine — must never be blocked, or the counterparty refunds and uses the secret on my first leg. */
@@ -2145,6 +2172,7 @@ public final class SwapEngine {
             }
             if (!eth.canCollect(c.contractId)) return;   // already withdrawn/refunded on-chain
             if (!revealWindowOk(hash, c.timelock)) return;   // SECURITY (review 7 Nov): never reveal into a closing window
+            if (iMadeTheSecret(hash) && !secondEndpointAgrees(eth, c.contractId, c)) return;   // …nor on one RPC's word
             // F1: retryable broadcast; the terminal status is confirmed by checkEthContractFor via gc.withdrawn,
             // never on this ack (a dropped withdraw must not read as COMPLETE).
             broadcastEthWithdraw(eth, c.contractId, hash, secret);
@@ -2154,6 +2182,7 @@ public final class SwapEngine {
         // I don't know the secret → I'm an ERC20→mxUSDT responder; lock the mxUSDT counter-leg.
         if (io.isShutdown() || halted()) return;   // stopped host/key mismatch: no new liability
         if (db.haveSentCounterParty(hash)) return;
+        if (!ETH_FIRST_PAUSED && db.getSwap(hash) == null && !secondEndpointAgrees(eth, c.contractId, c)) return;   // a new liability never rests on one RPC's word
         if (ETH_FIRST_PAUSED && db.getSwap(hash) == null) { declineNote(hash, "buys paid in USDT are paused on this maker until HTLC v1.3 (the v1.2 script cannot require a 32-byte secret)"); return; }
         // Persistent dedup (survives a restart / a lost txnpost response that the in-memory CP_LOCKING can't):
         // lockMinimaCounterLeg records the swap row BEFORE broadcast, so a row here means this hash is already
