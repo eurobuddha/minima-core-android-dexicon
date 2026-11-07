@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.1 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.2 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -1471,12 +1471,12 @@ public final class SwapEngine {
             // NEVER retried (the 30-min stall we hit). Now the timestamp is the gate: markEthAttempt stamps NOW
             // (same-cycle dedup), and after ETH_RETRY_SECS a lost/failed claim re-fires on its own. No inflight.
             if (db.haveCollect(hash) || !tryEthAttempt("claimM:" + hash)) return;   // MA-20: atomic due-check-and-mark
-            markSecretOut(hash);                          // before the post: a retry must never be blocked by the reveal margin
             db.setSwapStatus(hash, SwapDb.ST_CLAIMING);   // counterparty leg found — claiming now
             notifier.onSwapsChanged();
             SwapLog.d("claim MINIMA leg " + hash + " amount=" + MinimaHtlc.coinAmount(coin));
             minima.claim(coin, hash, secret, new MinimaHtlc.PostCb() {
                 @Override public void ok(String txpowid) {
+                    markSecretOut(hash);   // R3-1: only once the claim was really posted — a retry is then never blocked by the margin
                     db.logEvent(hash, SwapDb.EV_MINIMA_CLAIM_SUBMITTED, coin.optString("tokenid", "0x00"), MinimaHtlc.coinAmount(coin), txpowid);
                     notifier.onSwapsChanged();
                     SwapLog.d("claim SUBMITTED " + hash + " tx=" + txpowid + " — awaiting confirmation");
@@ -1865,10 +1865,10 @@ public final class SwapEngine {
         if (!ethGasAffordable(hash, EthHtlc.GAS_WITHDRAW)) { inflight.remove("wdEth:" + hash); return; }
         try {
             markEthAttempt("wdEth:" + hash);
-            markSecretOut(hash);                   // before the send: a retry must never be blocked by the reveal margin
             db.setSwapStatus(hash, SwapDb.ST_CLAIMING);
             ui.post(notifier::onSwapsChanged);
             eth.withdraw(contractId, secret);      // ack only; success is confirmed on-chain, not here
+            markSecretOut(hash);                   // R3-1: only once it was really broadcast — a retry is then never blocked by the margin
         } catch (Exception e) {
             // pre-mine failure (RPC/nonce/gas) → nothing committed; the next cycle retries after the window.
             // LOGGED: a swap can sit in CLAIMING for hours on repeated failures here — silence made that
@@ -2323,7 +2323,7 @@ public final class SwapEngine {
     boolean acceptTakerSellMinima(JSONObject coin, String reqTokenAddr) {
         Order.Pair p = pairFor(reqTokenAddr);
         if (p == null || !p.enable) return false;
-        if (PriceOracle.jumpPending()) return false;   // review 7 Nov: my peg may be priced off an outdated MEXC mid
+        if (PriceOracle.jumpPending() || PriceOracle.pegOutdated()) return false;   // review 7 Nov: my peg may be priced off an outdated MEXC mid
         BigDecimal recvMinima = dec(MinimaHtlc.coinAmount(coin));   // mxUSDT the taker locked, I receive
         BigDecimal giveUsdt = dec(MinimaHtlc.stateAt(coin, 1));       // USDT they requested, I'd pay
         if (recvMinima.signum() <= 0) return false;
@@ -2348,7 +2348,7 @@ public final class SwapEngine {
     boolean acceptTakerBuyMinima(EthHtlc.Contract c) {
         Order.Pair p = pairFor(c.tokenContract);
         if (p == null || !p.enable) return false;
-        if (PriceOracle.jumpPending()) return false;   // review 7 Nov: my peg may be priced off an outdated MEXC mid
+        if (PriceOracle.jumpPending() || PriceOracle.pegOutdated()) return false;   // review 7 Nov: my peg may be priced off an outdated MEXC mid
         BigDecimal giveMinima = dec(EthWallet.format(c.requestAmount, 18, 18));            // mxUSDT I'd give
         BigDecimal recvUsdt = dec(EthWallet.format(c.amount, decimalsOf(c.tokenContract), 18)); // USDT I'd receive
         if (giveMinima.signum() <= 0) return false;

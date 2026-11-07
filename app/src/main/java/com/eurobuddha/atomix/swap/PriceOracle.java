@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.1 app/src/main/java/com/eurobuddha/atomix/swap/PriceOracle.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.2 app/src/main/java/com/eurobuddha/atomix/swap/PriceOracle.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.content.SharedPreferences;
@@ -163,6 +163,16 @@ public final class PriceOracle {
     public static boolean fresh() { return mid() > 0 && ageMs() <= FRESH_MS && !jumpPending(); }
     /** A >3% MEXC move is being confirmed: the published peg may be priced off an outdated mid (review 7 Nov). */
     public static boolean jumpPending() { synchronized (LOCK) { return suspect > 0; } }
+    /** R3-2 (review 7 Nov): the pegged order on the wire was priced off a mid more than JUMP_FRACTION from the current
+     *  price (a confirmed move not yet republished — the reprice gap is 3 min). Takes are declined until it is. */
+    public static boolean pegOutdated() {
+        synchronized (LOCK) {
+            if (sPrefs == null || !sPrefs.getBoolean(P_ENABLE, false) || !(price > 0)) return false;
+            double last;
+            try { last = Double.parseDouble(sPrefs.getString(P_LAST_MID, "0")); } catch (Exception e) { return false; }
+            return last > 0 && Math.abs(last - price) / price > JUMP_FRACTION;
+        }
+    }
 
     /** Feed down past the HARD ceiling: withdraw even with a last-good price (bounds a multi-day-outage
      *  pick-off). Distinct from {@link #feedDownPastLimit} (the no-price tombstone window). */
