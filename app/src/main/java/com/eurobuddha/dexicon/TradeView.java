@@ -340,7 +340,7 @@ public final class TradeView extends LinearLayout {
         warnTv = tv("", 11f, Design.RED(), Design.monoBold());
         warnTv.setPadding(0, dp(4), 0, 0);
         c.addView(warnTv);
-        c.addView(tv("Crosses a FAST order → the button IS the trade: one click, no dialog, progress in the log below. BOOK/POOL on-chain liquidity still shows a confirm. Nothing crosses → rests on the relays as your FAST order.", 9.5f, Design.DIM2(), Design.sans()));
+        c.addView(tv("Crosses FAST orders → the button IS the trade: one click takes them best-first up to your amount, no dialog, progress in the log below; what they can't cover is not traded. BOOK/POOL on-chain liquidity still shows a confirm. Nothing crosses → rests on the relays as your FAST order.", 9.5f, Design.DIM2(), Design.sans()));
         ctaBtn = tv("BUY MINIMA", 14f, Design.ON_ACCENT(), Design.sansBold());
         ctaBtn.setGravity(Gravity.CENTER); ctaBtn.setPadding(0, dp(12), 0, dp(12));
         LayoutParams cl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); cl.topMargin = dp(8);
@@ -426,7 +426,7 @@ public final class TradeView extends LinearLayout {
                       : "You pay " + Util.fmt(a) + " MINIMA\nYou receive at least " + Util.fmt(total) + " MxUSD");
         if (v.fillNow.signum() > 0)
             sb.append("\nFills now ≈ ").append(Util.fmt(v.fillNow)).append(" MINIMA @ avg ").append(Util.fmtPrice(v.avgFill))
-              .append(v.rest.signum() > 0 ? "\nRests " + Util.fmt(v.rest) + " MINIMA as your FAST order @ " + Util.fmtPrice(p) : "");
+              .append(v.rest.signum() > 0 ? "\nThe other " + Util.fmt(v.rest) + " MINIMA is not traded (nothing more crosses " + Util.fmtPrice(p) + ")" : "");
         else sb.append("\nNothing crosses: all of it rests as your FAST order @ ").append(Util.fmtPrice(p));
         if (v.vsBestPct != null) sb.append("\n").append(signed(v.vsBestPct)).append("% vs best ").append(buy ? "ask " : "bid ").append(Util.fmtPrice(v.best));
         if (v.vsMidPct != null) sb.append("  ·  ").append(signed(v.vsMidPct)).append("% vs mid");
@@ -444,8 +444,9 @@ public final class TradeView extends LinearLayout {
         if (ctaBtn == null) return;
         if (act.taking()) { ctaBtn.setText("TRADING… " + act.takingSecs() + "s"); ctaBtn.setEnabled(false); ctaBtn.setAlpha(0.75f); return; }
         BigDecimal p = Util.dec(priceIn.getText().toString()), a = Util.dec(amountIn.getText().toString());
-        com.eurobuddha.dexicon.envelope.Envelope best = p.signum() > 0 && a.signum() > 0 ? act.fastCross(buyMode, p) : null;
-        ctaBtn.setText(best != null ? (buyMode ? "BUY " : "SELL ") + Util.fmt(a.min(new BigDecimal(best.amount))) + " MINIMA NOW" : buyMode ? "BUY MINIMA" : "SELL MINIMA");
+        // the sweep (owner 7 Nov): one click takes every crossing FAST order up to the amount — the button names that total
+        BigDecimal offer = p.signum() > 0 && a.signum() > 0 ? act.offered(buyMode, p) : BigDecimal.ZERO;
+        ctaBtn.setText(offer.signum() > 0 ? (buyMode ? "BUY " : "SELL ") + Util.fmt(a.min(offer)) + " MINIMA NOW" : buyMode ? "BUY MINIMA" : "SELL MINIMA");
         boolean ok = canAfford && !act.isBusy();
         ctaBtn.setEnabled(ok); ctaBtn.setAlpha(ok ? 1f : 0.45f);
     }

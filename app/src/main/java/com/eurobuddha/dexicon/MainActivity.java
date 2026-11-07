@@ -727,17 +727,24 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private boolean warmingMakers;
     private final StringBuilder takeLog = new StringBuilder();
     private String followAct, followStatus;
+    /** Owner 7 Nov, the sweep: one click takes crossing FAST orders best-first until {@code amount} is covered. {@code left}
+     *  drops by each take SENT, answered or not — an unanswered take may still be co-signed within its 5-minute void
+     *  window, so it counts as possibly filled and the run can never buy more than the amount. Nothing rests. */
     private static final class TakeRun {
-        final long t0 = System.currentTimeMillis(); boolean buy; BigDecimal price, amount;
-        final java.util.Set<String> tried = new java.util.HashSet<>(); String act, orderId; Envelope order;
+        final long t0 = System.currentTimeMillis(); boolean buy; BigDecimal price, amount, left, got = BigDecimal.ZERO, unanswered = BigDecimal.ZERO;
+        final java.util.Set<String> tried = new java.util.HashSet<>(); String act, orderId; Envelope order; BigDecimal taking = BigDecimal.ZERO;
     }
+    /** At most this many orders per click: each take signs with a key use. */
+    static final int SWEEP_MAX_ORDERS = 12;
+    /** A maker that has not co-signed by now is counted as possibly filled and the sweep moves on. */
+    static final long SWEEP_WAIT_MS = 30_000;
     private TakeRun run;
 
     boolean taking() { return run != null; }
     long takingSecs() { return run == null ? 0 : (System.currentTimeMillis() - run.t0) / 1000; }
     String takeLog() { return takeLog.toString(); }
     Envelope fastCross(boolean buy, BigDecimal price) { return bestFastCross(buy, price); }
-    /** Exact MINIMA the crossing FAST orders offer at {@code price} (not mine, backed). */
+    /** Exact MINIMA the crossing FAST orders offer at {@code price} (not mine, backed) — what one sweep click can take. */
     BigDecimal offered(boolean buy, BigDecimal price) {
         BigDecimal t = BigDecimal.ZERO;
         for (Envelope e : relay.orders(buy ? "sell" : "buy")) {
@@ -799,7 +806,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private void executeTake(boolean buy, BigDecimal price, BigDecimal amount) {
         if (run != null) return;
         takeLog.setLength(0); followAct = null;
-        run = new TakeRun(); run.buy = buy; run.price = price; run.amount = amount;
+        run = new TakeRun(); run.buy = buy; run.price = price; run.amount = amount; run.left = amount;
         logStep((buy ? "BUY " : "SELL ") + amount.toPlainString() + " MINIMA @ " + price.toPlainString() + " (limit)");
         repaint();
         nextOrder();
@@ -807,7 +814,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     private void nextOrder() {
         TakeRun r = run; if (r == null) return;
-        if (TradingGate.blocked(this)) { logStep("Stopped: trading is off (one trading app per phone). Nothing more was sent."); endRun(); return; }
+        if (TradingGate.blocked(this)) { logStep("Stopped: trading is off (one trading app per phone). Nothing more was sent."); finishSweep(); return; }
+        if (r.left.signum() <= 0) { finishSweep(); return; }
+        if (r.tried.size() >= SWEEP_MAX_ORDERS) { logStep("Stopped after " + SWEEP_MAX_ORDERS + " orders (the per-click limit)."); finishSweep(); return; }
         List<Envelope> hits = new ArrayList<>();
         for (Envelope e : relay.orders(r.buy ? "sell" : "buy")) {
             if (isMine(e) || e.coins.isEmpty() || r.tried.contains(e.orderId)) continue;
@@ -815,8 +824,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             if (r.buy ? p.compareTo(r.price) <= 0 : p.compareTo(r.price) >= 0) hits.add(e);
         }
         if (hits.isEmpty()) {
-            logStep(r.tried.isEmpty() ? "Nothing crosses any more. Place the order again to rest it." : "No other FAST order crosses " + r.price.toPlainString() + ". Nothing was traded and no order was placed.");
-            endRun(); return;
+            if (r.tried.isEmpty()) { logStep("Nothing crosses any more. Place the order again to rest it."); endRun(); return; }
+            logStep("No other FAST order crosses " + r.price.toPlainString() + ".");
+            finishSweep(); return;
         }
         if (r.tried.isEmpty()) logStep("Found " + hits.size() + " FAST order" + (hits.size() == 1 ? "" : "s") + " at or better than your price");
         tryOrder(hits.get(0));
@@ -826,13 +836,13 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         TakeRun r = run;
         // PandaDEX's min-remainder floor: never leave under 1 MINIMA on the maker's order — shrink the take to leave
         // exactly 1 (what you asked beyond that rests as yours); an order that can't be part-taken is skipped
-        BigDecimal now = FillPlan.floorTake(r.amount.min(new BigDecimal(o.amount)), new BigDecimal(o.amount)), rest = r.amount.subtract(now);
+        BigDecimal now = FillPlan.floorTake(r.left.min(new BigDecimal(o.amount)), new BigDecimal(o.amount));
         r.tried.add(o.orderId);
         // security review 7 Nov: pending takes are keyed by order id — a second take of the same order would overwrite
         // the first record and that signed half would never be voided
         if (db.pending(o.orderId) != null) { logStep("Order " + o.orderId + ": your earlier take of it is still settling — next order"); nextOrder(); return; }
         if (now.signum() <= 0) { logStep("Order " + o.orderId + ": a partial take would leave under " + FillPlan.MIN_REM.toPlainString() + " MINIMA — next order"); nextOrder(); return; }
-        if (now.compareTo(r.amount.min(new BigDecimal(o.amount))) < 0) logStep("  taking " + now.toPlainString() + " so " + FillPlan.MIN_REM.toPlainString() + " MINIMA stays on the maker's order (minimum remainder)");
+        if (now.compareTo(r.left.min(new BigDecimal(o.amount))) < 0) logStep("  taking " + now.toPlainString() + " so " + FillPlan.MIN_REM.toPlainString() + " MINIMA stays on the maker's order (minimum remainder)");
         logStep("Order " + o.orderId + " @ " + o.price + " · " + o.amount + " MINIMA · maker " + o.address);
         List<Coin> have = new ArrayList<>(); List<String> miss = new ArrayList<>();
         for (String id : o.coins) { Coin c = makerCoinCache.get(id); if (c != null) have.add(c); else miss.add(id); }
@@ -846,19 +856,33 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             String tok = sell ? Tokens.MXUSD() : Tokens.MINIMA;
             withWallet(tok, (e2, myCoins, addr) -> {
                 if (run != r) return;
-                if (e2 != null) { logStep("  " + e2); endRun(); return; }
+                if (e2 != null) { logStep("  " + e2); finishSweep(); return; }
                 FillPlan.Plan plan;
                 try { plan = FillPlan.plan(new FillPlan.Order(o.side, o.price, o.amount, o.address, o.coins, o.scripts), now.toPlainString(), mc, myCoins, addr); }
                 catch (RuntimeException e) { logStep("  " + e.getMessage() + " — next order"); nextOrder(); return; }
                 logStep("  you give " + plan.takerGives + (sell ? " MxUSD" : " MINIMA") + ", you get " + plan.makerGives + (sell ? " MINIMA" : " MxUSD"));
-                try { db.setMeta("retry", new JSONObject().put("buy", r.buy).put("price", r.price.toPlainString()).put("amount", r.amount.toPlainString()).put("rest", rest.toPlainString()).put("tried", new JSONArray().put(o.orderId)).toString()); } catch (Exception ignored) {}
+                try { db.setMeta("retry", new JSONObject().put("buy", r.buy).put("price", r.price.toPlainString()).put("amount", r.amount.toPlainString()).put("rest", "0").put("tried", new JSONArray().put(o.orderId)).toString()); } catch (Exception ignored) {}
                 sendTake(o, plan);
             });
         });
     }
 
     private interface WalletCb { void done(String err, List<Coin> coins, String addr); }
-    private void withWallet(String tok, WalletCb cb) {
+    /** My coins inside takes still waiting on a maker: not in the mempool until the maker posts, so the node still
+     *  lists them — a second take (the next order of a sweep) must not sign them again. */
+    private java.util.Set<String> pendingTakeCoins() {
+        java.util.Set<String> s = new java.util.HashSet<>();
+        for (JSONObject p : db.pendings()) { JSONArray m = p.optJSONArray("mine"); for (int i = 0; m != null && i < m.length(); i++) s.add(m.optString(i).toLowerCase(java.util.Locale.ROOT)); }
+        return s;
+    }
+    private static List<Coin> without(List<Coin> coins, java.util.Set<String> ids) {
+        if (ids.isEmpty()) return coins;
+        List<Coin> out = new ArrayList<>(); for (Coin c : coins) if (!ids.contains(c.coinid.toLowerCase(java.util.Locale.ROOT))) out.add(c);
+        return out;
+    }
+    private void withWallet(String tok, WalletCb cb0) {
+        final java.util.Set<String> held = pendingTakeCoins();
+        WalletCb cb = (e, coins, addr) -> cb0.done(e, coins == null ? null : without(coins, held), addr);
         List<Coin> c = walletCache.get(tok);
         if (c != null && cachedAddr != null) { cb.done(null, c, cachedAddr); return; }
         MakerEngine.walletCoins(node, tok, (e, coins) -> {
@@ -875,7 +899,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private void sendTake(Envelope order, FillPlan.Plan plan) {
         final TakeRun r = run;
         if (r == null) return;
-        if (TradingGate.blocked(this)) { logStep("Stopped: trading is off (one trading app per phone). Nothing was sent."); endRun(); return; }
+        if (TradingGate.blocked(this)) { logStep("Stopped: trading is off (one trading app per phone). Nothing was sent."); finishSweep(); return; }
         busy = true;
         final String actId = ActivityLog.newId("fast_");
         final long t = System.currentTimeMillis();
@@ -890,8 +914,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         liveActId = actId;
         logStep("  signing your side…");
         FillTxn.build(node, plan, (err, hex) -> {
-            if (err != null) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "build failed: " + err)); logStep("  build failed: " + err); endRun(); return; }
+            if (err != null) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "build failed: " + err)); logStep("  build failed: " + err); finishSweep(); return; }
             logStep(String.format(java.util.Locale.ROOT, "  signed in %.1fs", (System.currentTimeMillis() - t) / 1000.0));
+            r.taking = new BigDecimal(plan.filled); r.left = r.left.subtract(r.taking);   // counted from here: it can be co-signed
             walletCache.remove(takerBuys ? Tokens.MXUSD() : Tokens.MINIMA); warmWallet();   // those coins are in flight now
             try {
                 JSONObject inner = new JSONObject().put("k", "take").put("orderId", order.orderId).put("txn", hex).put("taker", me.publicId());
@@ -921,7 +946,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                             // security review 7 Nov: a relay that says "failed" may still have passed my signed half on —
                             // the take stays pending so the void pass spends my coin back to me after VOID_AFTER_MS
                             ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "no relay accepted the take: " + firstErr));
-                            logStep("  no relay accepted the take: " + firstErr); endRun(); return;
+                            r.unanswered = r.unanswered.add(r.taking);   // a relay that said "failed" may still have passed it on
+                            logStep("  no relay accepted the take: " + firstErr); finishSweep(); return;
                         }
                         ActivityLog.update(db, actId, a -> {   // a fast maker can answer (via another relay) before the slowest publish returns
                             a.put("relays", okCount).put("sentMs", pt.optLong("sent"));
@@ -931,14 +957,15 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                         followTake();
                         ui.postDelayed(() -> {
                             if (run == r && actId.equals(r.act) && db.pending(order.orderId) != null) {
-                                logStep("No answer from the maker in 60s. If it has not co-signed within 5 minutes, your node spends one of this take's coins back to you, which voids it.");
-                                endRun();
+                                r.unanswered = r.unanswered.add(r.taking);
+                                logStep("  no answer in " + SWEEP_WAIT_MS / 1000 + "s — counted as possibly filled (if it is not co-signed within 5 minutes your node voids it); next order");
+                                r.act = null; nextOrder();
                             }
-                        }, 60_000);
+                        }, SWEEP_WAIT_MS);
                         repaint();
                     });
                 });
-            } catch (Exception e) { busy = false; ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "take failed: " + e.getMessage())); logStep("  take failed: " + e.getMessage()); endRun(); }
+            } catch (Exception e) { busy = false; r.left = r.left.add(r.taking); ActivityLog.update(db, actId, a -> a.put("stage", ActivityLog.FAILED).put("reason", "take failed: " + e.getMessage())); logStep("  take failed: " + e.getMessage()); finishSweep(); }
         });
     }
 
@@ -951,20 +978,20 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             JSONObject a = db.activity(r.act);
             String st = a == null ? "" : a.optString("stage");
             if (ActivityLog.COSIGNED.equals(st)) {
-                logStep(String.format(java.util.Locale.ROOT, "Maker co-signed in %.1fs", a.optLong("cosignMs") / 1000.0));
-                logStep("TRADE DONE: " + a.optString("amount") + " MINIMA @ " + a.optString("price") + " · txpow " + a.optString("txpowid"));
-                logStep("Settling — final after one block.");
+                logStep(String.format(java.util.Locale.ROOT, "  maker co-signed in %.1fs · %s MINIMA @ %s · txpow %s", a.optLong("cosignMs") / 1000.0, a.optString("amount"), a.optString("price"), a.optString("txpowid")));
+                r.got = r.got.add(r.taking);
                 followAct = r.act; followStatus = null;
-                if (trade != null) trade.clearAmount();
-                endRun();
+                r.act = null; nextOrder();
             } else if (ActivityLog.REFUSED.equals(st)) {
                 String why = a.optString("reason");
                 for (String id : r.order.coins) makerCoinCache.remove(id);
                 db.setMeta("retry_due", "");
+                r.left = r.left.add(r.taking);   // refused: not traded, that amount is still wanted
                 logStep("  maker refused: " + why + (why.matches(MakerService.MOVE_ON) ? " — next order" : ""));
-                if (why.matches(MakerService.MOVE_ON)) { r.act = null; nextOrder(); } else endRun();
+                if (why.matches(MakerService.MOVE_ON)) { r.act = null; nextOrder(); } else finishSweep();
             } else if (ActivityLog.FAILED.equals(st) || ActivityLog.LOST.equals(st)) {
-                logStep("  " + a.optString("reason")); endRun();
+                r.left = r.left.add(r.taking);
+                logStep("  " + a.optString("reason")); finishSweep();
             }
         }
         if (run == null && followAct != null) {
@@ -978,6 +1005,19 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     }
 
     private void endRun() { run = null; busy = false; repaint(); }
+
+    /** The sweep's last line: what was co-signed, what may still be, and that nothing rests. */
+    private void finishSweep() {
+        TakeRun r = run; if (r == null) return;
+        String c = r.got.stripTrailingZeros().toPlainString();
+        if (r.got.signum() > 0) logStep("TRADE DONE: " + c + " of " + r.amount.toPlainString() + " MINIMA co-signed — settling, final after one block.");
+        if (r.unanswered.signum() > 0) logStep(r.unanswered.stripTrailingZeros().toPlainString() + " MINIMA still waiting on makers (filled if they co-sign within 5 minutes, else voided).");
+        BigDecimal open = r.amount.subtract(r.got).subtract(r.unanswered);
+        if (open.signum() > 0 && (r.got.signum() > 0 || r.unanswered.signum() > 0)) logStep(open.stripTrailingZeros().toPlainString() + " MINIMA not traded; nothing was placed as an order.");
+        else if (r.got.signum() == 0 && r.unanswered.signum() == 0) logStep("Nothing was traded and no order was placed.");
+        if (r.got.signum() > 0 && trade != null) trade.clearAmount();
+        endRun();
+    }
 
     /** My own coins in a take (its inputs the maker did not advertise) — the service spends one to void a stale take. */
     private static JSONArray mineIns(FillPlan.Plan p, Envelope order) {

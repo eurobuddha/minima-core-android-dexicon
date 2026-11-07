@@ -12,14 +12,14 @@ public class OrderPreviewTest {
     static BigDecimal d(String s) { return new BigDecimal(s); }
     static Funds funds(String m, String u, String mo, String uo) { return new Funds(d(m), d(u), d(mo), d(uo), BigDecimal.ZERO, BigDecimal.ZERO); }
 
-    @Test public void buyCrossesTwoLevelsAndRestsTheRest() {
+    @Test public void buyCrossesTwoLevelsAndTheRestIsNotTraded() {
         OrderPreview p = OrderPreview.of(true, d("0.0037"), d("1500"),
                 Arrays.asList(new OrderPreview.Lvl(d("0.003675"), d("1000")), new OrderPreview.Lvl(d("0.00368"), d("300")), new OrderPreview.Lvl(d("0.0038"), d("999"))),
                 funds("65", "10", "0", "0"), d("0.0036325"));
         assertEquals(0, d("1300").compareTo(p.fillNow));
         assertEquals(0, d("200").compareTo(p.rest));
         assertEquals(0, d("4.779").compareTo(p.fillCost));                 // 1000*0.003675 + 300*0.00368
-        assertEquals(0, d("5.519").compareTo(p.need));                     // + 200 resting at 0.0037
+        assertEquals(0, d("4.779").compareTo(p.need));                     // the sweep: the other 200 is not traded, so costs nothing
         assertEquals(0, d("1365").compareTo(p.afterMinima));
         assertEquals(0, p.shortfall.signum());
         assertEquals(0, d("0.68").compareTo(p.vsBestPct));                 // 0.0037 vs best ask 0.003675
@@ -40,8 +40,8 @@ public class OrderPreviewTest {
                 funds("65", "1", "0", "0"), d("0.0036"));
         assertEquals(0, d("40").compareTo(p.fillNow));                     // 0.0034 bid does not cross a 0.0035 ask
         assertEquals(0, d("60").compareTo(p.rest));
-        assertEquals(0, d("100").compareTo(p.need));
-        assertEquals(0, d("35").compareTo(p.shortfall));                   // 65 MINIMA free
+        assertEquals(0, d("40").compareTo(p.need));                        // only the crossing 40 trades (the sweep rests nothing)
+        assertEquals(0, p.shortfall.signum());                             // 65 MINIMA free covers it
         assertEquals(0, d("25").compareTo(p.afterMinima));
     }
 

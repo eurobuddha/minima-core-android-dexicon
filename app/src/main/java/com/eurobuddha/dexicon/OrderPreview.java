@@ -8,8 +8,9 @@ import java.util.List;
 /**
  * Live preview of an order while it is typed (owner, 2026-10-22: "this is a money exchange, more information is better
  * than less"). Pure: the ladder's opposite side, the funds and the inputs in, numbers out — so it is unit-tested.
- * The fill is an ESTIMATE from the displayed book (the confirm dialog quotes the exact route); everything not crossing
- * the book rests as the user's FAST order.
+ * The fill is an ESTIMATE from the displayed book (the confirm dialog quotes the exact route). Owner 7 Nov, the sweep:
+ * when something crosses, what the book can't cover is NOT traded and nothing rests; only an order that crosses nothing
+ * rests whole as the user's FAST order.
  */
 public final class OrderPreview {
     /** One opposite-side level at its exact price, best first. */
@@ -43,13 +44,14 @@ public final class OrderPreview {
         }
         p.rest = left.max(BigDecimal.ZERO);
         if (p.fillNow.signum() > 0) p.avgFill = p.fillCost.divide(p.fillNow, 8, RoundingMode.HALF_UP);
-        BigDecimal restCost = p.rest.multiply(price, MC);
+        // the remainder costs funds only when it rests, i.e. when nothing crosses (a sweep never rests what is left)
+        BigDecimal restCost = p.fillNow.signum() > 0 ? BigDecimal.ZERO : p.rest.multiply(price, MC);
         if (buy) {
             p.need = p.fillCost.add(restCost).setScale(8, RoundingMode.UP);
             p.afterMinima = f.minimaAvailable.add(p.fillNow);
             p.afterMxusd = f.mxusdAvailable.subtract(p.fillCost).setScale(8, RoundingMode.UP);
         } else {
-            p.need = amount;
+            p.need = p.fillNow.signum() > 0 ? p.fillNow : amount;
             p.afterMinima = f.minimaAvailable.subtract(p.fillNow);
             p.afterMxusd = f.mxusdAvailable.add(p.fillCost).setScale(8, RoundingMode.DOWN);
         }
