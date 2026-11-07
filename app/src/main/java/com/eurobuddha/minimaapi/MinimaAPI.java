@@ -85,6 +85,8 @@ public class MinimaAPI {
     private final java.util.Map<String, JSONObject> registrations = new java.util.LinkedHashMap<>();
     private final java.util.List<Runnable> awaitingNode = new java.util.ArrayList<>();
     private String nodePackage;
+    /** The node package the last discovery pinned (the one that answered), for labels; null until one has. */
+    public static volatile String pinnedNode;
     private boolean discovering;
     private boolean ambiguous;
     private int discoveryGeneration;
@@ -346,6 +348,7 @@ public class MinimaAPI {
             discovering = false;
             ambiguous = registrations.size() > 1;
             nodePackage = registrations.size() == 1 ? registrations.keySet().iterator().next() : null;
+            if (nodePackage != null) pinnedNode = nodePackage;   // what the UI should name (not install order)
             JSONObject result = nodePackage == null ? routingFailure() : registrations.get(nodePackage);
             java.util.List<Runnable> waiting = new java.util.ArrayList<>(awaitingNode);
             awaitingNode.clear();

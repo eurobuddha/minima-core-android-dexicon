@@ -78,11 +78,18 @@ public class NodeApi {
 
     /** The installed Minima node app this companion pairs with: [package, label]; first found wins. */
     public static String[] nodeApp(Context c) {
-        String[][] apps = {{"com.eurobuddha.pandamonium", "Pandamonium"}, {"com.eurobuddha.minimablock", "MinimaBlock"}, {"com.eurobuddha.minimacore", "Minima Core"}, {"org.minima.core", "Minima Core"}, {"org.minimarex.minimacore", "Minima Core"}};
+        String[][] apps = {{"com.eurobuddha.pandamonium", "Pandamonium"}, {"com.eurobuddha.minimablock", "BlackBear"}, {"com.eurobuddha.minimacore", "PandaBear"}, {"org.minima.core", "Minima Core"}, {"org.minimarex.minimacore", "Minima Core"}};
+        // Name the node Dexicon is actually paired with (the one that answered discovery), not the first one installed:
+        // with Pandamonium and BlackBear both installed, a BlackBear pairing was shown as "connecting to Pandamonium".
+        String pinned = com.eurobuddha.minimaapi.MinimaAPI.pinnedNode;
+        java.util.List<String[]> installed = new java.util.ArrayList<>();
         for (String[] a : apps) {
-            try { c.getPackageManager().getPackageInfo(a[0], 0); return a; } catch (Exception ignored) {}
+            if (a[0].equals(pinned)) return a;
+            try { c.getPackageManager().getPackageInfo(a[0], 0); installed.add(a); } catch (Exception ignored) {}
         }
-        return new String[]{"", "your Minima node app"};
+        if (installed.size() == 1) return installed.get(0);
+        // several node apps and none has answered yet: don't guess a name; openNodeApp() still opens the first installed
+        return new String[]{installed.isEmpty() ? "" : installed.get(0)[0], "your Minima node app"};
     }
 
     public boolean isEnabled() { return Boolean.TRUE.equals(enabled); }
