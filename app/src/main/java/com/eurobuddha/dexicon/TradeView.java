@@ -72,6 +72,9 @@ public final class TradeView extends LinearLayout {
     private int ctaSource = MainActivity.SRC_FAST;
     /** Owner 7 Nov: when FAST and BOOK/POOL both cross, the button splits — the button you tap IS the choice. */
     private TextView cta2Btn;
+    /** Owner 7 Nov: the sweep of BOTH — on-chain first, then FAST — shown above the two single-source buttons. */
+    private TextView cta3Btn;
+    private String shownRoute3;
     private EditText priceIn, amountIn;
     private final Runnable totalTask = this::updateTotal;
 
@@ -362,6 +365,13 @@ public final class TradeView extends LinearLayout {
         c2.leftMargin = dp(6);
         ctaRow.addView(ctaBtn, c1); ctaRow.addView(cta2Btn, c2);
         cta2Btn.setVisibility(GONE);
+        cta3Btn = tv("", 14f, Design.ON_ACCENT(), Design.sansBold());
+        cta3Btn.setGravity(Gravity.CENTER); cta3Btn.setPadding(dp(4), dp(12), dp(4), dp(12));
+        cta3Btn.setVisibility(GONE);
+        LayoutParams c3 = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); c3.topMargin = dp(8);
+        c.addView(cta3Btn, c3);
+        cta3Btn.setOnClickListener(v -> submit(MainActivity.SRC_BOTH, shownRoute3));
+        Design.pressable(cta3Btn);
         LayoutParams cl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); cl.topMargin = dp(8);
         c.addView(ctaRow, cl);
         ctaBtn.setOnClickListener(v -> submit(ctaSource, shownRoute));
@@ -409,6 +419,7 @@ public final class TradeView extends LinearLayout {
         ctaBtn.setText(buy ? "BUY MINIMA" : "SELL MINIMA");
         ctaBtn.setBackground(Design.ripple(Design.roundBg(getContext(), buy ? Design.IN() : Design.RED(), 12)));
         cta2Btn.setBackground(Design.ripple(Design.roundBg(getContext(), buy ? Design.IN() : Design.RED(), 12)));
+        cta3Btn.setBackground(Design.ripple(Design.roundBg(getContext(), buy ? Design.IN() : Design.RED(), 12)));
         updateTotal();
     }
 
@@ -463,7 +474,8 @@ public final class TradeView extends LinearLayout {
 
     private void paintCta() {
         if (ctaBtn == null) return;
-        cta2Btn.setVisibility(GONE);
+        cta2Btn.setVisibility(GONE); cta3Btn.setVisibility(GONE); shownRoute3 = null;
+        ctaBtn.setTextSize(14f); cta2Btn.setTextSize(14f);
         if (act.taking()) { ctaBtn.setText("TRADING… " + act.takingSecs() + "s"); ctaBtn.setEnabled(false); ctaBtn.setAlpha(0.75f); return; }
         BigDecimal p = Util.dec(priceIn.getText().toString()), a = Util.dec(amountIn.getText().toString());
         String side = buyMode ? "BUY " : "SELL ";
@@ -492,6 +504,20 @@ public final class TradeView extends LinearLayout {
             if (both) cta2Btn.setVisibility(VISIBLE); else ctaSource = MainActivity.SRC_POOL;
             if (both) shownRoute2 = route; else shownRoute = route;
             cta(b, poolText, free && poolsShown);   // a pool route is never taken while its prices are missing from the ladder
+        }
+        if (both) {   // the sweep of both, on top; the two single-source buttons stay below as the alternatives
+            MainActivity.Decision s3 = act.routeFor(buyMode, p, a, MainActivity.SRC_BOTH);
+            if (s3 != null && "BOTH".equals(s3.route)) {
+                shownRoute3 = "BOTH";
+                String r3 = MainActivity.routeName(s3.full);
+                cta3Btn.setVisibility(VISIBLE);
+                cta(cta3Btn, !poolsShown ? "SWEEP · " + r3 + " PRICES LOADING…"
+                        : "SWEEP " + side + Util.fmt(s3.chainQ.add(s3.fastQ)) + " · " + r3 + " + FAST\n" + Util.fmt(s3.chainQ) + " on-chain, then up to " + Util.fmt(s3.fastQ) + " instant",
+                        free && poolsShown);
+                ctaBtn.setTextSize(11f); cta2Btn.setTextSize(11f);
+                ctaBtn.setText(ctaBtn.getText().toString().replace(" NOW · FAST", " · FAST only"));
+                cta2Btn.setText(cta2Btn.getText().toString().replaceFirst(" · " + java.util.regex.Pattern.quote(route), " · " + route + " only"));
+            }
         }
     }
     private static void cta(TextView b, String text, boolean ok) { b.setText(text); b.setEnabled(ok); b.setAlpha(ok ? 1f : 0.45f); }

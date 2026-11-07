@@ -421,26 +421,31 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
      * crosses → the order rests on the relays as a FAST order.
      */
     /** Owner 7 Nov: which liquidity a button uses — FAST (relay orders only) or POOL (on-chain BOOK + pools only). */
-    public static final int SRC_FAST = 0, SRC_POOL = 1;
+    public static final int SRC_FAST = 0, SRC_POOL = 1, SRC_BOTH = 2;
 
     void placeOrder(boolean buy, BigDecimal price, BigDecimal amount, String shownRoute, int source) {
         if (gateRefuses()) return;
         if (me == null || engine == null) { toast("Identity not ready — is Dexicon enabled in Minima Core?"); return; }
         if (busy) { toast("A transaction is in progress"); return; }
+        if (source != SRC_BOTH) pendingBoth = null;
         final Envelope best = source == SRC_POOL ? null : bestFastCross(buy, price);
         final List<Order5> orders = source == SRC_FAST ? new ArrayList<>() : new ArrayList<>(restingBook().values());
         final List<Pool> pools = source == SRC_FAST ? new ArrayList<>() : new ArrayList<>(restingPools());
         final long block = chainBlock;
+        final BigDecimal fastOffered = offered(buy, price);
         busy = true; setStage("Calculating quote…"); repaint();
         quoteExec.execute(() -> {
-            final Decision d = decide(buy, price, amount, best, orders, pools, block);
+            final Decision d = source == SRC_BOTH ? decideBoth(buy, price, amount, best, fastOffered, orders, pools, block)
+                                                  : decide(buy, price, amount, best, orders, pools, block);
             ui.post(() -> {
                 if (closed) return;
                 busy = false; setStage(""); repaint();
                 if (d.error != null) { toast(d.error); return; }
                 // owner 7 Nov: the button names the route; the click never takes a route the button did not show
                 if (shownRoute != null && !shownRoute.equals(d.route)) { toast("The best route just changed to " + d.route + " — the button shows it now. Tap again to trade."); return; }
-                if (d.full != null) confirmComposite(d.full, buy, amount, price, best);
+                if ("BOTH".equals(d.route)) confirmBoth(d, buy, price);
+                else if (source == SRC_BOTH) toast("FAST and on-chain no longer both cross this price — nothing was traded");
+                else if (d.full != null) confirmComposite(d.full, buy, amount, price, best);
                 else if (source == SRC_POOL) toast("No BOOK or POOL liquidity crosses this price — nothing was traded");
                 else placeFast(buy, price, amount, best);
             });
@@ -451,7 +456,52 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
      *  crosses). Pure; runs on quoteExec. The CTA label and the click both use it, so they always agree. */
     static final class Decision {
         final String route; final CompositeRouter.Plan full; final String error;
-        Decision(String route, CompositeRouter.Plan full, String error) { this.route = route; this.full = full; this.error = error; }
+        /** BOTH only: MINIMA the on-chain part fills, and the most the FAST sweep that follows may take. */
+        final BigDecimal chainQ, fastQ;
+        Decision(String route, CompositeRouter.Plan full, String error) { this(route, full, error, BigDecimal.ZERO, BigDecimal.ZERO); }
+        Decision(String route, CompositeRouter.Plan full, String error, BigDecimal chainQ, BigDecimal fastQ) {
+            this.route = route; this.full = full; this.error = error; this.chainQ = chainQ; this.fastQ = fastQ;
+        }
+    }
+
+    /**
+     * Owner 7 Nov, the sweep of BOTH: how one click splits {@code amount} between on-chain BOOK/POOL and FAST, all inside
+     * the limit. On-chain takes every MINIMA it has at or better than the best FAST price ({@code restingCheap}) plus
+     * whatever the crossing FAST orders cannot cover; FAST takes the middle, up to what it offers. Pure. The two parts
+     * never add up to more than {@code amount}, and on-chain never more than it holds at the limit.
+     * Returns {chainQ, fastQ}.
+     */
+    static BigDecimal[] split(BigDecimal amount, BigDecimal restingCheap, BigDecimal fastOffered, BigDecimal restingAtLimit) {
+        BigDecimal cheap = amount.min(restingCheap).max(BigDecimal.ZERO);
+        BigDecimal fastQ = fastOffered.min(amount.subtract(cheap)).max(BigDecimal.ZERO);
+        BigDecimal over = amount.subtract(cheap).subtract(fastQ).max(BigDecimal.ZERO);
+        BigDecimal chainQ = cheap.add(over).min(restingAtLimit).max(BigDecimal.ZERO);
+        return new BigDecimal[]{chainQ, fastQ};
+    }
+
+    static Decision decideBoth(boolean buy, BigDecimal price, BigDecimal amount, Envelope best, BigDecimal fastOffered,
+                               List<Order5> orders, List<Pool> pools, long block) {
+        if (best == null || fastOffered.signum() <= 0 || (orders.isEmpty() && pools.isEmpty())) return new Decision("NONE", null, null);
+        try {
+            CompositeRouter.Plan cheap = CompositeRouter.plan(orders, pools, buy, amount, new BigDecimal(best.price), block);
+            CompositeRouter.Plan atLimit = CompositeRouter.plan(orders, pools, buy, amount, price, block);
+            BigDecimal[] q = split(amount, cheap == null || cheap.isEmpty() ? BigDecimal.ZERO : cheap.totalMinima, fastOffered,
+                    atLimit == null || atLimit.isEmpty() ? BigDecimal.ZERO : atLimit.totalMinima);
+            if (q[0].signum() <= 0 || q[1].signum() <= 0) return new Decision("NONE", null, null);
+            CompositeRouter.Plan chain = CompositeRouter.plan(orders, pools, buy, q[0], price, block);
+            if (chain == null || chain.isEmpty()) return new Decision("NONE", null, null);
+            return new Decision("BOTH", chain, null, chain.totalMinima, q[1]);
+        } catch (RuntimeException invalid) { return new Decision(null, null, "Could not calculate this quote. Refresh and check the amounts."); }
+    }
+
+    /** The FAST half of a BOTH click, run once its on-chain half is posted (its coins then in the mempool). Expires so a
+     *  later, unrelated on-chain trade can never set it off; any other click clears it. */
+    private Runnable pendingBoth; private long pendingBothUntil;
+    /** Inputs of my posted on-chain trades: never offered to a FAST take (they are spent in the mempool). */
+    private final java.util.Set<String> postedIns = new java.util.HashSet<>();
+
+    private void confirmBoth(Decision d, boolean buy, BigDecimal price) {
+        confirmComposite(d.full, buy, d.chainQ, price, null, d.fastQ);
     }
     static Decision decide(boolean buy, BigDecimal price, BigDecimal amount, Envelope best, List<Order5> orders, List<Pool> pools, long block) {
         String fast = best != null ? "FAST" : "REST";
@@ -471,14 +521,15 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     // Each button's quote, worked out off the UI thread whenever the inputs or the liquidity change; null while
     // the first quote for a source is running (later re-quotes keep the previous one — a stale click is refused).
-    private final String[] routeKey = {"", ""}, routeReadyKey = {"", ""};
-    private final Decision[] routeDec = new Decision[2];
+    private final String[] routeKey = {"", "", ""}, routeReadyKey = {"", "", ""};
+    private final Decision[] routeDec = new Decision[3];
     Decision routeFor(boolean buy, BigDecimal price, BigDecimal amount, int source) {
         final Envelope best = source == SRC_POOL ? null : bestFastCross(buy, price);
         final List<Order5> orders = source == SRC_FAST ? new ArrayList<>() : new ArrayList<>(restingBook().values());
         final List<Pool> pools = source == SRC_FAST ? new ArrayList<>() : new ArrayList<>(restingPools());
         final long block = chainBlock;
-        StringBuilder k = new StringBuilder().append(buy).append('|').append(price.toPlainString()).append('|').append(amount.toPlainString()).append('|').append(block);
+        final BigDecimal fastOffered = source == SRC_POOL ? BigDecimal.ZERO : offered(buy, price);
+        StringBuilder k = new StringBuilder().append(fastOffered.toPlainString()).append('|').append(buy).append('|').append(price.toPlainString()).append('|').append(amount.toPlainString()).append('|').append(block);
         if (best != null) k.append('|').append(best.orderId).append(':').append(best.seq).append(':').append(best.amount);
         for (Order5 o : orders) k.append('|').append(o.coinid);
         for (Pool pl : pools) k.append('|').append(pl.coinidM).append(':').append(pl.coinidT);
@@ -487,7 +538,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         if (!key.equals(routeKey[source])) {
             routeKey[source] = key;
             quoteExec.execute(() -> {
-                final Decision d = decide(buy, price, amount, best, orders, pools, block);
+                final Decision d = source == SRC_BOTH ? decideBoth(buy, price, amount, best, fastOffered, orders, pools, block)
+                                                      : decide(buy, price, amount, best, orders, pools, block);
                 ui.post(() -> {
                     if (closed || !key.equals(routeKey[source])) return;
                     routeReadyKey[source] = key; routeDec[source] = d;
@@ -531,8 +583,16 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     /** PandaDEX MainActivity.confirmComposite: list every BOOK and POOL part, effective and worst price, then DexTxn. */
     private void confirmComposite(CompositeRouter.Plan plan, boolean buy, BigDecimal amount, BigDecimal price, Envelope fastBest) {
+        confirmComposite(plan, buy, amount, price, fastBest, null);
+    }
+    /** {@code fastQ} non-null = a BOTH sweep: this on-chain part first, then a FAST sweep of at most {@code fastQ}. */
+    private void confirmComposite(CompositeRouter.Plan plan, boolean buy, BigDecimal amount, BigDecimal price, Envelope fastBest, BigDecimal fastQ) {
+        final boolean both = fastQ != null;
         BigDecimal rest = amount.subtract(plan.totalMinima).max(BigDecimal.ZERO);
         StringBuilder sb = new StringBuilder();
+        if (both) sb.append("SWEEP ").append(PriceMath.fmt(plan.totalMinima.add(fastQ))).append(" MINIMA, up to ").append(PriceMath.fmtPrice(price))
+                .append(", in two parts:\n  1. ").append(PriceMath.fmt(plan.totalMinima)).append(" on-chain now (below)\n  2. then up to ")
+                .append(PriceMath.fmt(fastQ)).append(" from FAST orders, best price first, the moment part 1 is posted\n\nPART 1 — ");
         sb.append(buy ? "Buying " : "Selling ").append(PriceMath.fmt(plan.totalMinima)).append(" MINIMA now from on-chain liquidity\n");
         sb.append("Effective ").append(PriceMath.fmtPrice(plan.effectivePrice)).append("  ·  ").append(PriceMath.fmt(plan.totalMxusd)).append(" MxUSD\n");
         if (plan.orderMinima.signum() > 0) {
@@ -556,12 +616,19 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
               .append("\n     pool ").append(a.pool.address).append("\n");
         }
         if (fastBest != null) sb.append("\nBeats the best FAST ").append(buy ? "ask" : "bid").append(" @ ").append(fastBest.price).append(" for this size; FAST is not used in this trade.\n");
-        if (rest.signum() > 0) sb.append("\nThe remaining ").append(PriceMath.fmt(rest)).append(" MINIMA is NOT traded or rested by this transaction — place it again once it confirms.\n");
+        if (both) sb.append("\nPART 2 — FAST: up to ").append(PriceMath.fmt(fastQ)).append(" MINIMA, one maker after another, no further dialog; progress shows in the trade log. If part 1 fails, part 2 is not sent.\n");
+        if (!both && rest.signum() > 0) sb.append("\nThe remaining ").append(PriceMath.fmt(rest)).append(" MINIMA is NOT traded or rested by this transaction — place it again once it confirms.\n");
         sb.append("\nOne atomic transaction, signed by your node; final after one block.");
         track(new AlertDialog.Builder(this, Design.dialogTheme())
-                .setTitle(buy ? "Confirm buy · BOOK/POOL" : "Confirm sell · BOOK/POOL")
+                .setTitle(both ? (buy ? "Confirm sweep buy · FAST + " : "Confirm sweep sell · FAST + ") + routeName(plan) : buy ? "Confirm buy · BOOK/POOL" : "Confirm sell · BOOK/POOL")
                 .setMessage(sb.toString())
-                .setPositiveButton("Execute", (d, w) -> executeComposite(plan, buy, amount, price, 0))
+                .setPositiveButton("Execute", (d, w) -> {
+                    if (both) {
+                        pendingBoth = () -> { logStep("Part 1 posted — part 2: FAST up to " + PriceMath.fmt(fastQ) + " MINIMA"); executeTake(buy, price, fastQ); };
+                        pendingBothUntil = System.currentTimeMillis() + 12 * 60_000L;   // autoFund may wait up to 10 blocks
+                    } else pendingBoth = null;
+                    executeComposite(plan, buy, amount, price, 0);
+                })
                 .setNegativeButton("Back", null)
                 .show());
     }
@@ -594,6 +661,11 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                         .put("txnid", ids.optString("txnid")).put("outs", ids.optJSONArray("outs") == null ? new JSONArray() : ids.optJSONArray("outs"))
                         .put("ins", ids.optJSONArray("ins") == null ? new JSONArray() : ids.optJSONArray("ins"))
                         .put("postBlock", chainBlock).put("tip", chainBlock).put("postedMs", System.currentTimeMillis()));
+                JSONArray insArr = ids.optJSONArray("ins");
+                for (int i = 0; insArr != null && i < insArr.length(); i++) postedIns.add(insArr.optString(i).toLowerCase(java.util.Locale.ROOT));
+                walletCache.clear();   // the next FAST take re-reads the wallet: these inputs are spent in the mempool
+                Runnable both = pendingBoth; pendingBoth = null;
+                if (both != null && System.currentTimeMillis() < pendingBothUntil) ui.post(both);
                 // BOOK/POOL fills join HISTORY and the CSV like FAST fills; MakerService.settleFills settles them by output coin.
                 try {
                     db.saveFill(new JSONObject().put("role", "taker").put("orderId", "").put("side", buy ? "buy" : "sell")
@@ -615,7 +687,10 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 if (retry == 0 && message != null && (message.startsWith("Wallet has") || message.contains("Too many transaction inputs")
                         || message.contains("needs more than") || message.contains("TxPoW size") || message.contains("too large")))
                     autoFund(buy, amount, price, buy ? Tokens.MXUSD() : Tokens.MINIMA, buy ? plan.totalMxusd : plan.totalMinima, message);
-                else toast(message);
+                else {
+                    boolean dropped = pendingBoth != null; pendingBoth = null;
+                    toast(dropped ? message + " — part 2 (FAST) was not sent" : message);
+                }
             }
         });
     }
@@ -954,6 +1029,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     }
     private void withWallet(String tok, WalletCb cb0) {
         final java.util.Set<String> held = pendingTakeCoins();
+        held.addAll(postedIns);
         WalletCb cb = (e, coins, addr) -> cb0.done(e, coins == null ? null : without(coins, held), addr);
         List<Coin> c = walletCache.get(tok);
         if (c != null && cachedAddr != null) { cb.done(null, c, cachedAddr); return; }
