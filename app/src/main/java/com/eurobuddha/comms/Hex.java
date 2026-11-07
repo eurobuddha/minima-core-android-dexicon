@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.8 app/src/main/java/com/eurobuddha/comms/Hex.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/main/java/com/eurobuddha/comms/Hex.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.comms;
 
 /** Minimal, dependency-free hex codec. Accepts an optional 0x/0X prefix on decode. */

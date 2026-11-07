@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.8 app/src/test/java/com/eurobuddha/atomix/swap/MismatchPoisonTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/test/java/com/eurobuddha/atomix/swap/MismatchPoisonTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import static org.junit.Assert.assertEquals;
@@ -66,7 +66,7 @@ public class MismatchPoisonTest {
                 .put("tokenid", tokenid)
                 .put("tokenamount", amount)
                 .put("state", new JSONObject()
-                        .put("0", "0xMAKER").put("2", "[minima]").put("3", "999999")
+                        .put("0", "0x0B0B").put("1", "1").put("2", "[minima]").put("6", "0x01").put("3", "999999")
                         .put("4", MY_MPK).put("5", HASH));
     }
 
