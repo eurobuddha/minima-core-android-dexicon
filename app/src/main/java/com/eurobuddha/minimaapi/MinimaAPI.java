@@ -306,10 +306,21 @@ public class MinimaAPI {
         //Add the PRIVATE Minima uid
         intent.putExtra(MinimaAPIMessages.key(prefix, "REGISTER_MINIMAID"), MINIMA_ID);
 
+        //Security review 2026-11-07: prove who we are on EVERY Android version (the node reads the creator of this
+        //immutable PendingIntent; API 34+ also has shareIdentity). Sent only to the target node package below.
+        intent.putExtra(MinimaAPIMessages.key(prefix, "PROOF"), proof());
+
         //Set to send ONLY to that Minima Core APK
         intent.setPackage(zTarget);
 
         return intent;
+    }
+
+    private android.app.PendingIntent mProof;
+    private android.app.PendingIntent proof() {
+        if (mProof == null) mProof = android.app.PendingIntent.getBroadcast(mContext, 0x5e1f,
+                new Intent(mPackage + ".IPC_PROOF").setPackage(mPackage), android.app.PendingIntent.FLAG_IMMUTABLE);
+        return mProof;
     }
 
     private void Register(MinimaAPIListener zListener){
