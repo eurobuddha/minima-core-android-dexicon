@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.83 app/src/main/java/com/eurobuddha/pandapools/WalletTools.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.84 app/src/main/java/com/eurobuddha/pandapools/WalletTools.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONObject;
@@ -86,7 +86,13 @@ final class WalletTools {
                 .setMessage("A node write lost its reply. It may have completed. First restart MinimaCore to stop any old command, "
                         + "then check your transactions and balances. Clearing this safety pause does not undo or retry any transaction.")
                 .setNegativeButton("Keep paused", null)
-                .setPositiveButton("I restarted and checked", (d, w) -> { message(act.node().acknowledgeInterruptedWrite(reviewed) ? "Safety pause cleared. Review your balances before starting a new transaction." : "A write is still active or the safety state could not be saved. Keep paused."); }).show();
+                .setPositiveButton("I restarted and checked", (d, w) -> {
+                    if (!act.node().acknowledgeInterruptedWrite(reviewed)) { message("A write is still active or the safety state could not be saved. Keep paused."); return; }
+                    // review 7 Nov (R2-3): free pool inputs an uncertain post held, where the node proves they were never posted
+                    CoinLock.releaseProvablyUnposted(act.node()::cmd, n -> act.runOnUiThread(() -> message("Safety pause cleared. "
+                            + (n > 0 ? n + " coin" + (n == 1 ? " that was" : "s that were") + " held by the interrupted transaction (still unspent, not in the mempool) can be used again. " : "")
+                            + "Review your balances before starting a new transaction.")));
+                }).show();
     }
     private static String nodeError(JSONObject j) { return j.optString("error", j.optString("message", "No coins could be combined.")); }
     private void message(String text) {

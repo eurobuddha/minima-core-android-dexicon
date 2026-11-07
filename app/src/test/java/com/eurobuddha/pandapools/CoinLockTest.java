@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.83 app/src/test/java/com/eurobuddha/pandapools/CoinLockTest.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.84 app/src/test/java/com/eurobuddha/pandapools/CoinLockTest.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONObject;
@@ -123,6 +123,27 @@ public class CoinLockTest {
         assertFalse("second swap must not reuse first swap's reserves",CoinLock.claimInputs(ids));
         assertTrue("confirmed outputs have new IDs",CoinLock.claimInputs(Arrays.asList("0xnewReserve1","0xnewReserve2")));
         CoinLock.finishInputs(Arrays.asList("0xnewReserve1","0xnewReserve2"));
+    }
+    /** Review 7 Nov (R2-3): after the user confirms an interrupted write, a held input the node proves was never
+     *  posted (unspent, not in the mempool) is released; one in the mempool stays held. */
+    @Test public void confirmedInterruptedWriteReleasesOnlyProvablyUnpostedInputs() throws Exception {
+        List<String> ids = Arrays.asList("0xheldUnposted", "0xheldInMempool");
+        assertTrue(CoinLock.claimInputs(ids));
+        assertTrue(CoinLock.rememberPosting(ids, "txR", () -> true));
+        CoinLock.finishInputs(ids);
+        FundingCoins.Command node = (cmd, cb) -> {
+            try {
+                org.json.JSONArray rows = new org.json.JSONArray();
+                if (cmd.toLowerCase().contains("0xheldunposted")) rows.put(new JSONObject().put("coinid", "0xheldUnposted").put("spent", false));
+                cb.onResult(new JSONObject().put("status", true).put("response", rows));   // in the mempool: checkmempool hides it
+            } catch (Exception e) { throw new RuntimeException(e); }
+        };
+        int[] released = {-1};
+        CoinLock.releaseProvablyUnposted(node, n -> released[0] = n);
+        assertEquals(1, released[0]);
+        assertTrue("never posted: usable again", CoinLock.claimInputs(Arrays.asList("0xheldUnposted")));
+        CoinLock.finishInputs(Arrays.asList("0xheldUnposted"));
+        assertFalse("still in the mempool: stays held", CoinLock.claimInputs(Arrays.asList("0xheldInMempool")));
     }
     @Test public void failedDurableClaimNeverAllowsAnotherPostInThisProcess() {
         List<String> ids=Arrays.asList("0xpersistFailureReserve");

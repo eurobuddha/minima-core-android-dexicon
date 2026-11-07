@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.83 app/src/main/java/com/eurobuddha/pandapools/CoinLock.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.84 app/src/main/java/com/eurobuddha/pandapools/CoinLock.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import java.util.List;
@@ -104,6 +104,24 @@ public final class CoinLock {
         }
     }
 
+
+    /** Review 7 Nov (R2-3): an uncertain txnpost holds its inputs forever, so a quiet pool could never be refreshed,
+     *  closed or migrated from the app again. Run ONLY after the user confirms the interrupted write ("I restarted and
+     *  checked"): every held coin the node still reports UNSPENT and NOT in the mempool provably was never posted —
+     *  release it. Anything spent, in the mempool or unreadable stays held. cb(number released). */
+    static void releaseProvablyUnposted(FundingCoins.Command command, java.util.function.IntConsumer cb) {
+        final java.util.List<Map.Entry<String,String>> held;
+        synchronized (CoinLock.class) { held = new java.util.ArrayList<>(new HashMap<>(POSTED).entrySet()); }
+        releaseNext(command, held, 0, 0, cb);
+    }
+    private static void releaseNext(FundingCoins.Command command, java.util.List<Map.Entry<String,String>> held, int i, int released, java.util.function.IntConsumer cb) {
+        if (i >= held.size()) { cb.accept(released); return; }
+        final Map.Entry<String,String> e = held.get(i);
+        checkAvailable(command, java.util.Collections.singletonList(e.getKey()), 0, available -> {
+            if (available) forgetPosting(java.util.Collections.singletonList(e.getKey()), e.getValue());
+            releaseNext(command, held, i + 1, released + (available ? 1 : 0), cb);
+        });
+    }
 
     public static synchronized boolean isReserved(String coinid) {
         if (coinid == null) return false;
