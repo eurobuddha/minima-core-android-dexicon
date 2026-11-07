@@ -160,6 +160,10 @@ public final class FillPlan {
         if (order.address != null) mine.add(order.address.toLowerCase(Locale.ROOT));   // my pay-to address is mine for inputs too
         BigDecimal myIn = BigDecimal.ZERO;
         for (Coin inp : inputs) {
+            // Security review 7 Nov: a FAST fill spends plain coins only. A stateful input (an expired AtomiX HTLC lock or a
+            // resting-order coin whose owner branch my order key satisfies) slipped in as "the taker's" would be unlocked
+            // by my signature even when its script row is missing from my table.
+            if (inp.hasState) return Verdict.bad("input " + inp.coinid + " carries state");
             boolean isAdv = adv.contains(inp.coinid.toLowerCase(Locale.ROOT));
             boolean isMineAddr = mine.contains(inp.address.toLowerCase(Locale.ROOT));
             if (!isAdv && !isMineAddr) continue;                                  // the taker's own input

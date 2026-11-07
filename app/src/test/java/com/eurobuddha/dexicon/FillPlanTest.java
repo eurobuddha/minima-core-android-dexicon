@@ -86,6 +86,10 @@ public class FillPlanTest {
             FillPlan.Verdict dv = FillPlan.verifyAsMaker(viewInputs(p, all), viewOutputs(diverted), false, oS, oS.coins, "100", Arrays.asList(MCOINADDR, MADDR, htlc, attacker));
             assertFalse("change diverted to " + sink + " must be refused", dv.ok);
         }
+        // a stateful input (an expired HTLC lock my order key could refund) slipped in as "the taker's" is refused
+        List<Coin> withLock = new ArrayList<>(viewInputs(p, all));
+        withLock.add(new Coin(TestIds.hex("77", 32), htlc, Tokens.MINIMA, new BigDecimal("5"), false, true, 0));
+        assertFalse(FillPlan.verifyAsMaker(withLock, viewOutputs(p), false, oS, oS.coins, "100", mine).ok);
     }
 
     /** Security review 30 Oct: a taker paid MxUSD to my pay-to address, then listed that coin (now mine) as its own input
