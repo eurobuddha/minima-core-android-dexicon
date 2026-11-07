@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.4 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.5 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -2111,19 +2111,18 @@ public final class SwapEngine {
      *  me reveal my secret (even a reverted withdraw publishes it) or take on a liability. Before either, the SAME
      *  contract must read identically on a second, independent keyless endpoint. No second answer = skip this cycle. */
     boolean secondEndpointAgrees(EthHtlc eth, String contractId, EthHtlc.Contract seen) {
-        String primary = rpc == null ? "" : String.valueOf(rpc.url());
-        int asked = 0;
+        // R4-3/R4-4: TWO distinct, explicitly named endpoints must each return the identical contract — independent of
+        // which endpoint served the first read (the sticky primary may have failed over), and one stale or lying node
+        // cannot block an honest reveal: it is simply outvoted by the next ones. Up to five are asked.
+        int agree = 0, asked = 0;
         for (String ep : EthRpc.fallbacks()) {
-            if (ep.equalsIgnoreCase(primary)) continue;
-            if (asked++ >= 3) break;
+            if (asked++ >= 5) break;
             try {
                 EthHtlc.Contract c = eth.getContractOn(ep, contractId);
-                if (c == null) { SwapLog.w("second endpoint " + ep + " does not see contract " + contractId + " yet — not acting this cycle"); return false; }
-                if (sameContract(seen, c)) return true;
-                SwapLog.w("endpoints disagree on contract " + contractId + " (" + ep + ") — not acting");
-                return false;
+                if (c != null && sameContract(seen, c) && ++agree >= 2) return true;
             } catch (Exception unreachable) { /* try the next endpoint */ }
         }
+        SwapLog.w("contract " + contractId + ": " + agree + " of " + Math.min(asked, 5) + " endpoints confirmed it — not acting this cycle");
         return false;
     }
     static boolean sameContract(EthHtlc.Contract a, EthHtlc.Contract b) {
