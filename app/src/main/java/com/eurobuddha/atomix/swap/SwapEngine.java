@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.1.97 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.1.98 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -56,6 +56,11 @@ public final class SwapEngine {
     public static final long CP_SECS_CHECK              = TIMELOCK_SECS / 2;                 // 3600
     public static final int  CP_BLOCKS                  = (TIMELOCK_BLOCKS / 2) / 2;         // 36
     public static final long CP_SECS                    = (TIMELOCK_SECS / 2) / 2;           // 1800
+    /** SECURITY (review 7 Nov): never reveal the secret into a counter-leg whose refund opens sooner than this — the
+     *  owner could race the reveal with a refund and use the secret on my first leg. An honest counter-leg is seen with
+     *  ~CP_SECS / ~CP_BLOCKS left, far above these. */
+    public static final long REVEAL_MIN_SECS            = 10 * 60;                           // 600
+    public static final int  REVEAL_MIN_BLOCKS          = 12;                                // ~10 min
     private static final int  NOTIFY_SCAN_DEPTH         = 256;                               // bounded notify scan
     private static final int  HTLC_SCAN_DEPTH           = 256;                               // bounded HTLC coin scan
     /** REFUND discovery only. The node's `coins depth:` is a walk-back over BLOCKS from the tip
@@ -1423,11 +1428,22 @@ public final class SwapEngine {
         final long generation = PublishGate.gen();
         String hash = MinimaHtlc.stateAt(coin, 5);
         if (hash.isEmpty()) return;
+        // SECURITY (review 7 Nov, CRITICAL): the hashlock is counterparty-chosen. KISS `SHA2(secret) EQ hash` compares
+        // BYTES exactly, but the ETH leg coerces it to 32 bytes (EthHtlc.b32 keeps the last 32), so a 0x00‖H lock got
+        // an ETH counter-leg on H that the taker could withdraw while my Minima claim could never match. 32 bytes only.
+        if (!hash.matches("0x[0-9A-Fa-f]{64}")) return;
         int timelock = parseInt(MinimaHtlc.stateAt(coin, 3));
         String reqTokenAddr = stripReqToken(MinimaHtlc.stateAt(coin, 2));   // ERC20 the maker wants back
         String secret = db.getSecret(hash);
 
         if (secret != null) {
+            // SECURITY (review 7 Nov): claiming reveals my secret. If this coin's refund opens within REVEAL_MIN_BLOCKS,
+            // its owner can race my claim with a refund and then use the revealed secret on MY first leg. Too close =
+            // don't reveal; my own first leg refunds at its timelock instead (no trade, no loss).
+            if (iMadeTheSecret(hash) && timelock - block < REVEAL_MIN_BLOCKS) {
+                logMismatchOnce(hash, "minima", "counter-leg refund opens in " + (timelock - block) + " blocks — not revealing the secret");
+                return;
+            }
             // I know the secret → claim this coin (reveals it via the notify coin).
             // FUND-SAFETY (backport from atomix-mds): the coin locked to me MUST be the currency I'm buying — a
             // taker's reqToken is the currency-agnostic literal 'minima', so amountTokenOk can't catch a maker
@@ -1810,6 +1826,7 @@ public final class SwapEngine {
                     return;
                 }
             }
+            if (!revealWindowOk(hash, gc.timelock)) return;       // SECURITY (review 7 Nov): never reveal into a closing window
             broadcastEthWithdraw(eth, contractId, hash, secret);   // retryable; confirmed next cycle via gc.withdrawn
         } else if (iAmSender) {
             if (gc.withdrawn) {
@@ -2069,6 +2086,24 @@ public final class SwapEngine {
     // clock the vault actually enforces; a slow DEVICE clock inflated the taker's apparent remaining window and
     // eroded the 2× safety margin. Cached ~30s (the guard runs per contract per poll); device-clock fallback on
     // an RPC failure — never worse than the old behavior. NOT for lock timelocks (those use ethChainNowStrict).
+    /** SECURITY (review 7 Nov, CRITICAL): withdraw() puts my secret in public calldata — even a withdraw that reverts. A
+     *  counter-leg whose refund opens within REVEAL_MIN_SECS (a maker can lock with timelock ≈ now) can be refunded
+     *  ahead of my withdraw, and the maker then claims MY first leg with the secret. Too close = don't reveal; my own
+     *  first leg refunds at its timelock (no trade, no loss). Chain time only: an RPC failure skips this cycle. */
+    boolean revealWindowOk(String hash, long counterLegTimelock) throws java.io.IOException {
+        if (!iMadeTheSecret(hash)) return true;   // a responder collects with a secret the initiator ALREADY revealed: nothing leaks, and a late collect must never be blocked
+        long left = counterLegTimelock - ethChainNowStrict();
+        if (left >= REVEAL_MIN_SECS) return true;
+        logMismatchOnce(hash, "eth", "counter-leg refund opens in " + left + "s — not revealing the secret");
+        return false;
+    }
+
+    /** True when this swap's secret is mine and still unrevealed by anyone else: I initiated it (I generated the secret). */
+    private boolean iMadeTheSecret(String hash) {
+        SwapDb.Swap sw = db.getSwap(hash);
+        return sw != null && "INITIATOR".equals(sw.role);
+    }
+
     private long ethNowCache = 0, ethNowCacheAt = 0;
     private long ethNowSoft() {
         long dev = nowUnix();
@@ -2095,6 +2130,7 @@ public final class SwapEngine {
                 }
             }
             if (!eth.canCollect(c.contractId)) return;   // already withdrawn/refunded on-chain
+            if (!revealWindowOk(hash, c.timelock)) return;   // SECURITY (review 7 Nov): never reveal into a closing window
             // F1: retryable broadcast; the terminal status is confirmed by checkEthContractFor via gc.withdrawn,
             // never on this ack (a dropped withdraw must not read as COMPLETE).
             broadcastEthWithdraw(eth, c.contractId, hash, secret);
