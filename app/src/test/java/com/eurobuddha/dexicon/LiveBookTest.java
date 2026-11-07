@@ -33,7 +33,7 @@ public class LiveBookTest {
             public String get(String url) { return url.contains("/dex/inbox") ? "{\"cursor\":1,\"messages\":[]}" : book; }
             public String post(String url, String body) { return "{\"ok\":true,\"cursor\":1}"; }
         };
-        RelayClient c = new RelayClient(t, "MINIMA/MxUSD", () -> e.expiry - 3600);
+        RelayClient c = new RelayClient(t, "MINIMA/MxUSD", () -> e.seq + 60);   // just after the maker signed it (the heartbeat window)
         c.setRelays(Arrays.asList("https://relay"));
         assertEquals(1, c.pollBook(1));
         List<Envelope> live = c.orders(null);

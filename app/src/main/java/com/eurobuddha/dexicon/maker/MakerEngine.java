@@ -46,7 +46,10 @@ public final class MakerEngine {
     public interface RefreshDone { void done(String err, int republished, String relockTxpowid); }
     public interface CoinsCb { void done(String err, List<Coin> coins); }
 
-    public static final long EXPIRY_SECONDS = 23 * 3600;
+    /** Owner 7 Nov, the maker heartbeat: orders live 45 min and are re-signed (fresh seq) once under 30 min remain, so a
+     *  maker that goes silent drops off every relay within 45 min, and takers hide it after {@link
+     *  com.eurobuddha.dexicon.relay.RelayClient#LIVE_SECONDS}. Was 23 h: a dead maker's offer stayed takeable all day. */
+    public static final long EXPIRY_SECONDS = 45 * 60, REFRESH_BEFORE_SECONDS = 30 * 60;
     public static final int MAX_COINS = 32;
     private static final Pattern SIMPLE = Pattern.compile("^RETURN SIGNEDBY\\(0x[0-9A-Fa-f]{64}\\)$");
     private static final Pattern DECIMAL = Pattern.compile("^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,8})?$");
@@ -468,7 +471,7 @@ public final class MakerEngine {
     /**
      * For every live order: make sure its coins still exist unspent, are FRESH and cover the remaining amount
      * (re-select if not), re-lock stale backing coins by a self-send, and republish when coins changed or expiry
-     * is within 2 hours. cb(err, republishedCount, relockTxpowid).
+     * is within REFRESH_BEFORE_SECONDS (the heartbeat). cb(err, republishedCount, relockTxpowid).
      */
     public void refresh(RefreshDone cb) {
         List<MyOrder> list = db.myOrders();
@@ -525,7 +528,7 @@ public final class MakerEngine {
             for (Coin c : wallet) if (o.coins.contains(c.coinid) && isFresh(c, tip, maxAge)) backingFresh.add(c);
             BigDecimal need = "sell".equals(o.side) ? FillPlan.d(o.remaining) : FillPlan.up8(FillPlan.d(o.remaining).multiply(FillPlan.d(o.price), FillPlan.MC));
             boolean covers = FillPlan.pick(backingFresh, need, MAX_COINS) != null;
-            boolean needRepub = !stillThere || !covers || (o.expiry - now() < 2 * 3600);
+            boolean needRepub = !stillThere || !covers || (o.expiry - now() < REFRESH_BEFORE_SECONDS);
             if (!stillThere || !covers) {
                 try { o.coins = backing(o.side, o.price, o.remaining, wallet, coinsBackingOthers(list, o.orderId), tip, maxAge); o.scripts = scriptsFor(wallet, o.coins); }
                 catch (RuntimeException e) {

@@ -26,7 +26,7 @@ public class RelayClientTest {
     final DexIdentity maker = TestIds.id("11"), maker2 = TestIds.id("44");
 
     String ord(DexIdentity me, String id, long seq, String side, String price, String amount, long expiry) {
-        return Envelopes.order(me, "MINIMA/MxUSD", side, price, amount, Arrays.asList(COIN), new ArrayList<>(), ADDR, id, seq, expiry);
+        return Envelopes.order(me, "MINIMA/MxUSD", side, price, amount, Arrays.asList(COIN), new ArrayList<>(), ADDR, id, TestIds.NOW - 100 + seq, expiry);   // seq near NOW: the heartbeat hides orders not re-signed within LIVE_SECONDS
     }
 
     /** A cancel that arrives after its own 10-minute expiry (app was in the background) must still kill the live
@@ -46,6 +46,32 @@ public class RelayClientTest {
         int k = cancel.indexOf("\"sig\":\"0x") + 9;
         String forged = cancel.substring(0, k) + (cancel.charAt(k) == '0' ? '1' : '0') + cancel.substring(k + 1);
         try { c.applyOrderStrict(forged); fail("expired envelopes are still signature-checked"); } catch (RuntimeException expected) {}
+    }
+
+    /** Owner 7 Nov, the ghost 1,000 @ 0.00308: an unexpired order whose maker stopped re-signing is hidden; a re-sign
+     *  (higher seq, the heartbeat) brings it back; a seq far in the future never counts as heard. */
+    @Test public void silentMakersOrderIsHiddenUntilItsMakerResigns() {
+        final long[] now = {TestIds.NOW};
+        RelayClient c = new RelayClient(null, "MINIMA/MxUSD", () -> now[0]);
+        String old = Envelopes.order(maker, "MINIMA/MxUSD", "sell", "0.00308", "1000", Arrays.asList(COIN), new ArrayList<>(), ADDR,
+                "0x0000000000000007", TestIds.NOW - RelayClient.LIVE_SECONDS - 1, TestIds.NOW + 21 * 3600);   // an old 23 h envelope, 51 min unsigned
+        assertTrue(c.applyOrderStrict(old));
+        assertEquals("silent maker: hidden", 0, c.orders("sell").size());
+        String resigned = Envelopes.order(maker, "MINIMA/MxUSD", "sell", "0.00308", "1000", Arrays.asList(COIN), new ArrayList<>(), ADDR,
+                "0x0000000000000007", TestIds.NOW - 5, TestIds.NOW + 3600);
+        assertTrue(c.applyOrderStrict(resigned));
+        assertEquals("heard again: shown", 1, c.orders("sell").size());
+        now[0] = TestIds.NOW - 5 + RelayClient.LIVE_SECONDS;
+        assertEquals("still inside the window", 1, c.orders("sell").size());
+        now[0] = TestIds.NOW + RelayClient.LIVE_SECONDS + 10;
+        assertEquals("not re-signed in time: hidden", 0, c.orders("sell").size());
+        String future = Envelopes.order(maker2, "MINIMA/MxUSD", "sell", "0.003", "5", Arrays.asList(COIN), new ArrayList<>(), ADDR,
+                "0x0000000000000008", now[0] + RelayClient.FUTURE_SLACK_SECONDS + 60, now[0] + 600);
+        assertTrue(c.applyOrderStrict(future));
+        assertEquals("a far-future seq is not a heartbeat", 0, c.orders("sell").size());
+        assertEquals(45 * 60, com.eurobuddha.dexicon.maker.MakerEngine.EXPIRY_SECONDS);
+        assertTrue("re-signed (plus one 15-min Doze heartbeat of lag) before the takers' window closes",
+                com.eurobuddha.dexicon.maker.MakerEngine.EXPIRY_SECONDS - com.eurobuddha.dexicon.maker.MakerEngine.REFRESH_BEFORE_SECONDS + 15 * 60 < RelayClient.LIVE_SECONDS);
     }
 
     @Test public void unionBySeqCancelExpiryAndFanOut() {

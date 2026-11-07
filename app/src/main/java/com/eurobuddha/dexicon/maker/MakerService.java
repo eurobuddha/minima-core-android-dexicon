@@ -85,7 +85,9 @@ public class MakerService extends Service {
     private AutoCross cross;       // trades PandaPools back to the ladder's rungs
     boolean started, ticking;   // package-private for tests
     private boolean paired, deriving;
-    private long lastRegisterMs, ticks, doorTicks, lastHubMs;
+    private long lastRegisterMs, ticks, doorTicks, lastHubMs, lastRefreshMs;
+    /** The order refresh (and so the heartbeat republish) runs at most this often while awake. */
+    private static final long REFRESH_GAP_MS = 60_000;
     /** The trading gate's MiniHub half is re-read here too, so it holds with the Activity closed (an upgrade restarts
      *  only this service). */
     static final long HUB_EVERY_MS = 5 * 60_000;
@@ -335,11 +337,12 @@ public class MakerService extends Service {
             ladder.pass(() -> cross.run(() -> afterCross(() -> engine.syncRelays(rep -> {   // then every relay must match this phone (no cancelled order left live anywhere)
                 for (String l : rep.lines) log(l);
                 if (rep.fixed > 0) changed();
-                if (ticks % 6 == 0) refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
+                // by the clock, not the tick count: in Doze one tick runs per 15-min heartbeat, and every one must refresh
+                if (System.currentTimeMillis() - lastRefreshMs >= REFRESH_GAP_MS) { lastRefreshMs = System.currentTimeMillis(); refreshAddresses(() -> engine.refresh((e, n, relocked) -> {
                     if (e != null) log("refresh failed: " + e);
                     else if (n > 0 || relocked != null) { log("refresh republished " + n + " order(s)" + (relocked != null ? "; relocked stale backing coins " + relocked : "")); changed(); }
                     tickDone();
-                }));
+                })); }
                 else tickDone();
             }))));
         });

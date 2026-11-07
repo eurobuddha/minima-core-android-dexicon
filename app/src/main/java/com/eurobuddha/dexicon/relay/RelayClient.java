@@ -104,12 +104,19 @@ public final class RelayClient {
         return true;
     }
 
-    /** Live orders for the market: not cancelled, not expired; side optional. Bids first (desc), then asks (asc). */
+    /** Owner 7 Nov, the maker heartbeat: a live maker republishes every order (fresh seq) at least every
+     *  {@link com.eurobuddha.dexicon.maker.MakerEngine#REFRESH_BEFORE_SECONDS}; an order not re-signed within this
+     *  window has a silent maker (phone off, app gone) and is hidden — nobody can co-sign it. A seq far in the future
+     *  (a clock-gaming maker) is hidden too. */
+    public static final long LIVE_SECONDS = 50 * 60, FUTURE_SLACK_SECONDS = 10 * 60;
+    public static boolean heard(Envelope e, long nowSeconds) { return e.seq >= nowSeconds - LIVE_SECONDS && e.seq <= nowSeconds + FUTURE_SLACK_SECONDS; }
+
+    /** Live orders for the market: not cancelled, not expired, maker heard from recently; side optional. Bids first (desc), then asks (asc). */
     public synchronized List<Envelope> orders(String side) {
         long n = now.getAsLong();
         List<Envelope> out = new ArrayList<>();
         for (Envelope e : book.values()) {
-            if (!e.market.equals(market) || e.expiry <= n || e.isCancel()) continue;
+            if (!e.market.equals(market) || e.expiry <= n || e.isCancel() || !heard(e, n)) continue;
             if (side != null && !side.equals(e.side)) continue;
             out.add(e);
         }
