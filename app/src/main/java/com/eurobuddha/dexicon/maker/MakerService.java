@@ -442,7 +442,7 @@ public class MakerService extends Service {
         // (the maker would keep its option), so then wait and look again next pass; relock only a coin unspent everywhere.
         node.cmd("coins relevant:true coinid:" + coin, new NodeApi.Cb() {
             public void onResult(JSONObject onChain) {
-                if (NodeApi.rows(onChain).isEmpty()) { done("Your coin in this take is already spent — the maker may have posted it; check HISTORY."); return; }
+                if (NodeApi.rows(onChain).isEmpty()) { done("Your coin " + coin + " in this take is now spent on chain — voided back to you, or the maker posted the take; check HISTORY."); return; }
                 node.cmd("coins relevant:true checkmempool:true coinid:" + coin, new NodeApi.Cb() {
             public void onResult(JSONObject j) {
                 List<JSONObject> rows = NodeApi.rows(j);
@@ -453,8 +453,11 @@ public class MakerService extends Service {
                         JSONObject r = a.optJSONObject("response"); String to = r == null ? "" : r.optString("address", "");
                         if (to.isEmpty()) { voiding.remove(orderId); return; }
                         engine.relock(java.util.Collections.singletonList(c), to, (err, tx) -> h.post(() -> {
-                            if (err != null) { voiding.remove(orderId); log("void take " + orderId + " failed: " + err + " — retrying"); return; }
-                            done("Take voided: your coin " + coin + " was spent back to you, so the maker can no longer post your signed half.");
+                            voiding.remove(orderId);
+                            if (err != null) { log("void take " + orderId + " failed: " + err + " — retrying"); return; }
+                            // review 7 Nov (A-2, mirror of MDS 0.0.78): keep the record until the spend is ON CHAIN - a posted
+                            // relock can still be dropped; the next pass then finds the coin spent and closes it
+                            log("void take " + orderId + ": relock of " + coin + " posted; settles when it is on chain");
                         }));
                     }
                     public void onError(String m) { voiding.remove(orderId); }
