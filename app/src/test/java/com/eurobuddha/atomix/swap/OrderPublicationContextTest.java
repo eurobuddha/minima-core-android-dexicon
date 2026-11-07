@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.7 app/src/test/java/com/eurobuddha/atomix/swap/OrderPublicationContextTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.8 app/src/test/java/com/eurobuddha/atomix/swap/OrderPublicationContextTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import com.eurobuddha.atomix.TradingContext;
@@ -52,7 +52,7 @@ public class OrderPublicationContextTest {
         for (TradingContext market : TradingContext.values()) for (boolean notified : new boolean[]{true, false}) {
             Scan s = new Scan(market); s.registered(notified); s.received(coin(1, true));
             assertEquals(Arrays.asList("coinnotify action:add address:" + market.orderBookAddr,
-                "coins simplestate:true order:desc depth:" + SwapOrderBook.SCAN_DEPTH + " address:" + market.orderBookAddr), s.commands);
+                "coins order:desc depth:" + SwapOrderBook.SCAN_DEPTH + " address:" + market.orderBookAddr), s.commands);
             assertEquals(1, s.deliveries); assertNull(s.error); Order order = s.book.values().iterator().next(); assertSame(market, order.market());
             JSONObject wire = order.toJson(); Set<String> keys = new HashSet<>(); wire.keys().forEachRemaining(keys::add);
             assertEquals(new HashSet<>(Arrays.asList("mpk", "eth", "cid", "ts", "bal", "pairs")), keys);

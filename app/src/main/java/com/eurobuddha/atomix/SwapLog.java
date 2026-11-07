@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.7 app/src/main/java/com/eurobuddha/atomix/SwapLog.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.8 app/src/main/java/com/eurobuddha/atomix/SwapLog.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix;
 
 import android.util.Log;

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.7 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.8 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -478,7 +478,7 @@ public final class MinimaHtlc {
      *  state[5]. A non-list reply is an error, never "none". */
     public void findMyLockByHash(String hash, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
         if (!isHex(hash)) { err.accept("scan: non-hex hash"); return; }   // interpolated into the coins command
-        acrossAddresses(a -> "coins relevant:true simplestate:true address:" + a + " state:" + normKey(hash), true, ok, err);
+        acrossAddresses(a -> "coins relevant:true address:" + a + " state:" + normKey(hash), true, ok, err);
     }
 
     /** Is there any UNCONFIRMED native mxUSDT in my wallet (a split/lock/payment still settling)? The chain's
@@ -597,7 +597,7 @@ public final class MinimaHtlc {
     }
 
     private void doScanAllHtlc(int coinageMin, int depth, Consumer<org.json.JSONArray> ok, Consumer<String> err) {
-        acrossAddresses(a -> "coins coinage:" + coinageMin + " tokenid:" + activeToken + " simplestate:true depth:" + depth + " address:" + a, false, ok, err);
+        acrossAddresses(a -> "coins coinage:" + coinageMin + " tokenid:" + activeToken + " depth:" + depth + " address:" + a, false, ok, err);
     }
 
     /** Find HTLC coin(s) carrying a specific hashlock (state[5]==hash) via the reliable coinnotify-add +
@@ -634,7 +634,7 @@ public final class MinimaHtlc {
         // reply, so this stays cheap; and dropping the token filter is what lets a claim/refund find an in-flight
         // swap's coin in EITHER currency after the user switched the active currency. claim()/refund() read the
         // coin's own tokenid, so both mxUSDT and native-MINIMA legs settle correctly.
-        acrossAddresses(a -> "coins coinage:" + coinageMin + " simplestate:true state:" + normKey(value)
+        acrossAddresses(a -> "coins coinage:" + coinageMin + " state:" + normKey(value)
           + " address:" + a + " depth:" + depth + (megammr ? " megammr:true" : ""), false, ok, err);
     }
 
@@ -664,7 +664,7 @@ public final class MinimaHtlc {
         // normKey → UPPER-CASE, no 0x — a guaranteed substring of the stored value regardless of the caller's
         // case (SwapDb keys are lower-case). Passing the raw lower-case hash here would match NOTHING and
         // re-strand the maker's USDT — the exact bug coinnotify-add fixed.
-        cmd("coins simplestate:true depth:" + depth + " state:" + normKey(hash) + " address:" + NOTIFY, r -> {  // SETTLEMENT: no token filter (hash is unique across currencies)
+        cmd("coins depth:" + depth + " state:" + normKey(hash) + " address:" + NOTIFY, r -> {  // SETTLEMENT: no token filter (hash is unique across currencies)
             Object resp = r.opt("response");
             ok.accept(resp instanceof org.json.JSONArray ? (org.json.JSONArray) resp : new org.json.JSONArray());
         }, err);
@@ -824,7 +824,11 @@ public final class MinimaHtlc {
     private void deleteTxn(String id) { node.cmd("txndelete id:" + id, new NodeApi.Cb() {
         @Override public void onResult(JSONObject j) {} @Override public void onError(String m) {} }); }
 
-    /** Read a coin state port. State may be a simplestate object {"4":…} or an array [{port,data}]. */
+    /** Read a coin state port. State may be a simplestate object {"4":…} or an array [{port,data}].
+     *  SECURITY (review 7 Nov, 0.2.8): every fund-deciding scan asks for the ARRAY and this returns the FIRST entry for
+     *  the port — the one KISS reads (Contract.getPrevState). A transaction can carry two entries for one port (txnimport
+     *  keeps both; proven on a -test chain), and simplestate's JSON object keeps the LAST, so a lock could show this app
+     *  a safe timelock or key while its script enforces another. */
     static String stateAt(JSONObject coin, int port) {
         Object st = coin.opt("state");
         if (st instanceof JSONObject) {
