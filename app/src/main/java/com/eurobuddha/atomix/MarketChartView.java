@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/main/java/com/eurobuddha/atomix/MarketChartView.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/main/java/com/eurobuddha/atomix/MarketChartView.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix;
 
 import android.content.Context;

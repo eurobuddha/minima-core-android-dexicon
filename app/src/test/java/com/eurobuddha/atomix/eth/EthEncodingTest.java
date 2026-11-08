@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/test/java/com/eurobuddha/atomix/eth/EthEncodingTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/test/java/com/eurobuddha/atomix/eth/EthEncodingTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.eth;
 
 import static org.junit.Assert.assertEquals;

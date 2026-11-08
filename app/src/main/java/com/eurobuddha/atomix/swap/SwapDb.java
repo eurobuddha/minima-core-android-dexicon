@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/main/java/com/eurobuddha/atomix/swap/SwapDb.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.content.ContentValues;
@@ -54,6 +54,8 @@ public final class SwapDb {
     public static final String EV_LOCK_GONE_SEEN = "MINIMA_LOCK_GONE_SEEN"; // first "spent"/"absent" observation, pending confirmation (note = "<event> minima block N")
     public static final String EV_LOCK_PRESENT = "MINIMA_LOCK_PRESENT"; // a later read found the lock unspent — voids any pending GONE_SEEN (note = "minima block N")
     public static final String EV_ETH_LEG_REFUNDED = "ETH_LEG_REFUNDED"; // the Ethereum leg I was to collect read refunded by its sender (note = contractId)
+    public static final String EV_LOCK_CANCELLED = "ETH_LOCK_CANCELLED"; // my Ethereum lock was still unmined past its own deadline: a 0-value self-transfer replaced it at its nonce (note = cancel tx hash)
+    public static final String EV_LOCK_REPRICED = "ETH_LOCK_REPRICED"; // my unmined Ethereum lock re-signed at today's fee, same bytes (note = new tx hash)
     public static final String EV_RECOVERY_SAVED = "RECOVERY_SAVED";   // the user saved + re-read this swap's recovery record (note = size + SHA-256)
 
     // ---- UX swap status ----

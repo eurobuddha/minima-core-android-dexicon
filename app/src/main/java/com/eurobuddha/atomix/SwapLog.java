@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/main/java/com/eurobuddha/atomix/SwapLog.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/main/java/com/eurobuddha/atomix/SwapLog.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix;
 
 import android.util.Log;
@@ -27,6 +27,6 @@ public final class SwapLog {
     /** For gates evaluated every ~90s: logs {@code key: m} only when {@code m} differs from the last one. */
     public static synchronized void skip(String key, String m) {
         String prev = LAST.put(key, m);
-        if (!m.equals(prev)) Log.d(TAG, key + ": " + m);
+        if (!m.equals(prev)) d(key + ": " + m);
     }
 }

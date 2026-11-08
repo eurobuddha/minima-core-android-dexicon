@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -698,7 +698,9 @@ public final class SwapEngine {
                     if ((SwapDb.ST_REFUNDED.equals(s.status) || SwapDb.ST_COMPLETE.equals(s.status) || SwapDb.ST_ERROR.equals(s.status))
                             && !ethLegUnproven(s)) continue;
                     try { checkEthContractFor(eth, s, myEth()); } catch (Exception e) { SwapLog.w("ethOnly " + s.hash + ": " + e.getMessage()); }
+                    repriceMyEthLock(eth, s);   // 8 Nov: an unpaired node's stuck lock is re-priced / cancelled too
                 }
+                SwapLog.skip("ethPass", "eth-only pass (node not ready)");
             } catch (Exception e) { SwapLog.w("ethOnly: " + e.getMessage()); }
         });
     }
@@ -1088,7 +1090,8 @@ public final class SwapEngine {
 
     /** One watcher cycle: drive both chains. Safe to call repeatedly (every action is idempotency-guarded). */
     public void poll() {
-        if (!ready()) return;
+        if (!ready()) { SwapLog.skip("ethPass", "poll skipped: engine not ready (rpc " + (rpc != null) + ", net " + (net != null)
+                + ", wallet " + wallet.ready() + ", key " + (myMinimaPk != null) + ", node " + minima.ready() + ")"); return; }
         minima.currentBlock(new MinimaHtlc.BlockCb() {
             @Override public void ok(int block) {
                 lastMinimaBlock = block;
@@ -1688,7 +1691,8 @@ public final class SwapEngine {
 
     private void runEthChecks(final int minimaBlock) {
         EthHtlc eth;
-        try { eth = new EthHtlc(rpc, wallet.creds(), net); } catch (Exception e) { return; }
+        try { eth = new EthHtlc(rpc, wallet.creds(), net); } catch (Exception e) { SwapLog.skip("ethPass", "no ETH client: " + e.getMessage()); return; }
+        SwapLog.skip("ethPass", "full pass");
         final String myEth = wallet.address();
 
         // Free any burst slot whose lock has confirmed on-chain (coinage:1 → its coin is safely spent, so the
@@ -1727,6 +1731,7 @@ public final class SwapEngine {
                 continue;
             }
             try { checkEthContractFor(eth, s, myEth); } catch (Exception ignore) {}
+            repriceMyEthLock(eth, s);
         }
         // Review MINOR: reap per-hash guard entries for terminal swaps so the static ethAttempt (and the
         // instance dedup sets) don't grow unbounded over a multi-day service — only CP_LOCKING was pruned before.
@@ -1888,6 +1893,62 @@ public final class SwapEngine {
         } finally { inflight.remove("wdEth:" + hash); }
     }
 
+    /** A lock still useful if it mines: the taker needs REVEAL_MIN_SECS to claim a maker's lock; the maker answers a
+     *  taker's lock only with CP_SECS_CHECK left. Five minutes of slack for the replacement itself to mine. */
+    static boolean lockWorthRepricing(String role, long timelock, long now) {
+        long need = ("INITIATOR".equals(role) ? CP_SECS_CHECK : REVEAL_MIN_SECS) + 300;
+        return timelock > 0 && timelock - now >= need;
+    }
+
+    /** 8 Nov: a maker's USDT lock went out at 0.6 gwei, the base fee spiked 50x, and nothing ever re-priced it
+     *  (withdraw/refund retry at today's price; a lock is sent once). Every ETH_RETRY_SECS, re-sign my own unmined lock at
+     *  today's price - the journal's saved bytes, so no new liability - while it can still do its job. */
+    void repriceMyEthLock(EthHtlc eth, SwapDb.Swap s) {   // package-private: LockRepriceCancelTest
+        if (s.myLegIsMinima || s.hash == null || s.myTimelock <= 0) return;
+        SwapLog.skip("lockWatch " + s.hash, s.status + " timelock " + s.myTimelock);
+        cancelExpiredEthLock(eth, s);
+        if (halted() || !lockWorthRepricing(s.role, s.myTimelock, ethNowSoft())) return;
+        if (!tryEthAttempt("repriceE:" + s.hash)) return;
+        if (!ethGasAffordable(s.hash, EthHtlc.GAS_LOCK)) return;
+        try {
+            String tx = eth.repriceLock(s.hash);
+            if (tx != null) {
+                SwapLog.w("lock REPRICED " + s.hash + " tx=" + tx);
+                db.logEvent(s.hash, SwapDb.EV_LOCK_REPRICED, "ETH", "", tx);
+                ui.post(notifier::onSwapsChanged);
+            }
+        } catch (Exception e) {
+            SwapLog.w("lock reprice ERR " + s.hash + ": " + e.getMessage());
+        }
+    }
+
+    /** 8 Nov: a lock still unmined after its OWN deadline can only cost a refund later, and it holds the account's nonce
+     *  so every later Ethereum send queues behind it. Cancel it: a 0-value self-transfer at the same nonce (journal-tracked,
+     *  so whichever mines settles the row). STRICT chain time: a fast phone clock must never cancel a lock still in its
+     *  window. A cancel of a lock that already mined is a no-op (the journal settles it first); one racing the lock is
+     *  fund-safe either way (the lock mines expired and refunds, or the cancel mines and nothing was locked). */
+    private void cancelExpiredEthLock(EthHtlc eth, SwapDb.Swap s) {
+        if (!ownEthLockPending(s.status) || !ethRetryDue("cancelE:" + s.hash)) return;
+        try {
+            if (ethChainNowStrict() <= s.myTimelock) return;
+        } catch (Exception e) { SwapLog.skip("cancel " + s.hash, "chain clock unreadable: " + e.getMessage()); return; }
+        if (!tryEthAttempt("cancelE:" + s.hash)) return;
+        if (!ethGasAffordable(s.hash, BigInteger.valueOf(21000))) return;
+        try {
+            String tx = eth.cancelLock(s.hash);
+            if (tx == null) SwapLog.skip("cancel " + s.hash, "nothing to cancel: the lock settled, or no saved lock for it");
+            if (tx != null) {
+                SwapLog.w("lock CANCELLED " + s.hash + " tx=" + tx);
+                if (!db.hasEvent(s.hash, SwapDb.EV_LOCK_CANCELLED)) {
+                    db.logEvent(s.hash, SwapDb.EV_LOCK_CANCELLED, "ETH", "", tx);
+                    ui.post(notifier::onSwapsChanged);
+                }
+            }
+        } catch (Exception e) {
+            SwapLog.w("lock cancel ERR " + s.hash + ": " + e.getMessage());
+        }
+    }
+
     /** Broadcast a refund of my own expired leg. Never finalizes — {@code gc.refunded} does, on a later cycle. */
     private void broadcastEthRefund(EthHtlc eth, String contractId, String hash) {
         if (!ethRetryDue("refundE:" + hash) || !inflight.add("refundE:" + hash)) return;
@@ -1964,9 +2025,19 @@ public final class SwapEngine {
         if (s.myLegIsMinima || s.myTimelock <= 0 || !ownEthLockPending(s.status)) return;
         long notBefore = s.myTimelock + NEVER_LOCKED_MARGIN_SECS;
         if (nowUnix() <= notBefore || !tryEthAttempt("neverLocked:" + s.hash)) return;
-        String evidence = db.hasEvent(s.hash, SwapDb.EV_NEVER_LOCKED) ? "recorded"
-                : neverLockedEvidence(rpc, eth, EthHtlc.contractId(s.hash), notBefore, neverLockedPair.getAndIncrement(),
-                        ethLockTx(s.hash), myEth());
+        String evidence = null;
+        if (db.hasEvent(s.hash, SwapDb.EV_NEVER_LOCKED)) evidence = "recorded";
+        else {
+            // Every recorded attempt (the first lock and each fee replacement) must read unknown or reverted.
+            int pair = neverLockedPair.getAndIncrement();
+            java.util.List<String> txs = ethLockTxs(s.hash);
+            if (txs.isEmpty()) txs.add(null);
+            for (String tx : txs) {
+                String e = neverLockedEvidence(rpc, eth, EthHtlc.contractId(s.hash), notBefore, pair, tx, myEth());
+                if (e == null) return;
+                evidence = evidence == null ? e : evidence + " | " + e;
+            }
+        }
         if (evidence == null) return;
         SwapDb.Swap cur = db.getSwap(s.hash);
         if (cur == null || !ownEthLockPending(cur.status)) return;
@@ -1981,15 +2052,17 @@ public final class SwapEngine {
         return SwapDb.ST_STARTED.equals(status) || SwapDb.ST_LOCKED.equals(status);
     }
 
-    /** The tx hash of my own Ethereum lock for {@code hash}: EV_STARTED (initiator) or EV_CPSENT (responder) on an
-     *  "ETH:" token. Null if none was ever recorded (newContract threw, or the answer was lost). */
-    private String ethLockTx(String hash) {
+    /** Every tx hash of my own Ethereum lock for {@code hash}: EV_STARTED (initiator) or EV_CPSENT (responder), then each
+     *  EV_LOCK_REPRICED fee replacement, on an "ETH:" token. Empty if none was recorded (newContract threw, or the answer was lost). */
+    private java.util.List<String> ethLockTxs(String hash) {
+        java.util.List<String> out = new java.util.ArrayList<>();
         for (SwapDb.Event e : db.getEvents(hash)) {
-            if ((SwapDb.EV_STARTED.equals(e.event) || SwapDb.EV_CPSENT.equals(e.event))
-                    && e.token != null && e.token.startsWith("ETH") && e.note != null && e.note.matches("(?i)0x[0-9a-f]{64}"))
-                return e.note;
+            if ((SwapDb.EV_STARTED.equals(e.event) || SwapDb.EV_CPSENT.equals(e.event) || SwapDb.EV_LOCK_REPRICED.equals(e.event))
+                    && e.token != null && e.token.startsWith("ETH") && e.note != null && e.note.matches("(?i)0x[0-9a-f]{64}")
+                    && !out.contains(e.note))
+                out.add(e.note);
         }
-        return null;
+        return out;
     }
 
     /** Evidence that contract {@code contractId} does not exist and never will, from two consecutive entries of

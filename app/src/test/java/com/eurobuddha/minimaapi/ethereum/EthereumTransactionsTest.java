@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/test/java/com/eurobuddha/minimaapi/ethereum/EthereumTransactionsTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/test/java/com/eurobuddha/minimaapi/ethereum/EthereumTransactionsTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.minimaapi.ethereum;
 
 import org.junit.Test;
@@ -176,5 +176,56 @@ public class EthereumTransactionsTest {
         rpc.fail=false;rpc.settle(rpc.sent.get(0),true);
         assertEquals(first.hash,journal.send(rpc,KEY,1,TO,"0x",BigInteger.ONE,GAS.multiply(BigInteger.TWO),PRICE,null,()->{}));
         assertEquals(1,rpc.sent.size());
+    }
+
+    // 8 Nov: a maker's lock stuck at 0.6 gwei through a 50x base-fee spike. reprice() re-signs the saved bytes only.
+    @Test public void repriceResignsTheSavedLockAtTheNewPriceSameNonceSameBytes()throws Exception {
+        EthereumTransactions e=new EthereumTransactions(new Memory());Rpc rpc=new Rpc();
+        String old=e.send(rpc,KEY,1,TO,"0xabcdef",BigInteger.ZERO,GAS,PRICE,"lock:h",()->{});
+        assertNull("under +10% is not a valid replacement",e.reprice(rpc,KEY,1,"lock:h",PRICE.multiply(BigInteger.valueOf(109)).divide(BigInteger.valueOf(100)),()->{}));
+        assertEquals(1,rpc.sent.size());
+        String next=e.reprice(rpc,KEY,1,"lock:h",PRICE.multiply(BigInteger.TEN),()->{});
+        assertNotNull(next);assertNotEquals(old,next);assertEquals(2,rpc.sent.size());
+        RawTransaction a=TransactionDecoder.decode(rpc.sent.get(0)),b=TransactionDecoder.decode(rpc.sent.get(1));
+        assertEquals(a.getNonce(),b.getNonce());assertEquals(a.getTo(),b.getTo());assertEquals(a.getValue(),b.getValue());
+        assertEquals(a.getData(),b.getData());assertEquals(a.getGasLimit(),b.getGasLimit());assertEquals(PRICE.multiply(BigInteger.TEN),b.getGasPrice());
+        // the ORIGINAL mining still settles the row: nothing left to bump
+        rpc.settle(rpc.sent.get(0),true);
+        assertNull(e.reprice(rpc,KEY,1,"lock:h",PRICE.multiply(BigInteger.valueOf(100)),()->{}));assertEquals(2,rpc.sent.size());
+    }
+    @Test public void repriceIgnoresUnknownOperationsAndTheGenericPendingKey()throws Exception {
+        EthereumTransactions e=new EthereumTransactions(new Memory());Rpc rpc=new Rpc();
+        send(e,rpc,TO,"lock:h");
+        assertNull(e.reprice(rpc,KEY,1,"lock:other",PRICE.multiply(BigInteger.TEN),()->{}));
+        assertThrows(IOException.class,()->e.reprice(rpc,KEY,1,"pending",PRICE.multiply(BigInteger.TEN),()->{}));
+        assertEquals(1,rpc.sent.size());
+    }
+
+    // 8 Nov: a lock still unmined past its deadline is cancelled by a 0-value self-transfer at its nonce.
+    @Test public void cancelReplacesTheNonceWithASelfTransferAndAMinedCancelFreesTheAccount()throws Exception {
+        Memory m=new Memory();EthereumTransactions e=new EthereumTransactions(m);Rpc rpc=new Rpc();
+        e.send(rpc,KEY,1,TO,"0xabcdef",BigInteger.ZERO,GAS,PRICE,"lock:h",()->{});
+        String c=e.cancel(rpc,KEY,1,"lock:h",PRICE,()->{});   // asks for less than +10%: raised to the replacement floor
+        assertNotNull(c);assertEquals(2,rpc.sent.size());
+        SignedRawTransaction x=(SignedRawTransaction)TransactionDecoder.decode(rpc.sent.get(1));
+        assertEquals(BigInteger.valueOf(4),x.getNonce());assertTrue(KEY.getAddress().equalsIgnoreCase(x.getTo()));
+        assertEquals(BigInteger.ZERO,x.getValue());assertEquals(BigInteger.valueOf(21000),x.getGasLimit());
+        assertEquals(PRICE.multiply(BigInteger.valueOf(110)).divide(BigInteger.valueOf(100)),x.getGasPrice());
+        e=new EthereumTransactions(m);   // the journal with a cancel survives a reload
+        assertNull("no fee bump of a cancelled lock",e.reprice(rpc,KEY,1,"lock:h",PRICE.multiply(BigInteger.TEN),()->{}));
+        EthereumTransactions f=e;
+        assertThrows("never re-signs the cancelled lock",EthereumTransactions.Uncertain.class,()->f.send(rpc,KEY,1,TO,"0xabcdef",BigInteger.ZERO,GAS,PRICE.multiply(BigInteger.TEN),"lock:h",()->{}));
+        rpc.settle(rpc.sent.get(1),true);
+        assertNull("settled: nothing to cancel",e.cancel(rpc,KEY,1,"lock:h",PRICE,()->{}));
+        send(e,rpc,OTHER,null);   // the account is free: the next send takes the next nonce
+        assertEquals(BigInteger.valueOf(5),nonce(rpc.sent.get(rpc.sent.size()-1)));
+    }
+    @Test public void aLockThatWinsTheRaceWithItsCancelStillSettlesTheRow()throws Exception {
+        Memory m=new Memory();EthereumTransactions e=new EthereumTransactions(m);Rpc rpc=new Rpc();
+        e.send(rpc,KEY,1,TO,"0xabcdef",BigInteger.ZERO,GAS,PRICE,"lock:h",()->{});
+        e.cancel(rpc,KEY,1,"lock:h",PRICE.multiply(BigInteger.TWO),()->{});
+        rpc.settle(rpc.sent.get(0),true);
+        assertNull(new EthereumTransactions(m).cancel(rpc,KEY,1,"lock:h",PRICE.multiply(BigInteger.TEN),()->{}));
+        send(e,rpc,OTHER,null);assertEquals(BigInteger.valueOf(5),nonce(rpc.sent.get(rpc.sent.size()-1)));
     }
 }

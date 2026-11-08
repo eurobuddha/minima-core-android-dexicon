@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/test/java/com/eurobuddha/minimaapi/ethereum/EthereumFundingSnapshotTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/test/java/com/eurobuddha/minimaapi/ethereum/EthereumFundingSnapshotTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.minimaapi.ethereum;
 import java.math.BigInteger;
 import java.util.concurrent.*;

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/test/java/com/eurobuddha/atomix/swap/TimelockSafetyTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/test/java/com/eurobuddha/atomix/swap/TimelockSafetyTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import static org.junit.Assert.assertEquals;
@@ -99,4 +99,14 @@ public class TimelockSafetyTest {
     //  MinimaHtlc.TIMELOCK_BLOCKS, so that assertion could never fail. The MinimaHtlc↔SwapEngine linkage is
     //  instead exercised meaningfully by blockAndSecondWindowsAgreeInWallClock (via MINIMA_BLOCK_TIME) and by
     //  the raw pins above, which DO fail if either side's number drifts.)
+
+    /** 8 Nov fee bump: only while the lock can still do its job if it mines. */
+    @org.junit.Test public void lockIsRepricedOnlyWhileItCanStillBeUsed() {
+        long now = 1_000_000;
+        org.junit.Assert.assertTrue(SwapEngine.lockWorthRepricing("RESPONDER", now + SwapEngine.REVEAL_MIN_SECS + 300, now));
+        org.junit.Assert.assertFalse(SwapEngine.lockWorthRepricing("RESPONDER", now + SwapEngine.REVEAL_MIN_SECS + 299, now));
+        org.junit.Assert.assertTrue(SwapEngine.lockWorthRepricing("INITIATOR", now + SwapEngine.CP_SECS_CHECK + 300, now));
+        org.junit.Assert.assertFalse(SwapEngine.lockWorthRepricing("INITIATOR", now + SwapEngine.CP_SECS_CHECK + 299, now));
+        org.junit.Assert.assertFalse(SwapEngine.lockWorthRepricing("RESPONDER", 0, now));
+    }
 }

@@ -286,7 +286,10 @@ public final class Ledger {
                 : DoorForwards.UNCERTAIN.equals(fs) ? "the forward is unconfirmed" : DoorForwards.SENT.equals(fs) ? "forwarded"
                 : complete ? ("USDT".equals(buy) ? "at your Ethereum address" : "in your wallet")
                 : refunded ? "maker didn't lock · " + sell + " back" + (refundAt > 0 ? " " + hm(refundAt, tz) : "") : error ? "failed" : st;
-        if (maker) outcome = complete ? ("USDT".equals(buy) ? "paid · USDT at your Ethereum address" : "paid · in your wallet")
+        boolean cancelled = false;
+        if (events != null) for (SwapDb.Event e : events) if (SwapDb.EV_LOCK_CANCELLED.equals(e.event)) cancelled = true;
+        if (maker && cancelled && !complete) outcome = "your lock never mined · cancelled, " + sell + " never left";
+        else if (maker) outcome = complete ? ("USDT".equals(buy) ? "paid · USDT at your Ethereum address" : "paid · in your wallet")
                 : SwapDb.ST_CLAIMING.equals(st) ? "claiming your payment" : running ? "you locked · waiting for the taker to claim"
                 : refunded ? "the taker never claimed · " + sell + " back" : error ? "failed" : st;
         it.sub = dayTime(s.created, tz) + " · " + outcome;
@@ -337,6 +340,10 @@ public final class Ledger {
         // "You locked" only once the lock was SENT: the row is saved LOCKED before the broadcast (record-before-broadcast)
         if (lockedAt > 0) it.step(Mark.OK, hms(lockedAt, tz), "You locked " + s.sellAmount + " " + sell);
         else if (!SwapDb.ST_STARTED.equals(st) && !SwapDb.ST_REFUNDED.equals(st) && !SwapDb.ST_ERROR.equals(st)) it.step(Mark.WAIT, "", "Locking your " + s.sellAmount + " " + sell + "…");
+        if (events != null) for (SwapDb.Event e : events) if (SwapDb.EV_LOCK_REPRICED.equals(e.event))
+            it.step(Mark.NOTE, hms(e.date, tz), "Ethereum fees rose — your lock was re-sent at today's fee (same lock, same nonce)");
+        if (events != null) for (SwapDb.Event e : events) if (SwapDb.EV_LOCK_CANCELLED.equals(e.event))
+            it.step(Mark.WARN, hms(e.date, tz), "Your lock never mined before its deadline, so it was cancelled — your " + s.sellAmount + " " + sell + " never left your wallet");
         if (SwapDb.ST_STARTED.equals(st) || SwapDb.ST_LOCKED.equals(st))
             it.step(Mark.WAIT, "", "Waiting for the taker to claim — that reveals the secret that pays you. If they never do, your " + sell + " comes back after the timelock.");
         if (SwapDb.ST_CLAIMING.equals(st)) it.step(Mark.WAIT, "", (usdtIn ? "Withdrawing your " : "Claiming your ") + s.buyAmount + " " + buy + " now");
@@ -361,7 +368,9 @@ public final class Ledger {
         for (SwapDb.Event e : oldest) {
             if (!isTx(e.note)) continue;
             boolean eth = (e.token == null ? "" : e.token).toUpperCase(Locale.ROOT).startsWith("ETH");
-            String label = SwapDb.EV_REFUND_SENT.equals(e.event) ? "Refund (Ethereum tx)"
+            String label = SwapDb.EV_LOCK_REPRICED.equals(e.event) ? "Your " + sell + " lock, fee raised (Ethereum tx)"
+                    : SwapDb.EV_LOCK_CANCELLED.equals(e.event) ? "Cancel of your unmined lock (Ethereum tx)"
+                    : SwapDb.EV_REFUND_SENT.equals(e.event) ? "Refund (Ethereum tx)"
                     : SwapDb.EV_MINIMA_REFUND_SUBMITTED.equals(e.event) ? "Refund (Minima txpow)"
                     : SwapDb.EV_MINIMA_CLAIM_SUBMITTED.equals(e.event) ? "Your Minima claim (txpow)"
                     : SwapDb.EV_COLLECT.equals(e.event) ? (eth ? "Your USDT withdrawal (Ethereum tx)" : "Your claim (Minima tx)")

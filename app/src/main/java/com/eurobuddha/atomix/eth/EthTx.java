@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.9 app/src/main/java/com/eurobuddha/atomix/eth/EthTx.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/main/java/com/eurobuddha/atomix/eth/EthTx.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.eth;
 
 import org.json.JSONArray;
@@ -62,6 +62,26 @@ public final class EthTx {
         return submit(rpc,creds,chainId,to,data,value,gasLimit,gasPrice,authorized,operation);
     }
 
+    /** Re-sign a still-unmined saved operation at TODAY's broadcast price (the same rule as a new send). Null when it has
+     *  settled or the price has not risen 10%. The replacement carries the saved bytes, so it adds no new liability. */
+    public static String repriceOperation(EthRpc rpc,Credentials creds,long chainId,String operation,BigInteger gasLimit) throws Exception {
+        BigInteger rawGp = EthRpc.hexToBig(rpc.callStr("eth_gasPrice", new JSONArray()));
+        if (rawGp.signum() <= 0) rawGp = FALLBACK_GAS_PRICE;
+        BigInteger gasPrice = EthSend.effectiveGasPriceWei(rawGp, rpc.baseFeePerGasOrZero());
+        requireFees(gasPrice,gasLimit);
+        return com.eurobuddha.minimaapi.ethereum.EthereumTransactions.shared().reprice(rpcFor(rpc),creds,chainId,operation,gasPrice,()->{});
+    }
+
+    /** Cancel a still-unmined saved operation: a 0-value self-transfer at its nonce, at today's broadcast price (raised to
+     *  the 110% replacement floor by the journal). Null when it already settled. */
+    public static String cancelOperation(EthRpc rpc,Credentials creds,long chainId,String operation) throws Exception {
+        BigInteger rawGp = EthRpc.hexToBig(rpc.callStr("eth_gasPrice", new JSONArray()));
+        if (rawGp.signum() <= 0) rawGp = FALLBACK_GAS_PRICE;
+        BigInteger gasPrice = EthSend.effectiveGasPriceWei(rawGp, rpc.baseFeePerGasOrZero());
+        requireFees(gasPrice,BigInteger.valueOf(21000));
+        return com.eurobuddha.minimaapi.ethereum.EthereumTransactions.shared().cancel(rpcFor(rpc),creds,chainId,operation,gasPrice,()->{});
+    }
+
     /** Same explicit-price boundary used by ETH Wallet. Never recompute a reviewed fee. */
     public static String send(EthRpc rpc, Credentials creds, long chainId,
                               String to, String data, BigInteger value, BigInteger gasLimit, BigInteger gasPrice,
@@ -75,13 +95,16 @@ public final class EthTx {
                                  BigInteger gas,BigInteger price,java.util.function.BooleanSupplier authorized,String operation) throws Exception {
         requireAuthorized(authorized);
         return com.eurobuddha.minimaapi.ethereum.EthereumTransactions.shared().send(
-                new com.eurobuddha.minimaapi.ethereum.EthereumTransactions.Rpc() {
-                    public BigInteger chain() throws Exception { return EthRpc.transactionCount(rpc.call("eth_chainId",new JSONArray())); }
-                    public BigInteger pending(String address) throws Exception { return rpc.getTransactionCount(address); }
-                    public String broadcast(String raw) throws Exception { return rpc.sendRawTransaction(raw); }
-                    public org.json.JSONObject receipt(String hash) throws Exception { return object(rpc.call("eth_getTransactionReceipt",new JSONArray().put(hash))); }
-                    public org.json.JSONObject transaction(String hash) throws Exception { return object(rpc.call("eth_getTransactionByHash",new JSONArray().put(hash))); }
-                },creds,chainId,to,data,value,gas,price,operation,()->requireAuthorized(authorized));
+                rpcFor(rpc),creds,chainId,to,data,value,gas,price,operation,()->requireAuthorized(authorized));
+    }
+    private static com.eurobuddha.minimaapi.ethereum.EthereumTransactions.Rpc rpcFor(EthRpc rpc) {
+        return new com.eurobuddha.minimaapi.ethereum.EthereumTransactions.Rpc() {
+            public BigInteger chain() throws Exception { return EthRpc.transactionCount(rpc.call("eth_chainId",new JSONArray())); }
+            public BigInteger pending(String address) throws Exception { return rpc.getTransactionCount(address); }
+            public String broadcast(String raw) throws Exception { return rpc.sendRawTransaction(raw); }
+            public org.json.JSONObject receipt(String hash) throws Exception { return object(rpc.call("eth_getTransactionReceipt",new JSONArray().put(hash))); }
+            public org.json.JSONObject transaction(String hash) throws Exception { return object(rpc.call("eth_getTransactionByHash",new JSONArray().put(hash))); }
+        };
     }
     private static org.json.JSONObject object(Object value) throws java.io.IOException {
         if(value==null||value==org.json.JSONObject.NULL)return null;

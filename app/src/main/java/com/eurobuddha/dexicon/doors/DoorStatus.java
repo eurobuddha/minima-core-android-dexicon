@@ -48,11 +48,13 @@ public final class DoorStatus {
         if (s == null || !"INITIATOR".equals(s.role)) return c;
         String sell = DoorForwards.label(s.sellToken), buy = DoorForwards.label(s.buyToken), st = s.status == null ? "" : s.status;
         String makerId = null, notice = null, refundTx = null;
-        long lockAt = 0, toldAt = 0, noticeAt = 0, refundSentAt = 0;
+        long lockAt = 0, toldAt = 0, noticeAt = 0, refundSentAt = 0, repricedAt = 0, cancelledAt = 0;
         boolean timedOut = false;
         if (events != null) for (SwapDb.Event e : events) {   // newest first: the first hit is the latest
             String n = e.note == null ? "" : e.note;
             if (SwapDb.EV_STARTED.equals(e.event) && lockAt == 0) lockAt = e.date;
+            else if (SwapDb.EV_LOCK_REPRICED.equals(e.event) && repricedAt == 0) repricedAt = e.date;
+            else if (SwapDb.EV_LOCK_CANCELLED.equals(e.event) && cancelledAt == 0) cancelledAt = e.date;
             else if (SwapDb.EV_TAKE_SENT.equals(e.event) && makerId == null) { makerId = n; toldAt = e.date; }
             else if (SwapDb.EV_MAKER_NOTICE.equals(e.event) && notice == null) { notice = n; noticeAt = e.date; }
             else if (SwapDb.EV_TIMEOUT.equals(e.event)) timedOut = true;
@@ -68,6 +70,8 @@ public final class DoorStatus {
 
         // ---- steps
         c.add(Kind.DONE, hms(lockAt, tz), "Your " + s.sellAmount + " " + sell + " is locked on " + (s.myLegIsMinima ? "Minima" : "Ethereum"));
+        if (cancelledAt > 0) c.add(Kind.WARN, hms(cancelledAt, tz), "Your lock never mined before its deadline, so it was cancelled — your " + s.sellAmount + " " + sell + " never left this node's Ethereum address");
+        if (repricedAt > 0) c.add(Kind.INFO, hms(repricedAt, tz), "Ethereum fees rose — your lock was re-sent at today's fee (same lock, same nonce)");
         // A USDT-first lock is announced to its maker over the TAKE channel (recorded since 0.1.26; older swaps have no row).
         if (!s.myLegIsMinima && makerId != null) c.add(Kind.DONE, hms(toldAt, tz), "The maker has been told");
         if (makerLocked) c.add(Kind.DONE, "", "The maker locked " + s.buyAmount + " " + buy);
