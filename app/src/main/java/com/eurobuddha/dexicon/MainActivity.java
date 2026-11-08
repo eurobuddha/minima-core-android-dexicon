@@ -699,9 +699,12 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 refreshResting(); repaint();
                 // A DEX does the wallet work itself: a funding failure is recovered (wait for coins to confirm, or
                 // consolidate the token) and the SAME trade is re-planned within the same limit and retried once.
-                if (retry == 0 && message != null && (message.startsWith("Wallet has") || message.contains("Too many transaction inputs")
+                // owner 8 Nov (a SWEEP's part 2 failed twice): retry 0 = first try, 1 = after waiting for coins to confirm,
+                // 2 = after a consolidate. A wait can leave the wallet still too fragmented for 8 inputs, so a failure
+                // after a wait goes on to consolidate; a failure after a consolidate is final.
+                if (retry < 2 && message != null && (message.startsWith("Wallet has") || message.contains("Too many transaction inputs")
                         || message.contains("needs more than") || message.contains("TxPoW size") || message.contains("too large")))
-                    autoFund(buy, amount, price, buy ? Tokens.MXUSD() : Tokens.MINIMA, buy ? plan.totalMxusd : plan.totalMinima, message);
+                    autoFund(buy, amount, price, buy ? Tokens.MXUSD() : Tokens.MINIMA, buy ? plan.totalMxusd : plan.totalMinima, message, retry);
                 else {
                     toast(message);
                 }
@@ -711,8 +714,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     /** Recover a pool/book trade's funding by itself, then retry it once (owner 2026-10-22: "Where is the automation?"):
      *  coins still confirming → wait for them; enough sendable but in too many / unusable coins → `consolidate` (the
-     *  family's PandaPools/UTXO tool) and wait for it; genuinely short → say so plainly. Waits at most 10 blocks. */
-    private void autoFund(boolean buy, BigDecimal amount, BigDecimal price, String token, BigDecimal need, String why) {
+     *  family's PandaPools/UTXO tool) and wait for it; genuinely short → say so plainly. Waits at most 10 blocks.
+     *  At most two recoveries: a wait, then (if the wallet is still too fragmented for 8 inputs) a consolidate. */
+    private void autoFund(boolean buy, BigDecimal amount, BigDecimal price, String token, BigDecimal need, String why, int retry) {
         String name = Tokens.isMinima(token) ? "MINIMA" : "MxUSD";
         node.cmd("balance tokenid:" + token, new NodeApi.Cb() {
             public void onResult(JSONObject j) {
@@ -724,7 +728,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                 if (total.compareTo(need) < 0) { toast("Not enough " + name + ": this trade needs " + PriceMath.fmt(need) + ", your wallet holds " + PriceMath.fmt(total)); return; }
                 if (sendable.compareTo(need) < 0) {
                     setStage("Waiting for your " + name + " to confirm (" + PriceMath.fmt(sendable) + " of " + PriceMath.fmt(need) + " spendable) — the trade retries by itself");
-                    waitThenRetry(buy, amount, price, token, need, chainBlock, false);
+                    waitThenRetry(buy, amount, price, token, need, chainBlock, false, retry + 1);   // a second wait is the last try
                     return;
                 }
                 final int before = coins;
@@ -737,7 +741,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                         Runnable unlock = WalletLock.take(token);   // never merge a coin an AtomiX swap is locking
                         if (unlock == null) { release.free(); setStage(""); explain("Nothing consolidated", WalletLock.BUSY + "\n\n" + why); return; }
                         node.cmdR("consolidate tokenid:" + token, new NodeApi.Cb() {
-                            public void onResult(JSONObject x) { release.free(); unlock.run(); waitThenRetry(buy, amount, price, token, need, chainBlock, true); }
+                            public void onResult(JSONObject x) { release.free(); unlock.run(); waitThenRetry(buy, amount, price, token, need, chainBlock, true, 2); }
                             public void onError(String m) { release.free(); unlock.run(); setStage(""); toast("Could not consolidate " + name + ": " + m + " — " + why); }
                         });
                     });
@@ -749,7 +753,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     /** Poll once a block (≤ 10) until the token is spendable again (and, after a consolidation, settled), then re-plan the
      *  same trade at the same limit and execute it — no second confirmation: the user already confirmed this trade. */
-    private void waitThenRetry(boolean buy, BigDecimal amount, BigDecimal price, String token, BigDecimal need, long startBlock, boolean consolidated) {
+    private void waitThenRetry(boolean buy, BigDecimal amount, BigDecimal price, String token, BigDecimal need, long startBlock, boolean consolidated, int nextRetry) {
         final int gen = gateGen;
         ui.postDelayed(() -> {
             if (closed) return;
@@ -760,16 +764,16 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                     BigDecimal sendable = BigDecimal.ZERO, unconf = BigDecimal.ZERO;
                     for (JSONObject b : NodeApi.rows(j)) if (token.equalsIgnoreCase(b.optString("tokenid"))) { sendable = Util.dec(b.optString("sendable", "0")); unconf = Util.dec(b.optString("unconfirmed", "0")); }
                     boolean ready = sendable.compareTo(need) >= 0 && (!consolidated || unconf.signum() == 0);
-                    if (!ready || busy) { waitThenRetry(buy, amount, price, token, need, startBlock, consolidated); return; }
+                    if (!ready || busy) { waitThenRetry(buy, amount, price, token, need, startBlock, consolidated, nextRetry); return; }
                     final List<Order5> orders = new ArrayList<>(restingBook().values());
                     final List<Pool> pools = new ArrayList<>(restingPools());
                     CompositeRouter.Plan again;
                     try { again = CompositeRouter.plan(orders, pools, buy, amount, price, chainBlock); } catch (RuntimeException e) { again = null; }
                     if (again == null || again.isEmpty()) { setStage(""); toast("The liquidity moved past your limit while the wallet settled — nothing was traded"); return; }
                     setStage("Wallet ready — retrying your " + (buy ? "buy" : "sell"));
-                    executeComposite(again, buy, amount, price, 1);
+                    executeComposite(again, buy, amount, price, nextRetry);
                 }
-                public void onError(String m) { waitThenRetry(buy, amount, price, token, need, startBlock, consolidated); }
+                public void onError(String m) { waitThenRetry(buy, amount, price, token, need, startBlock, consolidated, nextRetry); }
             });
         }, 15_000);
     }
