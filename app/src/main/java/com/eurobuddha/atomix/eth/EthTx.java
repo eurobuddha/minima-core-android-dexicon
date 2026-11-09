@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/main/java/com/eurobuddha/atomix/eth/EthTx.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.13 app/src/main/java/com/eurobuddha/atomix/eth/EthTx.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.eth;
 
 import org.json.JSONArray;
@@ -37,6 +37,12 @@ public final class EthTx {
             throw new IllegalArgumentException("Ethereum fee is outside the safe range. Review your RPC endpoint.");
     }
 
+    /** LIVE TEST HOOK (owner, 9 Nov: prove the stuck-lock cancel on a device). While this file exists - the host sets it to a
+     *  file in its OWN app folder, creatable only over USB/adb - every new HTLC lock is sent at a tenth of the base fee, so it
+     *  sits unmined past its deadline, and SwapEngine does not re-price it, so the cancel is what runs. Absent: no effect. */
+    public static volatile java.io.File stuckLockSwitch;
+    public static boolean stuckLockTest() { java.io.File f = stuckLockSwitch; return f != null && f.exists(); }
+
     /** Compatibility entry point. Connection changes cannot erase outstanding transactions. */
     public static void resetAll() { /* Durable nonce ownership survives endpoint and account changes. */ }
 
@@ -58,6 +64,10 @@ public final class EthTx {
         BigInteger rawGp = EthRpc.hexToBig(rpc.callStr("eth_gasPrice", new JSONArray()));
         if (rawGp.signum() <= 0) rawGp = FALLBACK_GAS_PRICE;
         BigInteger gasPrice = EthSend.effectiveGasPriceWei(rawGp, rpc.baseFeePerGasOrZero());
+        if (operation != null && operation.startsWith("lock:") && stuckLockTest()) {
+            BigInteger base = rpc.baseFeePerGasOrZero();
+            gasPrice = (base.signum() > 0 ? base : gasPrice).divide(BigInteger.TEN).max(BigInteger.ONE);
+        }
         requireFees(gasPrice,gasLimit);
         return submit(rpc,creds,chainId,to,data,value,gasLimit,gasPrice,authorized,operation);
     }

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.12 app/src/test/java/com/eurobuddha/atomix/swap/PriceModelGuardTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.13 app/src/test/java/com/eurobuddha/atomix/swap/PriceModelGuardTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import static org.junit.Assert.*;

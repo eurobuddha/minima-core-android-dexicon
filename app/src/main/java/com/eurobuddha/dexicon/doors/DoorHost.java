@@ -131,6 +131,10 @@ public final class DoorHost {
     private DoorHost(Context app) {
         this.app = app;
         com.eurobuddha.minimaapi.ethereum.EthereumTransactions.initialize(app);
+        // Live stuck-lock cancel test (AtomiX EthTx.stuckLockSwitch): on only while this file exists in Dexicon's own folder,
+        // which only adb can create (/sdcard/Android/data/com.eurobuddha.dexicon/files/stuck-lock-test). Absent: no effect.
+        java.io.File ext = app.getExternalFilesDir(null);
+        if (ext != null) com.eurobuddha.atomix.eth.EthTx.stuckLockSwitch = new java.io.File(ext, "stuck-lock-test");
         prefs = app.getSharedPreferences(DoorForwards.PREFS, Context.MODE_PRIVATE);
         dnode = new com.eurobuddha.dexicon.NodeApi(app, en -> { if (en) { IdentityWatch.forceNext(); ensure(); } changed(); });
         lastRegisterMs = System.currentTimeMillis();
