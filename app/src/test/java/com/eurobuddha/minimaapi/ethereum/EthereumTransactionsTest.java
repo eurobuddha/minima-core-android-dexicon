@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.13 app/src/test/java/com/eurobuddha/minimaapi/ethereum/EthereumTransactionsTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.14 app/src/test/java/com/eurobuddha/minimaapi/ethereum/EthereumTransactionsTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.minimaapi.ethereum;
 
 import org.junit.Test;
@@ -227,5 +227,17 @@ public class EthereumTransactionsTest {
         rpc.settle(rpc.sent.get(0),true);
         assertNull(new EthereumTransactions(m).cancel(rpc,KEY,1,"lock:h",PRICE.multiply(BigInteger.TEN),()->{}));
         send(e,rpc,OTHER,null);assertEquals(BigInteger.valueOf(5),nonce(rpc.sent.get(rpc.sent.size()-1)));
+    }
+
+    // 9 Nov live test: saved under the raw 0x hashlock, looked up by SwapDb's normalised hash - must be the SAME lock.
+    @Test public void aLockSavedWith0xIsFoundByItsNormalisedHash()throws Exception {
+        String raw="0x499564857257DC5A0B888A93A4C84ACA95364F3B0E462837FD445E5B37C0FA9E",norm="499564857257dc5a0b888a93a4c84aca95364f3b0e462837fd445e5b37c0fa9e";
+        EthereumTransactions e=new EthereumTransactions(new Memory());Rpc rpc=new Rpc();
+        e.send(rpc,KEY,1,TO,"0xabcdef",BigInteger.ZERO,GAS,PRICE,"lock:"+raw.toLowerCase(java.util.Locale.ROOT),()->{});
+        assertNotNull(e.reprice(rpc,KEY,1,"lock:"+norm,PRICE.multiply(BigInteger.TEN),()->{}));
+        assertNotNull(e.cancel(rpc,KEY,1,"lock:"+norm,PRICE,()->{}));
+        assertEquals(3,rpc.sent.size());
+        assertEquals("lock:abc",EthereumTransactions.opKey("LOCK:0xABC"));
+        assertEquals("pending",EthereumTransactions.opKey("pending"));
     }
 }

@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.13 app/src/test/java/com/eurobuddha/atomix/swap/SwapPersistenceTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.14 app/src/test/java/com/eurobuddha/atomix/swap/SwapPersistenceTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 import android.content.Context;
 import android.database.sqlite.*;

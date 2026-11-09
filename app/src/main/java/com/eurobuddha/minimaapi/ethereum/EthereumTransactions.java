@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.13 app/src/main/java/com/eurobuddha/minimaapi/ethereum/EthereumTransactions.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.14 app/src/main/java/com/eurobuddha/minimaapi/ethereum/EthereumTransactions.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.minimaapi.ethereum;
 
 import android.content.Context;
@@ -104,7 +104,7 @@ public final class EthereumTransactions {
             String intent=intent(destination,payload,amount,gas);
             Row target=null;
             for(Row row:rows) {
-                boolean sameOperation=operation!=null&&operation.equals(row.operation)&&(!"pending".equals(operation)||intent.equals(row.intent));
+                boolean sameOperation=operation!=null&&opKey(operation).equals(opKey(row.operation))&&(!"pending".equals(operation)||intent.equals(row.intent));
                 // A refreshed gas estimate does not turn an unknown payment into a new payment.
                 boolean repeatUnknown=operation==null&&"POSTING".equals(row.phase)
                         &&intent(destination,payload,amount,row.latest().getGasLimit()).equals(row.intent);
@@ -189,7 +189,7 @@ public final class EthereumTransactions {
             if(!BigInteger.valueOf(chain).equals(rpc.chain()))throw new IOException("Ethereum RPC is connected to a different chain.");
             List<Row> rows=load(key,chain,address);
             Row target=null;
-            for(Row row:rows)if(operation.equals(row.operation)&&active(row))target=row;
+            for(Row row:rows)if(opKey(operation).equals(opKey(row.operation))&&active(row))target=row;
             if(target==null||!target.cancel.isEmpty())return null;
             if(settle(rpc,target,address)){save(key,rows,chain,address);return null;}
             SignedRawTransaction last=target.latest();
@@ -218,7 +218,7 @@ public final class EthereumTransactions {
             if(!BigInteger.valueOf(chain).equals(rpc.chain()))throw new IOException("Ethereum RPC is connected to a different chain.");
             List<Row> rows=load(key,chain,address);
             Row target=null;
-            for(Row row:rows)if(operation.equals(row.operation)&&active(row))target=row;
+            for(Row row:rows)if(opKey(operation).equals(opKey(row.operation))&&active(row))target=row;
             if(target==null)return null;
             if(settle(rpc,target,address)){save(key,rows,chain,address);return null;}
             if(target.cancel.isEmpty()) {
@@ -250,6 +250,14 @@ public final class EthereumTransactions {
         return hash;
     }
     private static boolean active(Row row){return "POSTING".equals(row.phase)||"ACCEPTED".equals(row.phase);}
+    /** 9 Nov (live cancel test): a lock was SAVED as "lock:0x4995..." (the hashlock as Minima's hash command gives it) but
+     *  looked up as "lock:4995..." (SwapDb's normalised hash), so re-price and cancel never found it. Operation keys are
+     *  compared in one canonical form: lowercase, with a 0x right after the "kind:" prefix removed. */
+    static String opKey(String op){
+        if(op==null)return "";
+        String o=op.trim().toLowerCase(Locale.ROOT);int c=o.indexOf(':');
+        return c>=0&&o.startsWith("0x",c+1)?o.substring(0,c+1)+o.substring(c+3):o;
+    }
     private static String sign(Credentials key,long chain,BigInteger nonce,String to,String data,BigInteger amount,BigInteger gas,BigInteger price) {
         return Numeric.toHexString(TransactionEncoder.signMessage(RawTransaction.createTransaction(nonce,price,gas,to,amount,data),chain,key));
     }
