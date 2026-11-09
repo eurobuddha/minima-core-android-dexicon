@@ -159,9 +159,17 @@ final class WalletTools {
                         org.json.JSONArray outs = new org.json.JSONArray();
                         int at = m.indexOf(" creates coins ");
                         if (at > 0) for (java.util.regex.Matcher x = java.util.regex.Pattern.compile("0x[0-9A-Fa-f]{64}").matcher(m.substring(at)); x.find(); ) outs.put(x.group());
+                        org.json.JSONArray ins = new org.json.JSONArray();
+                        int sp = m.indexOf(" spends coins ");
+                        if (sp > 0) {
+                            org.json.JSONArray only = new org.json.JSONArray();   // "creates" stops where "spends" begins
+                            for (int k = 0; k < outs.length(); k++) if (m.indexOf(outs.getString(k)) < sp) only.put(outs.getString(k));
+                            outs = only;
+                            for (java.util.regex.Matcher x = java.util.regex.Pattern.compile("0x[0-9A-Fa-f]{64}").matcher(m.substring(sp)); x.find(); ) ins.put(x.group());
+                        }
                         java.util.regex.Matcher t = java.util.regex.Pattern.compile("Transaction (0x[0-9A-Fa-f]{64})").matcher(m);
                         ActivityLog.addWallet(act.db(), row.put("id", ActivityLog.newId("wal_")).put("ts", now).put("postedMs", now)
-                                .put("stage", ActivityLog.POSTED).put("txnid", t.find() ? t.group(1) : "").put("outs", outs)
+                                .put("stage", ActivityLog.POSTED).put("txnid", t.find() ? t.group(1) : "").put("outs", outs).put("ins", ins).put("uncertain", true)
                                 .put("tokenid", tokenid).put("reason", "the node did not confirm it — outcome unknown"));
                         act.refreshBalances();
                     } catch (Exception ignored) { }

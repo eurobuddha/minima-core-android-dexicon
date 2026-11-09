@@ -12,7 +12,7 @@ import java.util.List;
 
 public class VirtualWalletTest {
 
-    static final class Store implements VirtualWallet.Store { int n; public int keyCount() { return n; } public void setKeyCount(int x) { n = x; } }
+    static class Store implements VirtualWallet.Store { int n; public int keyCount() { return n; } public void setKeyCount(int x) { n = x; } }
 
     /** Records every node call; answers scripts/newscript and empty coin lists. */
     static class FakeNode implements VirtualWallet.Node {
@@ -149,5 +149,46 @@ public class VirtualWalletTest {
         JSONObject k = wallet(new FakeNode()).handle("keys");
         int uses = k.getJSONObject("response").getJSONArray("keys").getJSONObject(0).getInt("uses");
         assertTrue(uses >= AccountKeys.timeFloor(System.currentTimeMillis()) - 1);
+    }
+
+    @Test public void txpowOnchainOfAPreMiningIdAnswersWithTheMinedTxpow() throws Exception {
+        String pre = "0x" + "AA".repeat(32), mined = "0x0000" + "BB".repeat(30), txnid = "0x" + "CC".repeat(32), out = "0x" + "DD".repeat(32);
+        String[] posted = {new JSONObject().put(pre, new JSONObject().put("txnid", txnid).put("outs", new JSONArray().put(out)).put("from", 100).put("next", 100)).toString()};
+        Store store = new Store() {
+            @Override public String posted() { return posted[0]; }
+            @Override public void savePosted(String j) { posted[0] = j; }
+        };
+        FakeNode n = new FakeNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                calls.add(cmd);
+                if (cmd.equals("coins coinid:" + out)) return new JSONObject().put("status", true).put("response", new JSONArray().put(new JSONObject().put("coinid", out).put("created", "105")));
+                if (cmd.equals("txpow block:105")) return new JSONObject().put("status", true).put("response", new JSONObject().put("txpowid", "0x" + "EE".repeat(32))
+                        .put("body", new JSONObject().put("txn", new JSONObject().put("transactionid", "0x" + "11".repeat(32))).put("txnlist", new JSONArray().put(mined))));
+                if (cmd.equals("txpow txpowid:" + mined)) return new JSONObject().put("status", true).put("response", new JSONObject().put("body", new JSONObject().put("txn", new JSONObject().put("transactionid", txnid))));
+                if (cmd.equals("txpow onchain:" + mined)) return new JSONObject().put("status", true).put("response", new JSONObject().put("found", true).put("block", "105").put("tip", "110").put("confirmations", "5"));
+                return super.call(cmd);
+            }
+        };
+        VirtualWallet w = new VirtualWallet(n, AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null), store, Collections.emptySet());
+        JSONObject r = w.handle("txpow onchain:" + pre);
+        assertTrue(r.getJSONObject("response").getBoolean("found"));
+        assertEquals("5", r.getJSONObject("response").getString("confirmations"));
+        assertTrue("remembered", new JSONObject(posted[0]).getJSONObject(pre).getString("mined").equalsIgnoreCase(mined));
+        assertNull("a txpow that is not one of our posts goes to the node untouched", w.handle("txpow onchain:0x" + "99".repeat(32)));
+    }
+
+    @Test public void keysNeverWriteTheCounterFromAnUncheckedClock() throws Exception {
+        AccountKeysTest.Mem mem = new AccountKeysTest.Mem();
+        FakeNode skewed = new FakeNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                if (cmd.equals("block")) return new JSONObject().put("status", true).put("response", new JSONObject().put("block", "100")
+                        .put("timemilli", String.valueOf(System.currentTimeMillis() - 3 * 3600_000L)));   // chain says 3 h ago
+                return super.call(cmd);
+            }
+        };
+        VirtualWallet w = new VirtualWallet(skewed, AccountKeys.fromPhrase(AccountKeysTest.PHRASE, mem, null), new Store(), Collections.emptySet());
+        int uses = w.handle("keys").getJSONObject("response").getJSONArray("keys").getJSONObject(0).getInt("uses");
+        assertEquals("an unchecked clock reports the stored count and writes nothing", 0, uses);
+        assertEquals(0, mem.currentUses(0));
     }
 }

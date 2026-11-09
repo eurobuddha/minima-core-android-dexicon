@@ -148,12 +148,9 @@ public final class ActivityLog {
             }
             if (DROPPED.equals(s)) return changed;
             String why = null;
-            if (inputGone && !a.optString("kind").isEmpty()) {
-                // a wallet row's inputs are account coins only this account can sign: gone = this transaction landed,
-                // and its probed output was already spent onward (e.g. by the recipient). Its block is not known.
-                a.put("block", tip).put("blockEstimated", true).put("reason", "landed; its output was already spent onward"); return true;
-            }
-            if (inputGone) why = "an input was spent by another transaction";
+            // a wallet row is never judged by its spent inputs: another post of ours may have reused them. It lands only on
+            // chain evidence (its output, or its txpow proven by txpow onchain:), else it drops after DROP_BLOCKS.
+            if (inputGone && a.optString("kind").isEmpty()) why = "an input was spent by another transaction";
             else if (a.optLong("postBlock", 0) > 0 && tip - a.optLong("postBlock") > DROP_BLOCKS) why = "not mined after " + DROP_BLOCKS + " blocks";
             if (why != null) { a.put("was", s).put("stage", DROPPED).put("reason", why); return true; }
             return changed;
@@ -249,10 +246,30 @@ public final class ActivityLog {
         JSONObject a = rows.get(i);
         String id = a.optString("id");
         JSONArray outs = a.optJSONArray("outs"), ins = a.optJSONArray("ins");
-        boolean probe = a.optLong("block", 0) == 0 && outs != null && outs.length() > 0
+        boolean probe = a.optLong("block", 0) == 0 && ((outs != null && outs.length() > 0) || !a.optString("txpowid").isEmpty())
                 && (POSTED.equals(a.optString("stage")) || COSIGNED.equals(a.optString("stage")) || DROPPED.equals(a.optString("stage")));
         Runnable after = () -> next(node, db, rows, i + 1, tip, any, changed);
         if (!probe) { apply(db, id, tip, false, 0, any); after.run(); return; }
+        String txpow = a.optString("txpowid");
+        if (!a.optString("kind").isEmpty() && txpow.matches("(?i)0x[0-9a-f]{64}")) {
+            // wallet row: the account wallet answers txpow onchain: for its own (pre-mining) id with the MINED txpow's
+            // evidence; found = landed in that block. Not found yet: fall through to the output probe.
+            node.cmd("txpow onchain:" + txpow, new NodeApi.Cb() {
+                public void onResult(JSONObject j) {
+                    JSONObject r = j.optJSONObject("response");
+                    long b = 0;
+                    if (j.optBoolean("status", false) && r != null && r.optBoolean("found", false)) try { b = Long.parseLong(r.optString("block", "0")); } catch (Exception ignored) {}
+                    if (b > 0) { apply(db, id, tip, false, b, any); after.run(); }
+                    else probeOutput(node, db, a, outs, ins, id, tip, any, after);
+                }
+                public void onError(String m) { probeOutput(node, db, a, outs, ins, id, tip, any, after); }
+            });
+            return;
+        }
+        probeOutput(node, db, a, outs, ins, id, tip, any, after);
+    }
+    private static void probeOutput(NodeApi node, DexDb db, JSONObject a, JSONArray outs, JSONArray ins, String id, long tip, boolean[] any, Runnable after) {
+        if (outs == null || outs.length() == 0) { apply(db, id, tip, false, 0, any); after.run(); return; }
         inputsGone(node, ins, 0, gone -> node.cmd("coins coinid:" + outs.optString(0), new NodeApi.Cb() {
             public void onResult(JSONObject j) {
                 List<JSONObject> c = NodeApi.rows(j);

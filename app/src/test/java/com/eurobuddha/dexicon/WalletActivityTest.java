@@ -39,4 +39,15 @@ public class WalletActivityTest {
         assertTrue(json.contains("\"C2099\""));
         assertFalse(json.contains("\"C0\""));
     }
+
+    @Test public void aWalletRowIsNeverLandedByGuessFromSpentInputs() throws Exception {
+        JSONObject a = new JSONObject().put("id", "wal_x").put("kind", "withdraw").put("stage", ActivityLog.POSTED).put("ts", 1L).put("postBlock", 100L);
+        ActivityLog.observe(a, 105L, true, 0L, 2L);          // inputs gone (maybe a later post of ours), no output seen
+        assertEquals(0L, a.optLong("block", 0));
+        assertEquals(ActivityLog.POSTED, a.optString("stage"));
+        ActivityLog.observe(a, 100L + ActivityLog.DROP_BLOCKS + 1, true, 0L, 3L);
+        assertEquals("no chain evidence by the deadline: dropped, never 'confirmed'", ActivityLog.DROPPED, a.optString("stage"));
+        ActivityLog.observe(a, 170L, false, 160L, 4L);       // a late sighting of its output still revives it
+        assertEquals(160L, a.optLong("block"));
+    }
 }

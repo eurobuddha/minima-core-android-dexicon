@@ -233,7 +233,8 @@ public final class Ledger {
         if (in) it.step(Mark.OK, hms(ts, tz), "Arrived in your Trading Account" + (block > 0 ? " (block " + block + ")" : "")
                 + (a.optBoolean("maybeFill") ? " — a deposit, or the proceeds of one of your resting orders filling (see HISTORY)" : " — a deposit"));
         else {
-            it.step(Mark.OK, hms(ts, tz), "Signed by your Trading Account and posted");
+            if (a.optBoolean("uncertain")) it.step(Mark.WARN, hms(ts, tz), "Signed and sent, but the node never confirmed it — outcome unknown until it shows on chain");
+            else it.step(Mark.OK, hms(ts, tz), "Signed by your Trading Account and posted");
             if (block > 0) it.step(Mark.OK, "", a.optBoolean("blockEstimated") ? "Landed (its output was already spent onward; seen by block " + block + ")" : "In block " + block);
             else if (!failed) { String w = ActivityLog.waiting(a, chainBlock); it.step(Mark.WAIT, "", Character.toUpperCase(w.charAt(0)) + w.substring(1)); }
         }
@@ -247,6 +248,8 @@ public final class Ledger {
         it.proof("Transaction (txpow)", a.optString("txpowid"));
         it.proof("Transaction id", a.optString("txnid"));
         if (!to.isEmpty()) it.proof(in ? "Received at" : "Sent to", to);
+        org.json.JSONArray tos = a.optJSONArray("tos");
+        for (int i = 0; tos != null && i < tos.length(); i++) it.proof("Received at", tos.optString(i));
         it.proof("Token", a.optString("tokenid"));
         it.group(in ? "Coin received" : "Coins created", in ? "Coin" : "Created", a.optJSONArray("outs"));
         it.group("Coins spent", "Spent", a.optJSONArray("ins"));

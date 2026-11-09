@@ -81,6 +81,8 @@ public final class Account {
                 if (own.size() > 2000) { java.util.Iterator<String> it = own.iterator(); while (own.size() > 2000) { it.next(); it.remove(); } }
             }
             public synchronized boolean isOwnOutput(String id) { return own().contains(id); }
+            public String posted() { return sp.getString("posted_" + fp[0], "{}"); }
+            public void savePosted(String json) { sp.edit().putString("posted_" + fp[0], json).apply(); }
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
@@ -231,6 +233,7 @@ public final class Account {
             java.util.Map<String, java.math.BigDecimal> sum = new java.util.LinkedHashMap<>();
             java.util.Map<String, org.json.JSONArray> coins = new java.util.LinkedHashMap<>();
             java.util.Map<String, Long> block = new java.util.HashMap<>();
+            java.util.Map<String, java.util.LinkedHashSet<String>> tos = new java.util.HashMap<>();
             for (int i = 0; i < rows.length(); i++) {
                 JSONObject c = rows.getJSONObject(i);
                 String id = VirtualWallet.norm(c.optString("coinid"));
@@ -241,11 +244,12 @@ public final class Account {
                 sum.merge(tok, new java.math.BigDecimal(c.optString("tokenamount", c.optString("amount", "0"))), java.math.BigDecimal::add);
                 coins.computeIfAbsent(tok, x -> new org.json.JSONArray()).put(c.optString("coinid"));
                 block.merge(tok, c.optLong("created", 0), Math::max);
+                tos.computeIfAbsent(tok, x -> new java.util.LinkedHashSet<>()).add(c.optString("address"));
             }
             if (!sum.isEmpty()) {
                 if (db == null) db = new com.eurobuddha.dexicon.DexDb(app);
-                boolean orders = false;
-                for (com.eurobuddha.dexicon.maker.MyOrder o : db.myOrders()) if (o.live()) { orders = true; break; }
+                // any order on record (live, just filled or cancelled): its proceeds can arrive without our signature
+                boolean orders = !db.myOrders().isEmpty();
                 for (java.util.Map.Entry<String, java.math.BigDecimal> e : sum.entrySet()) {
                     String tok = e.getKey();
                     String name = "0x00".equals(tok) ? "MINIMA" : tok.equalsIgnoreCase(com.eurobuddha.dexicon.fill.Tokens.MXUSD()) ? "MxUSD" : tok;
@@ -253,13 +257,21 @@ public final class Account {
                     com.eurobuddha.dexicon.ActivityLog.addWallet(db, new JSONObject().put("id", "recv_" + VirtualWallet.norm(cs.getString(0)))
                             .put("kind", "received").put("amount", e.getValue().stripTrailingZeros().toPlainString()).put("token", name)
                             .put("tokenid", tok).put("ts", now).put("stage", com.eurobuddha.dexicon.ActivityLog.POSTED)
-                            .put("block", block.get(tok)).put("outs", cs).put("maybeFill", orders));
+                            .put("block", block.get(tok)).put("outs", cs).put("maybeFill", orders)
+                            .put("tos", new org.json.JSONArray(new java.util.ArrayList<>(tos.get(tok)))));
                 }
             }
             seen.addAll(ids);
             baseline = false;
-            sp.edit().putString(seenKey, VirtualWallet.boundedAdd("[]", seen)).apply();
-            if (seen.size() > 2000) { java.util.Iterator<String> it = seen.iterator(); while (seen.size() > 2000) { it.next(); it.remove(); } }
+            // spent coins never come back: evict only ids NOT in this scan, so a wallet larger than the cap never rotates
+            // its own coins back in as phantom "received" rows
+            int cap = Math.max(2000, 2 * ids.size());
+            if (seen.size() > cap) {
+                java.util.Set<String> current = new java.util.HashSet<>(ids);
+                java.util.Iterator<String> it = seen.iterator();
+                while (seen.size() > cap && it.hasNext()) if (!current.contains(it.next())) it.remove();
+            }
+            sp.edit().putString(seenKey, new org.json.JSONArray(new java.util.ArrayList<>(seen)).toString()).apply();
         } catch (Exception later) { android.util.Log.w("Dexicon", "incoming scan deferred: " + later); }
     }
 

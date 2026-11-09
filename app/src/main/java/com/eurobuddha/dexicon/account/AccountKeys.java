@@ -118,6 +118,8 @@ public final class AccountKeys {
      *  wall-clock floor, restore floor). A restored phone's store starts at 0, but it never signs below the floors —
      *  reporting the raw 0 would read as a counter regression to anything that recorded the old phone's count. */
     public int reportedUses(int index, long nowMillis) { return Math.max(uses.currentUses(index), Math.max(timeFloor(nowMillis), restoreFloor)); }
+    /** Without a trusted clock: the stored counter and the restore floor only (writes nothing). */
+    public int storedUses(int index) { return Math.max(uses.currentUses(index), restoreFloor); }
     /** {@link #reportedUses}, and the stored counter raised to it (raise-only, burns no leaf): a count once shown never
      *  goes down — even if the phone clock later steps back — so nothing that recorded it reads a regression. */
     public int reportUses(int index, long nowMillis) {
