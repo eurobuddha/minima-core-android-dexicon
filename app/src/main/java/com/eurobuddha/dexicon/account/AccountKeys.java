@@ -118,6 +118,15 @@ public final class AccountKeys {
      *  wall-clock floor, restore floor). A restored phone's store starts at 0, but it never signs below the floors —
      *  reporting the raw 0 would read as a counter regression to anything that recorded the old phone's count. */
     public int reportedUses(int index, long nowMillis) { return Math.max(uses.currentUses(index), Math.max(timeFloor(nowMillis), restoreFloor)); }
+    /** {@link #reportedUses}, and the stored counter raised to it (raise-only, burns no leaf): a count once shown never
+     *  goes down — even if the phone clock later steps back — so nothing that recorded it reads a regression. */
+    public int reportUses(int index, long nowMillis) {
+        synchronized (signLock) {
+            int r = reportedUses(index, nowMillis);
+            if (uses.currentUses(index) < r) uses.recordExternalUses(index, r);
+            return r;
+        }
+    }
     public int maxUses() { return (int) Math.pow(KEYS_PER_LEVEL, LEVELS); }
 
     /** Leaf floor stored once when an account is RESTORED (or derived from the node seed): the time floor now, plus two

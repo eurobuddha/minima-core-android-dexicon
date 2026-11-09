@@ -230,10 +230,11 @@ public final class Ledger {
         it.chipTone = failed ? Tone.BAD : confirmed ? Tone.OK : Tone.LIVE;
         it.sub = dayTime(ts, tz) + " · wallet" + (it.live ? " · " + Util.ago(nowMs - ts).replace(" ago", "") + " elapsed" : "");
         long block = a.optLong("block", 0), depth = ActivityLog.depth(a, chainBlock);
-        if (in) it.step(Mark.OK, hms(ts, tz), "Arrived in your Trading Account" + (block > 0 ? " (block " + block + ")" : ""));
+        if (in) it.step(Mark.OK, hms(ts, tz), "Arrived in your Trading Account" + (block > 0 ? " (block " + block + ")" : "")
+                + (a.optBoolean("maybeFill") ? " — a deposit, or the proceeds of one of your resting orders filling (see HISTORY)" : " — a deposit"));
         else {
             it.step(Mark.OK, hms(ts, tz), "Signed by your Trading Account and posted");
-            if (block > 0) it.step(Mark.OK, "", "In block " + block);
+            if (block > 0) it.step(Mark.OK, "", a.optBoolean("blockEstimated") ? "Landed (its output was already spent onward; seen by block " + block + ")" : "In block " + block);
             else if (!failed) { String w = ActivityLog.waiting(a, chainBlock); it.step(Mark.WAIT, "", Character.toUpperCase(w.charAt(0)) + w.substring(1)); }
         }
         if (block > 0 && !failed) {

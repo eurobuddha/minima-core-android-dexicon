@@ -414,6 +414,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     NodeApi nodeApi() { return node; }
     void refreshBalances() { if (node != null) readBalances(); }
     String receiveAddress() { return receiveMx.isEmpty() ? receiveAddr : receiveMx; }
+    /** The account's receive address in 0x form ("" until read). */
+    String receiveHex() { return receiveAddr; }
     BigDecimal minimaSendable() { return minimaSendable; }
     BigDecimal mxusdSendable() { return mxusdSendable; }
     BigDecimal minimaConfirmed() { return minimaConfirmed; }

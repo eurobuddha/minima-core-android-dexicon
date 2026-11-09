@@ -36,6 +36,9 @@ public final class Account {
     private SharedPreferences sp;
     private String seenKey;
     private long scannedAt;
+    private java.util.LinkedHashSet<String> seen;   // loaded once; null until the first scan
+    private boolean baseline;
+    private com.eurobuddha.dexicon.DexDb db;
     private final AccountKeys keys;
     private volatile long trackedAt;
     private static final long RETRACK_MS = 10 * 60_000L;   // a companion can downgrade our script rows (newscript replaces)
@@ -64,8 +67,20 @@ public final class Account {
         VirtualWallet.Store store = new VirtualWallet.Store() {
             public int keyCount() { return sp.getInt(countKey, 0); }
             public void setKeyCount(int n) { if (!sp.edit().putInt(countKey, n).commit()) throw new IllegalStateException("could not save key count"); }
-            public void ownOutputs(java.util.Collection<String> ids) { sp.edit().putString(ownKey, VirtualWallet.boundedAdd(sp.getString(ownKey, "[]"), ids)).commit(); }
-            public boolean isOwnOutput(String id) { return sp.getString(ownKey, "").toLowerCase(java.util.Locale.ROOT).contains("\"" + id.toLowerCase(java.util.Locale.ROOT) + "\""); }
+            private java.util.LinkedHashSet<String> own;   // loaded once, persisted on change
+            private java.util.LinkedHashSet<String> own() {
+                if (own == null) {
+                    own = new java.util.LinkedHashSet<>();
+                    try { org.json.JSONArray a = new org.json.JSONArray(sp.getString(ownKey, "[]")); for (int i = 0; i < a.length(); i++) own.add(a.getString(i)); } catch (Exception fresh) { }
+                }
+                return own;
+            }
+            public synchronized void ownOutputs(java.util.Collection<String> ids) {
+                if (!own().addAll(ids)) return;
+                sp.edit().putString(ownKey, VirtualWallet.boundedAdd("[]", own)).apply();
+                if (own.size() > 2000) { java.util.Iterator<String> it = own.iterator(); while (own.size() > 2000) { it.next(); it.remove(); } }
+            }
+            public synchronized boolean isOwnOutput(String id) { return own().contains(id); }
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
@@ -193,8 +208,10 @@ public final class Account {
     }
 
     /** Every 30 s at most, on the worker (after a balance read): account coins never seen before that are NOT outputs
-     *  of a transaction this account signed arrived from outside — one "Received" row each in ACTIVITY. The first scan
-     *  only records a baseline (no backfill: earlier coins can't be told apart). Best effort: never fails the caller. */
+     *  of a transaction this account signed arrived from outside. One ACTIVITY row per token per scan (amounts summed
+     *  exactly, every coin listed) — a dust flood can never bury the trade rows (wallet rows have their own cap). The
+     *  rows are written BEFORE the seen set is saved, so a failure retries instead of losing a deposit. The first scan
+     *  is a baseline only (no backfill). Best effort: never fails the caller. */
     private void scanIncoming() {
         long now = System.currentTimeMillis();
         if (now - scannedAt < 30_000L || app == null) return;
@@ -204,25 +221,45 @@ public final class Account {
             if (r == null || !r.optBoolean("status")) return;
             org.json.JSONArray rows = r.optJSONArray("response");
             if (rows == null) return;
-            String prev = sp.getString(seenKey, null);
+            if (seen == null) {
+                String prev = sp.getString(seenKey, null);
+                seen = new java.util.LinkedHashSet<>();
+                if (prev != null) { org.json.JSONArray a = new org.json.JSONArray(prev); for (int i = 0; i < a.length(); i++) seen.add(a.getString(i)); }
+                else baseline = true;
+            }
             java.util.List<String> ids = new java.util.ArrayList<>();
-            for (int i = 0; i < rows.length(); i++) ids.add(VirtualWallet.norm(rows.getJSONObject(i).optString("coinid")));
-            sp.edit().putString(seenKey, VirtualWallet.boundedAdd(prev == null ? "[]" : prev, ids)).commit();
-            if (prev == null) return;
-            String seen = prev.toLowerCase(java.util.Locale.ROOT);
-            com.eurobuddha.dexicon.DexDb db = null;
+            java.util.Map<String, java.math.BigDecimal> sum = new java.util.LinkedHashMap<>();
+            java.util.Map<String, org.json.JSONArray> coins = new java.util.LinkedHashMap<>();
+            java.util.Map<String, Long> block = new java.util.HashMap<>();
             for (int i = 0; i < rows.length(); i++) {
                 JSONObject c = rows.getJSONObject(i);
                 String id = VirtualWallet.norm(c.optString("coinid"));
-                if (id.isEmpty() || seen.contains("\"" + id.toLowerCase(java.util.Locale.ROOT) + "\"") || wallet.isOwnOutput(id)) continue;
-                if (db == null) db = new com.eurobuddha.dexicon.DexDb(app);
+                if (id.isEmpty()) continue;
+                ids.add(id);
+                if (baseline || seen.contains(id) || wallet.isOwnOutput(id)) continue;
                 String tok = c.optString("tokenid");
-                String name = "0x00".equals(tok) ? "MINIMA" : tok.equalsIgnoreCase(com.eurobuddha.dexicon.fill.Tokens.MXUSD()) ? "MxUSD" : tok;
-                com.eurobuddha.dexicon.ActivityLog.add(db, new JSONObject().put("id", "recv_" + id).put("kind", "received")
-                        .put("amount", c.optString("tokenamount", c.optString("amount"))).put("token", name).put("tokenid", tok)
-                        .put("to", c.optString("address")).put("ts", now).put("stage", com.eurobuddha.dexicon.ActivityLog.POSTED)
-                        .put("block", c.optLong("created", 0)).put("outs", new org.json.JSONArray().put(c.optString("coinid"))));
+                sum.merge(tok, new java.math.BigDecimal(c.optString("tokenamount", c.optString("amount", "0"))), java.math.BigDecimal::add);
+                coins.computeIfAbsent(tok, x -> new org.json.JSONArray()).put(c.optString("coinid"));
+                block.merge(tok, c.optLong("created", 0), Math::max);
             }
+            if (!sum.isEmpty()) {
+                if (db == null) db = new com.eurobuddha.dexicon.DexDb(app);
+                boolean orders = false;
+                for (com.eurobuddha.dexicon.maker.MyOrder o : db.myOrders()) if (o.live()) { orders = true; break; }
+                for (java.util.Map.Entry<String, java.math.BigDecimal> e : sum.entrySet()) {
+                    String tok = e.getKey();
+                    String name = "0x00".equals(tok) ? "MINIMA" : tok.equalsIgnoreCase(com.eurobuddha.dexicon.fill.Tokens.MXUSD()) ? "MxUSD" : tok;
+                    org.json.JSONArray cs = coins.get(tok);
+                    com.eurobuddha.dexicon.ActivityLog.addWallet(db, new JSONObject().put("id", "recv_" + VirtualWallet.norm(cs.getString(0)))
+                            .put("kind", "received").put("amount", e.getValue().stripTrailingZeros().toPlainString()).put("token", name)
+                            .put("tokenid", tok).put("ts", now).put("stage", com.eurobuddha.dexicon.ActivityLog.POSTED)
+                            .put("block", block.get(tok)).put("outs", cs).put("maybeFill", orders));
+                }
+            }
+            seen.addAll(ids);
+            baseline = false;
+            sp.edit().putString(seenKey, VirtualWallet.boundedAdd("[]", seen)).apply();
+            if (seen.size() > 2000) { java.util.Iterator<String> it = seen.iterator(); while (seen.size() > 2000) { it.next(); it.remove(); } }
         } catch (Exception later) { android.util.Log.w("Dexicon", "incoming scan deferred: " + later); }
     }
 

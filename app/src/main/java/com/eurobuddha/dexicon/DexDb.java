@@ -131,7 +131,12 @@ public final class DexDb extends SQLiteOpenHelper {
         }
         return out;
     }
+    private static final String WALLET = "(id LIKE 'wal\\_%' ESCAPE '\\' OR id LIKE 'recv\\_%' ESCAPE '\\')";
+    /** Trade rows only: a wallet row never counts against (or evicts) them. */
     synchronized void trimActivity(int keep) {
-        getWritableDatabase().execSQL("DELETE FROM activity WHERE id NOT IN (SELECT id FROM activity ORDER BY ts DESC LIMIT " + keep + ")");
+        getWritableDatabase().execSQL("DELETE FROM activity WHERE NOT " + WALLET + " AND id NOT IN (SELECT id FROM activity WHERE NOT " + WALLET + " ORDER BY ts DESC LIMIT " + keep + ")");
+    }
+    synchronized void trimWallet(int keep) {
+        getWritableDatabase().execSQL("DELETE FROM activity WHERE " + WALLET + " AND id NOT IN (SELECT id FROM activity WHERE " + WALLET + " ORDER BY ts DESC LIMIT " + keep + ")");
     }
 }

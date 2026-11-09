@@ -276,7 +276,7 @@ public final class VirtualWallet {
         for (int i = 0; i < store.keyCount(); i++) {
             if (!only.isEmpty() && !norm(only).equals(norm(keys.publicKey(i)))) continue;
             arr.put(new JSONObject().put("size", AccountKeys.KEYS_PER_LEVEL).put("depth", AccountKeys.LEVELS)
-                    .put("uses", keys.reportedUses(i, clock.now())).put("maxuses", keys.maxUses())
+                    .put("uses", keys.reportUses(i, clock.now())).put("maxuses", keys.maxUses())
                     .put("modifier", new MiniData(java.math.BigInteger.valueOf(i)).to0xString()).put("publickey", keys.publicKey(i)));
         }
         return ok("keys", new JSONObject().put("keys", arr).put("total", arr.length()).put("maxuses", keys.maxUses()));
@@ -890,7 +890,11 @@ public final class VirtualWallet {
             // The node may have posted it: lock the inputs as in flight and report UNCERTAIN, never "not accepted".
             long now = clock.now();
             for (Coin c : r.getTransaction().getAllInputs()) if (indexOfAddress(c.getAddress().to0xString()) >= 0) spending.put(norm(c.getCoinID().to0xString()), now);
-            throw new ToCaller("UNCERTAIN: the node has not confirmed that write; it may still complete (" + noAnswer.getMessage() + "). Outcome is unknown — check your coins before trying again.");
+            StringBuilder made = new StringBuilder();
+            for (Coin c : r.getTransaction().getAllOutputs()) made.append(made.length() == 0 ? "" : ",").append(c.getCoinID().to0xString());
+            throw new ToCaller("UNCERTAIN: the node has not confirmed that write; it may still complete (" + noAnswer.getMessage()
+                    + "). Outcome is unknown — check your coins before trying again. Transaction " + r.getTransaction().getTransactionID().to0xString()
+                    + " creates coins " + made + ".");
         }
         Object resp = res.opt("response");
         if (!res.optBoolean("status") || !(resp instanceof JSONObject) || ((JSONObject) resp).optString("txpowid", "").isEmpty())

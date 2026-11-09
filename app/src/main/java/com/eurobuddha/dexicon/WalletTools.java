@@ -140,8 +140,8 @@ final class WalletTools {
                 if (row != null && j.optBoolean("status", false)) {   // the wallet history row (ACTIVITY), tracked to its block like a trade
                     try {
                         long now = System.currentTimeMillis();
-                        JSONObject ids = ActivityLog.fromPostReply(j, "");
-                        ActivityLog.add(act.db(), row.put("id", ActivityLog.newId("wal_")).put("ts", now).put("postedMs", now)
+                        JSONObject ids = ActivityLog.fromPostReply(j, act.receiveHex());   // our change first: we can always see it
+                        ActivityLog.addWallet(act.db(), row.put("id", ActivityLog.newId("wal_")).put("ts", now).put("postedMs", now)
                                 .put("stage", ActivityLog.POSTED).put("txpowid", id).put("txnid", ids.optString("txnid"))
                                 .put("outs", ids.optJSONArray("outs")).put("ins", ids.optJSONArray("ins")).put("tokenid", tokenid));
                     } catch (Exception ignored) { }
@@ -150,7 +150,26 @@ final class WalletTools {
                 message(act, label + " submitted", "It is final after the next block; ASSETS updates when it confirms."
                         + (id.isEmpty() ? "" : "\n\ntxpow " + id));
             }
-            public void onError(String m) { release.free(); unlock.run(); message(act, label + " failed", m); }
+            public void onError(String m) {
+                release.free(); unlock.run();
+                if (row != null && m != null && m.startsWith("UNCERTAIN")) {
+                    // it may have landed: keep a row, tracked by the coins it creates (named in full in the message)
+                    try {
+                        long now = System.currentTimeMillis();
+                        org.json.JSONArray outs = new org.json.JSONArray();
+                        int at = m.indexOf(" creates coins ");
+                        if (at > 0) for (java.util.regex.Matcher x = java.util.regex.Pattern.compile("0x[0-9A-Fa-f]{64}").matcher(m.substring(at)); x.find(); ) outs.put(x.group());
+                        java.util.regex.Matcher t = java.util.regex.Pattern.compile("Transaction (0x[0-9A-Fa-f]{64})").matcher(m);
+                        ActivityLog.addWallet(act.db(), row.put("id", ActivityLog.newId("wal_")).put("ts", now).put("postedMs", now)
+                                .put("stage", ActivityLog.POSTED).put("txnid", t.find() ? t.group(1) : "").put("outs", outs)
+                                .put("tokenid", tokenid).put("reason", "the node did not confirm it — outcome unknown"));
+                        act.refreshBalances();
+                    } catch (Exception ignored) { }
+                    message(act, label + " — outcome unknown", m);
+                    return;
+                }
+                message(act, label + " failed", m);
+            }
             });
         });
     }

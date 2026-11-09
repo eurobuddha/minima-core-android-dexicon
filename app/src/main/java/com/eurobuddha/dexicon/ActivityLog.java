@@ -148,6 +148,11 @@ public final class ActivityLog {
             }
             if (DROPPED.equals(s)) return changed;
             String why = null;
+            if (inputGone && !a.optString("kind").isEmpty()) {
+                // a wallet row's inputs are account coins only this account can sign: gone = this transaction landed,
+                // and its probed output was already spent onward (e.g. by the recipient). Its block is not known.
+                a.put("block", tip).put("blockEstimated", true).put("reason", "landed; its output was already spent onward"); return true;
+            }
             if (inputGone) why = "an input was spent by another transaction";
             else if (a.optLong("postBlock", 0) > 0 && tip - a.optLong("postBlock") > DROP_BLOCKS) why = "not mined after " + DROP_BLOCKS + " blocks";
             if (why != null) { a.put("was", s).put("stage", DROPPED).put("reason", why); return true; }
@@ -188,6 +193,8 @@ public final class ActivityLog {
 
     /** Insert a new row (newest first; the store keeps the newest MAX). */
     public static synchronized void add(DexDb db, JSONObject a) { db.saveActivity(a); db.trimActivity(MAX); }
+    /** A wallet row (ids wal_ / recv_): its OWN cap, so wallet history can never evict a live trade row. */
+    public static synchronized void addWallet(DexDb db, JSONObject a) { db.saveActivity(a); db.trimWallet(MAX); }
 
     /** Read-modify-write one row. Static-synchronized: the Activity and the service share one process (two DexDb
      *  helpers on one file), and a stale write must not undo the other's stage change. */
@@ -199,7 +206,7 @@ public final class ActivityLog {
         db.saveActivity(a);
         return a;
     }
-    public static synchronized List<JSONObject> list(DexDb db) { return db.activities(MAX); }
+    public static synchronized List<JSONObject> list(DexDb db) { return db.activities(2 * MAX); }
 
     /** True while a row can still change: not settled, or dropped recently enough that a late block may revive it. */
     public static boolean watch(JSONObject a, long chainBlock, long nowMs) {
