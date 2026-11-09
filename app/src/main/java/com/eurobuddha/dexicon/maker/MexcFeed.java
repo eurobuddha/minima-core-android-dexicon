@@ -30,6 +30,13 @@ public final class MexcFeed {
 
     static final String DEPTH_URL = "https://api.mexc.com/api/v3/depth?symbol=MINIMAUSDT&limit=50";
     static final String BOOK_URL = "https://api.mexc.com/api/v3/ticker/bookTicker?symbol=MINIMAUSDT";
+    /** 9 Nov: the S10+ could not get ANY reply from MEXC's CDN (read timed out on every MEXC host) while the Fold on the same
+     *  Wi-Fi got one in 18 ms, and the pegged ladder was withdrawn for hours. When MEXC is UNREACHABLE (a network error, not
+     *  a thin book) the feed falls back, in order, to XT.COM's MINIMA/USDT book (same 100-USDT depth rule, so its thin book
+     *  quotes wide, never a guess) and then CoinGecko's MINIMA price (aged by its own timestamp). Every read still passes
+     *  accept(): spread, crossed-book and the 3 %/60 s jump rules apply to fallback prices exactly as to MEXC's. */
+    static final String XT_URL = "https://sapi.xt.com/v4/public/depth?symbol=minima_usdt&limit=50";
+    static final String GECKO_URL = "https://api.coingecko.com/api/v3/simple/price?ids=minima&vs_currencies=usd&include_last_updated_at=true";
     public static final long FRESH_MS = 5 * 60_000;
     static final long FETCH_GAP_MS = 30_000;
     static final long STALE_WIDEN_FULL_MS = 90 * 60_000;
@@ -49,6 +56,7 @@ public final class MexcFeed {
     private static long goodAtMs, lastTryMs;
     private static boolean fetching;
     private static String lastError;
+    private static String source = "MEXC";
 
     public static double mid() { synchronized (LOCK) { return price; } }
     public static long ageMs() {
@@ -78,9 +86,10 @@ public final class MexcFeed {
 
     public static String describe() {
         synchronized (LOCK) {
-            if (price <= 0) return fetching ? "MEXC: fetching…" : lastError != null ? "MEXC: unavailable (" + lastError + ")" : "MEXC: no price yet";
+            if (price <= 0) return fetching ? "MEXC: fetching…" + (lastError != null ? " (last try: " + lastError + ")" : "")
+                    : lastError != null ? "MEXC: unavailable (" + lastError + ")" : "MEXC: no price yet";
             long age = System.currentTimeMillis() - goodAtMs;
-            String s = "MEXC mid " + fmt(price) + (bid > 0 ? "  (bid " + fmt(bid) + " / ask " + fmt(ask) + ")" : "") + "  ·  " + (age / 1000) + "s ago";
+            String s = ("MEXC".equals(source) ? "MEXC mid " : source + " mid (fallback: MEXC unreachable) ") + fmt(price) + (bid > 0 ? "  (bid " + fmt(bid) + " / ask " + fmt(ask) + ")" : "") + "  ·  " + (age / 1000) + "s ago";
             return age > FRESH_MS ? s + "  — STALE · defensive spread ×" + new BigDecimal(wideningFactor(age), new MathContext(2)).stripTrailingZeros().toPlainString() : s;
         }
     }
@@ -97,6 +106,8 @@ public final class MexcFeed {
     }
 
     private static void fetchOnce() {
+        StringBuilder errs = new StringBuilder();
+        // MEXC first. Its answer is authoritative even when it says "too thin": only a NETWORK failure moves on.
         try {
             double b, a;
             try {
@@ -107,14 +118,48 @@ public final class MexcFeed {
                 JSONObject book = httpGet(BOOK_URL);
                 b = book.optDouble("bidPrice", 0); a = book.optDouble("askPrice", 0);
             }
-            accept(b, a, System.currentTimeMillis());
-        } catch (Exception e) {
-            synchronized (LOCK) { lastError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(); }
-        }
+            long now = System.currentTimeMillis();
+            accept(b, a, now, now, "MEXC");
+            return;
+        } catch (Exception e) { errs.append("MEXC ").append(why(e)); }
+        try {
+            double[] r = parseXt(httpGet(XT_URL));
+            if (r == null) throw new IOException("no XT.COM book");
+            long now = System.currentTimeMillis();
+            accept(r[0], r[1], now, now, "XT.COM");
+            return;
+        } catch (Exception e) { errs.append("; XT.COM ").append(why(e)); }
+        try {
+            long now = System.currentTimeMillis();
+            double[] r = parseGecko(httpGet(GECKO_URL), now);
+            if (r == null) throw new IOException("no CoinGecko price");
+            accept(r[0], r[1], now, (long) r[2], "CoinGecko");
+            return;
+        } catch (Exception e) { errs.append("; CoinGecko ").append(why(e)); }
+        synchronized (LOCK) { lastError = errs.toString(); }
+    }
+    private static String why(Exception e) { return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(); }
+
+    /** XT.COM v4 depth → {bid, ask} at the 100-USDT depth level, or null (bad answer). Pure, for tests. */
+    static double[] parseXt(JSONObject d) {
+        if (d == null || d.optInt("rc", -1) != 0) return null;
+        JSONObject r = d.optJSONObject("result");
+        if (r == null) return null;
+        return new double[]{effectiveLevel(r.optJSONArray("bids")), effectiveLevel(r.optJSONArray("asks"))};
+    }
+    /** CoinGecko simple price → {mid, mid, dataAtMs}, or null. A future timestamp counts as now. Pure, for tests. */
+    static double[] parseGecko(JSONObject d, long nowMs) {
+        JSONObject m = d == null ? null : d.optJSONObject("minima");
+        if (m == null) return null;
+        double p = m.optDouble("usd", 0); long at = m.optLong("last_updated_at", 0) * 1000;
+        if (!(p > 0) || at <= 0) return null;
+        return new double[]{p, p, Math.min(at, nowMs)};
     }
 
     /** Apply one read (bid, ask) with AtomiX's sanity rules. Returns the error, or null when the price was taken. */
-    static String accept(double b, double a, long nowMs) {
+    static String accept(double b, double a, long nowMs) { return accept(b, a, nowMs, nowMs, "MEXC"); }
+    /** As {@link #accept(double, double, long)}, from {@code src}, whose data dates from {@code dataAtMs} (its age widens). */
+    static String accept(double b, double a, long nowMs, long dataAtMs, String src) {
         synchronized (LOCK) {
             String err = null;
             if (!(b > 0) || !(a > 0) || b > a) err = "thin/empty book";
@@ -131,7 +176,7 @@ public final class MexcFeed {
                 else { suspect = m; if (nowMs - suspectAtMs < CONFIRM_MS) err = "confirming jump " + fmt(price) + "→" + fmt(m); }
             }
             if (err != null) { lastError = err; return err; }
-            suspect = 0; price = m; bid = b; ask = a; goodAtMs = nowMs; lastError = null;
+            suspect = 0; price = m; bid = b; ask = a; goodAtMs = Math.min(nowMs, dataAtMs); lastError = null; source = src;
             return null;
         }
     }
@@ -153,7 +198,8 @@ public final class MexcFeed {
     }
 
     /** Test hook: forget everything. */
-    static void reset() { synchronized (LOCK) { price = bid = ask = suspect = 0; goodAtMs = lastTryMs = suspectAtMs = 0; lastError = null; } }
+    static void reset() { synchronized (LOCK) { price = bid = ask = suspect = 0; goodAtMs = lastTryMs = suspectAtMs = 0; lastError = null; source = "MEXC"; } }
+    static String source() { synchronized (LOCK) { return source; } }
 
     private static JSONObject httpGet(String u) throws IOException {
         HttpURLConnection c = null;

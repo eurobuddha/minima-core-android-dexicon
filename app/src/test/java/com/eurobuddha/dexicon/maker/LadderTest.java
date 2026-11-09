@@ -3,6 +3,7 @@ package com.eurobuddha.dexicon.maker;
 import static org.junit.Assert.*;
 
 import org.json.JSONArray;
+import org.json.JSONObject;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -113,5 +114,30 @@ public class LadderTest {
         assertEquals(10.0, MexcFeed.wideningFactor(MexcFeed.STALE_WIDEN_FULL_MS), 1e-9);
         assertEquals(5.5, MexcFeed.wideningFactor((MexcFeed.FRESH_MS + MexcFeed.STALE_WIDEN_FULL_MS) / 2), 1e-9);
         assertTrue(MexcFeed.unusable());   // never fetched → a pegged ladder must withdraw
+    }
+
+    /** 9 Nov: MEXC unreachable from the S10+ for hours; the feed falls back to XT.COM, then CoinGecko, under the same rules. */
+    @Test public void fallbackSourcesParseAndKeepEverySafetyRule() throws Exception {
+        // XT.COM v4 depth, its real shape: the bid side reaches 100 USDT only deep in the book, so the quote is wide, not a guess
+        JSONObject xt = new JSONObject("{\"rc\":0,\"mc\":\"SUCCESS\",\"result\":{\"symbol\":\"minima_usdt\","
+                + "\"bids\":[[\"0.00306\",\"147\"],[\"0.00300\",\"5000\"],[\"0.00281\",\"47139\"]],"
+                + "\"asks\":[[\"0.00310\",\"200\"],[\"0.00312\",\"40000\"]]}}");
+        double[] r = MexcFeed.parseXt(xt);
+        assertEquals(0.00281, r[0], 0); assertEquals(0.00312, r[1], 0);
+        assertNull(MexcFeed.parseXt(new JSONObject("{\"rc\":1,\"mc\":\"ERR\"}")));
+        // CoinGecko: the price ages by ITS timestamp; a future stamp counts as now
+        long now = 1_794_217_300_000L;
+        double[] g = MexcFeed.parseGecko(new JSONObject("{\"minima\":{\"usd\":0.00307691,\"last_updated_at\":1794217000}}"), now);
+        assertEquals(0.00307691, g[0], 0); assertEquals(1_794_217_000_000L, (long) g[2]);
+        assertEquals(now, (long) MexcFeed.parseGecko(new JSONObject("{\"minima\":{\"usd\":0.003,\"last_updated_at\":1794299999}}"), now)[2]);
+        assertNull(MexcFeed.parseGecko(new JSONObject("{\"minima\":{\"usd\":0}}"), now));
+        // a fallback read is taken, named, and aged from its data; a >3 % move from it is still held 60 s
+        assertNull(MexcFeed.accept(g[0], g[1], now, (long) g[2], "CoinGecko"));
+        assertEquals("CoinGecko", MexcFeed.source());
+        assertTrue(MexcFeed.ageMs() >= 300_000 - 5);   // 300 s old at read time
+        assertTrue(MexcFeed.describe().contains("fallback"));
+        assertNotNull(MexcFeed.accept(0.0040, 0.0041, now + 1000, now + 1000, "XT.COM"));   // +30 %: suspect, not taken
+        assertEquals("CoinGecko", MexcFeed.source());
+        assertNotNull("a crossed fallback book is no price", MexcFeed.accept(0.0031, 0.0030, now + 2000, now + 2000, "XT.COM"));
     }
 }
