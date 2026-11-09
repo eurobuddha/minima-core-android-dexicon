@@ -168,8 +168,9 @@ final class WalletTools {
                             for (java.util.regex.Matcher x = java.util.regex.Pattern.compile("0x[0-9A-Fa-f]{64}").matcher(m.substring(sp)); x.find(); ) ins.put(x.group());
                         }
                         java.util.regex.Matcher t = java.util.regex.Pattern.compile("Transaction (0x[0-9A-Fa-f]{64})").matcher(m);
+                        String txnId = t.find() ? t.group(1) : "";   // also the key the account proves it by (txpow onchain:)
                         ActivityLog.addWallet(act.db(), row.put("id", ActivityLog.newId("wal_")).put("ts", now).put("postedMs", now)
-                                .put("stage", ActivityLog.POSTED).put("txnid", t.find() ? t.group(1) : "").put("outs", outs).put("ins", ins).put("uncertain", true)
+                                .put("stage", ActivityLog.POSTED).put("txnid", txnId).put("txpowid", txnId).put("outs", outs).put("ins", ins).put("uncertain", true)
                                 .put("tokenid", tokenid).put("reason", "the node did not confirm it — outcome unknown"));
                         act.refreshBalances();
                     } catch (Exception ignored) { }

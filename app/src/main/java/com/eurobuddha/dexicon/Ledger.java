@@ -247,7 +247,7 @@ public final class Ledger {
         String why = MainActivity.here(a.optString("reason", ""));
         if (ActivityLog.DROPPED.equals(a.optString("stage"))) it.step(Mark.WARN, "", "Dropped — " + why);
         if (ActivityLog.FAILED.equals(a.optString("stage"))) it.step(Mark.WARN, "", "Failed — " + why);
-        it.proof("Transaction (txpow)", a.optString("txpowid"));
+        if (!a.optBoolean("uncertain")) it.proof("Transaction (txpow)", a.optString("txpowid"));   // uncertain: no txpow id ever came back
         it.proof("Transaction id", a.optString("txnid"));
         if (!to.isEmpty()) it.proof(in ? "Received at" : "Sent to", to);
         org.json.JSONArray tos = a.optJSONArray("tos");

@@ -120,6 +120,7 @@ public final class VirtualWallet {
         this.contractAddresses = new HashSet<>();
         if (contractAddresses != null) for (String a : contractAddresses) this.contractAddresses.add(norm(a));
         if (store.keyCount() < 1) store.setKeyCount(1);
+        loadPosted();   // NodeApi routes txpow onchain: by the known ids from the first call on
     }
 
     /** Every txn* verb (the node's shared table must never hold our drafts), the wallet verbs, and coins. */
@@ -896,6 +897,7 @@ public final class VirtualWallet {
         try { res = node.call("postfrom data:" + hex + " mine:false"); }
         catch (Exception noAnswer) {
             // The node may have posted it: lock the inputs as in flight and report UNCERTAIN, never "not accepted".
+            rememberPost(r.getTransaction().getTransactionID().to0xString(), r.getTransaction());   // provable by its txn id
             long now = clock.now();
             for (Coin c : r.getTransaction().getAllInputs()) if (indexOfAddress(c.getAddress().to0xString()) >= 0) spending.put(norm(c.getCoinID().to0xString()), now);
             StringBuilder made = new StringBuilder(), spends = new StringBuilder();
@@ -924,56 +926,78 @@ public final class VirtualWallet {
 
     /** Posts are mine:false (stock mines mine:true on its UI thread), so the txpowid an engine records is the PRE-mining
      *  id: mining changes it and {@code txpow onchain:<that id>} never finds it (AtomiX left a landed claim at CLAIMING).
-     *  Each post is remembered by that id with its OUTPUTS (coin id, address, amount, token). Inclusion is proven by an
-     *  output coin seen on chain with exactly those fields — a coin id alone is not enough: it derives from the FIRST
-     *  INPUT and the index, so another spend of that input (an HTLC refund) makes the same id at a different address.
-     *  The answer is built from node facts only: the coin's created block, that block's id ({@code txpow inblock:},
-     *  small rows) and the tip. No foreign txpow is ever fetched (a 64 KiB stranger could exceed the IPC reply limit). */
-    private void rememberPost(String preId, Transaction t) {
+     *  Each post is remembered by that id (or, when the node never answered, by its transaction id) with its OUTPUTS
+     *  (coin id, address, amount, token). Proof = an output on chain with exactly those fields — a coin id alone is not
+     *  enough (it derives from the FIRST INPUT + index: an HTLC refund of the same input makes the same id elsewhere).
+     *  "found" only at depth >= {@link #PROVEN_DEPTH}; while an output is visible it is re-read every call (a reorg moves
+     *  or removes it); once proven the answer is final. The block id: that block's txpow, fetched once (marked first, so
+     *  an oversized block can cost one failed fetch, never a loop), or {@code txpow inblock:} once past the cascade.
+     *  Nothing else of unknown size is fetched. */
+    static final int PROVEN_DEPTH = 3, CASCADE_DEPTH = 1024, OPEN_CAP = 200, FINAL_CAP = 2000;
+    /** Ids this account can answer (open + final), for NodeApi's routing on the caller's thread. */
+    private static final Set<String> KNOWN = java.util.Collections.synchronizedSet(new HashSet<>());
+
+    private JSONObject loadPosted() {
+        JSONObject all;
+        try { all = new JSONObject(store.posted()); } catch (Exception bad) { all = new JSONObject(); }
+        synchronized (KNOWN) { KNOWN.clear(); for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) KNOWN.add(it.next()); }
+        return all;
+    }
+
+    private void savePosted(JSONObject all) {
+        int open = 0, fin = 0;
+        for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) { JSONObject r = all.optJSONObject(it.next()); if (r != null && r.optBoolean("final")) fin++; else open++; }
+        for (java.util.Iterator<String> it = all.keys(); it.hasNext() && (open > OPEN_CAP || fin > FINAL_CAP); ) {   // oldest first, per kind
+            JSONObject r = all.optJSONObject(it.next());
+            boolean f = r != null && r.optBoolean("final");
+            if (f && fin > FINAL_CAP) { it.remove(); fin--; } else if (!f && open > OPEN_CAP) { it.remove(); open--; }
+        }
+        store.savePosted(all.toString());
+        synchronized (KNOWN) { KNOWN.clear(); for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) KNOWN.add(it.next()); }
+    }
+
+    private void rememberPost(String id, Transaction t) {
         try {
-            if (preId == null || !preId.matches("(?i)0x[0-9a-f]{64}")) return;
-            JSONObject all = new JSONObject(store.posted());
+            if (id == null || !id.matches("(?i)0x[0-9a-f]{64}")) return;
+            JSONObject all = loadPosted();
             JSONArray outs = new JSONArray();
             for (Coin c : t.getAllOutputs())
                 outs.put(new JSONObject().put("coinid", c.getCoinID().to0xString()).put("address", c.getAddress().to0xString())
                         .put("amount", c.getAmount().toString()).put("tokenid", c.getTokenID().to0xString()));
-            all.put(idKey(preId), new JSONObject().put("txnid", t.getTransactionID().to0xString()).put("outs", outs));
-            evict(all);
-            store.savePosted(all.toString());
+            all.put(idKey(id), new JSONObject().put("txnid", t.getTransactionID().to0xString()).put("outs", outs));
+            savePosted(all);
         } catch (Exception ignored) { }
     }
 
-    /** Keep 200 records: resolved ones (block known) go first, oldest first. */
-    private static void evict(JSONObject all) {
-        while (all.length() > 200) {
-            String drop = null;
-            for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) {
-                String k = it.next();
-                if (drop == null) drop = k;
-                JSONObject r = all.optJSONObject(k);
-                if (r != null && r.optLong("block", 0) > 0) { drop = k; break; }
-            }
-            all.remove(drop);
-        }
-    }
-
-    /** One spelling for a stored txpowid key: 0x + upper-case hex. */
+    /** One spelling for a stored id: 0x + upper-case hex. */
     static String idKey(String id) { return "0x" + id.substring(2).toUpperCase(); }
 
-    /** The account scan's coin rows: an output of a remembered post seen here (all fields matching) fixes that post's
-     *  block — kept even after the coin is spent onward. */
+    /** {@code txpow … onchain:<id>} for an id this account posted — the only txpow form routed to it. */
+    public static boolean answersTxpow(String command) {
+        String c = command.trim();
+        if (!c.toLowerCase(java.util.Locale.ROOT).startsWith("txpow ")) return false;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)onchain:(0x[0-9a-f]{64})").matcher(c);
+        return m.find() && KNOWN.contains(idKey(m.group(1)));
+    }
+
+    /** The account scan's coin rows: an output of an open post seen here (all fields matching) is recorded with its
+     *  depth, so the proof survives the coin being spent onward. */
     public synchronized void noteCoins(JSONArray rows) {
         try {
-            JSONObject all = new JSONObject(store.posted());
+            JSONObject all = loadPosted();
+            long tip = -1;
             boolean changed = false;
             for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) {
                 JSONObject rec = all.optJSONObject(it.next());
-                if (rec == null || rec.optLong("block", 0) > 0) continue;
+                if (rec == null || rec.optBoolean("final")) continue;
                 long b = 0;
                 for (int i = 0; i < rows.length() && b <= 0; i++) b = matchOut(rec, rows.getJSONObject(i));
-                if (b > 0) { rec.put("block", b); changed = true; }
+                if (b <= 0) continue;
+                if (tip < 0) tip = node.call("block").getJSONObject("response").optLong("block", 0);
+                rec.put("seenBlock", b).put("seenDepth", Math.max(0, tip - b));
+                changed = true;
             }
-            if (changed) store.savePosted(all.toString());
+            if (changed) savePosted(all);
         } catch (Exception ignored) { }
     }
 
@@ -981,7 +1005,7 @@ public final class VirtualWallet {
     private static long matchOut(JSONObject rec, JSONObject coin) {
         JSONArray outs = rec.optJSONArray("outs");
         for (int i = 0; outs != null && i < outs.length(); i++) {
-            JSONObject o = outs.optJSONObject(i);
+            JSONObject o = outs.optJSONObject(i);   // records saved as plain ids (0.3.11) carry no proof: skipped
             if (o == null || !o.optString("coinid").equalsIgnoreCase(coin.optString("coinid"))) continue;
             boolean same = o.optString("address").equalsIgnoreCase(coin.optString("address"))
                     && o.optString("tokenid").equalsIgnoreCase(coin.optString("tokenid"))
@@ -996,31 +1020,43 @@ public final class VirtualWallet {
         String pre = p.s("onchain", "");
         if (!pre.matches("(?i)0x[0-9a-f]{64}")) return null;
         pre = idKey(pre);
-        JSONObject all = new JSONObject(store.posted());
+        JSONObject all = loadPosted();
         JSONObject rec = all.optJSONObject(pre);
         if (rec == null) return null;                                   // not one of ours: the node answers as ever
-        long b = rec.optLong("block", 0);
+        long tip = node.call("block").getJSONObject("response").optLong("block", 0);
+        JSONObject notFound = new JSONObject().put("command", "txpow").put("status", true).put("response", new JSONObject().put("found", false));
+        if (rec.optBoolean("final")) return proof(rec.optLong("block"), rec.optString("blockid"), tip);
+        long b = 0;
         JSONArray outs = rec.optJSONArray("outs");
         for (int i = 0; b <= 0 && outs != null && i < outs.length(); i++) {
-            Object resp = node.call("coins coinid:" + outs.getJSONObject(i).optString("coinid")).opt("response");
+            JSONObject o = outs.optJSONObject(i);
+            if (o == null) continue;
+            Object resp = node.call("coins coinid:" + o.optString("coinid")).opt("response");
             if (resp instanceof JSONArray && ((JSONArray) resp).length() > 0) b = matchOut(rec, ((JSONArray) resp).getJSONObject(0));
         }
-        JSONObject notFound = new JSONObject().put("command", "txpow").put("status", true).put("response", new JSONObject().put("found", false));
-        if (b <= 0) return notFound;
+        if (b > 0) rec.put("seenBlock", b).put("seenDepth", Math.max(0, tip - b));
+        else if (rec.optLong("seenBlock", 0) > 0 && rec.optLong("seenDepth", 0) >= PROVEN_DEPTH) b = rec.optLong("seenBlock");   // proven, then spent onward
+        if (b <= 0 || tip - b < PROVEN_DEPTH) { all.put(pre, rec); savePosted(all); return notFound; }
         String blockid = rec.optString("blockid", "");
-        if (blockid.isEmpty()) {
+        if (!blockid.matches("(?i)0x[0-9a-f]{64}") && tip - b > CASCADE_DEPTH) {
             JSONObject r = node.call("txpow inblock:" + b).optJSONObject("response");
             JSONArray txns = r == null ? null : r.optJSONArray("txns");
             if (txns != null && txns.length() > 0) blockid = txns.getJSONObject(0).optString("blockid", "");
-            // ponytail: a block whose only txn is its own (our txpow mined as the block) lists nothing here; left
-            // unresolved rather than fetching a txpow of unknown size. Rare on a phone node.
-            if (!blockid.matches("(?i)0x[0-9a-f]{64}")) return notFound;
         }
-        rec.put("block", b).put("blockid", blockid);
-        all.put(pre, rec);
-        store.savePosted(all.toString());
-        long tip = node.call("block").getJSONObject("response").optLong("block", 0);
-        if (tip < b) return notFound;
+        if (!blockid.matches("(?i)0x[0-9a-f]{64}") && !rec.optBoolean("triedBlock")) {
+            rec.put("triedBlock", true); all.put(pre, rec); savePosted(all);   // marked FIRST: a reply that kills us is never retried
+            JSONObject r = node.call("txpow block:" + b).optJSONObject("response");
+            JSONObject h = r == null ? null : r.optJSONObject("header");
+            if (h != null && String.valueOf(b).equals(h.optString("block"))) blockid = r.optString("txpowid", "");
+        }
+        if (!blockid.matches("(?i)0x[0-9a-f]{64}")) { all.put(pre, rec); savePosted(all); return notFound; }
+        all.put(pre, new JSONObject().put("final", true).put("block", b).put("blockid", blockid));
+        savePosted(all);
+        return proof(b, blockid, tip);
+    }
+
+    private static JSONObject proof(long b, String blockid, long tip) throws Exception {
+        if (tip < b) return new JSONObject().put("command", "txpow").put("status", true).put("response", new JSONObject().put("found", false));
         return new JSONObject().put("command", "txpow").put("status", true).put("response", new JSONObject()
                 .put("found", true).put("block", String.valueOf(b)).put("blockid", blockid)
                 .put("tip", String.valueOf(tip)).put("confirmations", String.valueOf(tip - b)));
@@ -1147,12 +1183,6 @@ public final class VirtualWallet {
         for (String id : add) if (id != null && !id.isEmpty()) { set.remove(id); set.add(id); }
         java.util.List<String> l = new java.util.ArrayList<>(set);
         return new org.json.JSONArray(l.subList(Math.max(0, l.size() - 2000), l.size())).toString();
-    }
-
-    /** {@code txpow … onchain:…} — the one txpow form the account answers (its own posts); routed to it by NodeApi. */
-    public static boolean answersTxpow(String command) {
-        String c = command.trim().toLowerCase(java.util.Locale.ROOT);
-        return c.startsWith("txpow ") && c.contains("onchain:");
     }
 
     /** True when {@code coinId} is an output of a transaction this account signed. */

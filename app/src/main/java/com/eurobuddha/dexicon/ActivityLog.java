@@ -266,9 +266,11 @@ public final class ActivityLog {
                     long b = 0;
                     if (j.optBoolean("status", false) && r != null && r.optBoolean("found", false)) try { b = Long.parseLong(r.optString("block", "0")); } catch (Exception ignored) {}
                     if (b > 0) { apply(db, id, tip, false, b, any); after.run(); }
-                    else probeOutput(node, db, a, outs, ins, id, tip, any, after);
+                    // not proven yet: never judged by a coin id alone (it derives from the first input; a later spend of
+                    // that input reuses it) — only the inputs-gone state is observed
+                    else inputsGone(node, ins, 0, gone -> { apply(db, id, tip, gone, 0, any); after.run(); });
                 }
-                public void onError(String m) { probeOutput(node, db, a, outs, ins, id, tip, any, after); }
+                public void onError(String m) { after.run(); }
             });
             return;
         }
