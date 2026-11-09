@@ -274,16 +274,17 @@ public class VirtualWalletTest {
             d.tip = 103 + 100L * k;                        // past any backoff
             try { d.wallet().handle("txpow onchain:" + pre2); } catch (Died died) { }
         }
-        int before = d.blockFetches;
+        assertEquals("exactly MAX_DEATHS fetches were ever attempted", VirtualWallet.MAX_DEATHS, d.blockFetches);
         d.kill = false; d.tip += 100;
-        assertEquals("given up after repeated deaths: no further fetch", before, d.blockFetches);
+        assertFalse(d.wallet().handle("txpow onchain:" + pre2).getJSONObject("response").getBoolean("found"));
+        assertEquals("given up after repeated deaths: no further fetch", VirtualWallet.MAX_DEATHS, d.blockFetches);
     }
 
     @Test public void anOutputSpentOnwardByOurOwnProvenPostIsProven() throws Exception {
         ChainSim c = new ChainSim();
         String claim = "0x" + "A3".repeat(32), spend = "0x" + "A4".repeat(32), cOut = "0x" + "D3".repeat(32), sOut = "0x" + "D4".repeat(32), me = "0x" + "12".repeat(32);
         c.post(claim, new JSONArray().put(ChainSim.out(cOut, me)), new JSONArray());
-        c.post(spend, new JSONArray().put(ChainSim.out(sOut, me)), new JSONArray().put(cOut));   // our consolidate spent the claim's output
+        c.post(spend, new JSONArray().put(ChainSim.out(sOut, me)), new JSONArray().put(ChainSim.out(cOut, me)));   // our consolidate spent the claim's output
         c.coins.put(sOut, ChainSim.out(sOut, me).put("created", "102"));                       // the claim's own output is gone (never seen)
         c.blockIds.put(102L, "0x0000" + "B2".repeat(30));
         c.tip = 110;
@@ -292,5 +293,21 @@ public class VirtualWalletTest {
         JSONObject r = w.handle("txpow onchain:" + claim).getJSONObject("response");
         assertTrue("so the claim it spent landed", r.getBoolean("found"));
         assertEquals("reported at the spender's block (never more confirmations than proven)", "102", r.getString("block"));
+    }
+
+    @Test public void aSpenderOfASameIdCoinAtAnotherAddressProvesNothing() throws Exception {
+        // A never mined; B reused A's first input, so B's output 0 has A's output id X at another address. Our proven
+        // post D spends B's X. A must stay unproven.
+        ChainSim c = new ChainSim();
+        String a = "0x" + "A5".repeat(32), d = "0x" + "A6".repeat(32), x = "0x" + "D5".repeat(32), dOut = "0x" + "D6".repeat(32);
+        String me = "0x" + "12".repeat(32), other = "0x" + "34".repeat(32);
+        c.post(a, new JSONArray().put(ChainSim.out(x, me)), new JSONArray());
+        c.post(d, new JSONArray().put(ChainSim.out(dOut, me)), new JSONArray().put(ChainSim.out(x, other)));
+        c.coins.put(dOut, ChainSim.out(dOut, me).put("created", "102"));
+        c.blockIds.put(102L, "0x0000" + "B6".repeat(30));
+        c.tip = 110;
+        VirtualWallet w = c.wallet();
+        assertTrue(w.handle("txpow onchain:" + d).getJSONObject("response").getBoolean("found"));
+        assertFalse(w.handle("txpow onchain:" + a).getJSONObject("response").getBoolean("found"));
     }
 }

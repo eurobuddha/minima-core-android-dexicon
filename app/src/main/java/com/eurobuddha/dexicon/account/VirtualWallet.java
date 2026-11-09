@@ -977,7 +977,9 @@ public final class VirtualWallet {
             for (Coin c : t.getAllOutputs())
                 outs.put(new JSONObject().put("coinid", c.getCoinID().to0xString()).put("address", c.getAddress().to0xString())
                         .put("amount", c.getAmount().toString()).put("tokenid", c.getTokenID().to0xString()));
-            for (Coin c : t.getAllInputs()) ins.put(c.getCoinID().to0xString());
+            for (Coin c : t.getAllInputs())   // in full: a coin id alone is not an identity (first input + index)
+                ins.put(new JSONObject().put("coinid", c.getCoinID().to0xString()).put("address", c.getAddress().to0xString())
+                        .put("amount", c.getAmount().toString()).put("tokenid", c.getTokenID().to0xString()));
             all.put(idKey(id), new JSONObject().put("txnid", t.getTransactionID().to0xString()).put("outs", outs).put("ins", ins));
             savePosted(all);
         } catch (Exception ignored) { }
@@ -1029,12 +1031,19 @@ public final class VirtualWallet {
         for (int i = 0; outs != null && i < outs.length(); i++) {
             JSONObject o = outs.optJSONObject(i);   // records saved as plain ids (0.3.11) carry no proof: skipped
             if (o == null || !o.optString("coinid").equalsIgnoreCase(coin.optString("coinid"))) continue;
-            boolean same = o.optString("address").equalsIgnoreCase(coin.optString("address"))
-                    && o.optString("tokenid").equalsIgnoreCase(coin.optString("tokenid"))
-                    && new MiniNumber(o.optString("amount", "0")).isEqual(new MiniNumber(coin.optString("amount", "-1")));
-            return same ? coin.optLong("created", 0) : 0;
+            return sameCoin(o, coin) ? coin.optLong("created", 0) : 0;
         }
         return 0;
+    }
+
+    /** Same coin id AND address, token and raw amount (exact, no rounding). */
+    private static boolean sameCoin(JSONObject a, JSONObject b) {
+        try {
+            return a.optString("coinid").equalsIgnoreCase(b.optString("coinid"))
+                    && a.optString("address").equalsIgnoreCase(b.optString("address"))
+                    && a.optString("tokenid").equalsIgnoreCase(b.optString("tokenid"))
+                    && new MiniNumber(a.optString("amount", "0")).isEqual(new MiniNumber(b.optString("amount", "-1")));
+        } catch (RuntimeException bad) { return false; }
     }
 
     /** The block of a PROVEN later post of ours that spends one of {@code rec}'s outputs (so {@code rec} landed at or
@@ -1050,7 +1059,8 @@ public final class VirtualWallet {
                 JSONObject o = outs.optJSONObject(i);
                 if (o == null) continue;
                 for (int j = 0; j < ins.length(); j++) {
-                    if (!o.optString("coinid").equalsIgnoreCase(ins.optString(j))) continue;
+                    JSONObject in = ins.optJSONObject(j);   // 0.3.14 stored bare ids: no proof
+                    if (in == null || !sameCoin(o, in)) continue;
                     long at = b.optBoolean("final") ? b.optLong("block", 0) : b.optLong("seenBlock", 0);
                     if (at > 0 && tip - at >= PROVEN_DEPTH && (b.optBoolean("final") || b.optLong("seenDepth", 0) >= PROVEN_DEPTH)) return at;
                 }
@@ -1083,8 +1093,9 @@ public final class VirtualWallet {
         else if (rec.optLong("seenBlock", 0) > 0 && rec.optLong("seenDepth", 0) >= PROVEN_DEPTH) b = rec.optLong("seenBlock");   // proven, then spent onward
         else {
             long spender = provenSpender(all, rec, tip);                   // spent onward by our own proven post
-            // ponytail: never seen = only "at or before" the spender is known; its block is reported (fewer confirmations, never more)
-            if (spender > 0) b = rec.optLong("seenBlock", 0) > 0 ? Math.min(rec.optLong("seenBlock"), spender) : spender;
+            // only "at or before" the spender is proven (a shallow sighting may have been on a fork): report the
+            // spender's block — fewer confirmations, never more
+            if (spender > 0) b = spender;
         }
         if (b <= 0 || tip - b < PROVEN_DEPTH) { if (dirty) savePosted(all); return notFound; }
         String blockid = blockIdAt(all, b, tip);
