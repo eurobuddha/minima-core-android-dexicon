@@ -116,28 +116,29 @@ public class LadderTest {
         assertTrue(MexcFeed.unusable());   // never fetched → a pegged ladder must withdraw
     }
 
-    /** 9 Nov: MEXC unreachable from the S10+ for hours; the feed falls back to XT.COM, then CoinGecko, under the same rules. */
-    @Test public void fallbackSourcesParseAndKeepEverySafetyRule() throws Exception {
-        // XT.COM v4 depth, its real shape: the bid side reaches 100 USDT only deep in the book, so the quote is wide, not a guess
-        JSONObject xt = new JSONObject("{\"rc\":0,\"mc\":\"SUCCESS\",\"result\":{\"symbol\":\"minima_usdt\","
-                + "\"bids\":[[\"0.00306\",\"147\"],[\"0.00300\",\"5000\"],[\"0.00281\",\"47139\"]],"
-                + "\"asks\":[[\"0.00310\",\"200\"],[\"0.00312\",\"40000\"]]}}");
-        double[] r = MexcFeed.parseXt(xt);
-        assertEquals(0.00281, r[0], 0); assertEquals(0.00312, r[1], 0);
-        assertNull(MexcFeed.parseXt(new JSONObject("{\"rc\":1,\"mc\":\"ERR\"}")));
-        // CoinGecko: the price ages by ITS timestamp; a future stamp counts as now
-        long now = 1_794_217_300_000L;
-        double[] g = MexcFeed.parseGecko(new JSONObject("{\"minima\":{\"usd\":0.00307691,\"last_updated_at\":1794217000}}"), now);
-        assertEquals(0.00307691, g[0], 0); assertEquals(1_794_217_000_000L, (long) g[2]);
-        assertEquals(now, (long) MexcFeed.parseGecko(new JSONObject("{\"minima\":{\"usd\":0.003,\"last_updated_at\":1794299999}}"), now)[2]);
-        assertNull(MexcFeed.parseGecko(new JSONObject("{\"minima\":{\"usd\":0}}"), now));
-        // a fallback read is taken, named, and aged from its data; a >3 % move from it is still held 60 s
-        assertNull(MexcFeed.accept(g[0], g[1], now, (long) g[2], "CoinGecko"));
-        assertEquals("CoinGecko", MexcFeed.source());
-        assertTrue(MexcFeed.ageMs() >= 300_000 - 5);   // 300 s old at read time
-        assertTrue(MexcFeed.describe().contains("fallback"));
-        assertNotNull(MexcFeed.accept(0.0040, 0.0041, now + 1000, now + 1000, "XT.COM"));   // +30 %: suspect, not taken
-        assertEquals("CoinGecko", MexcFeed.source());
-        assertNotNull("a crossed fallback book is no price", MexcFeed.accept(0.0031, 0.0030, now + 2000, now + 2000, "XT.COM"));
+    /** 9 Nov: MEXC unreachable from the S10+; the feed reads MEXC's own ticker as CoinGecko rebroadcasts it, same rules. */
+    @Test public void mexcViaCoinGeckoParsesAndKeepsEverySafetyRule() throws Exception {
+        String row = "{\"base\":\"MINIMA\",\"target\":\"USDT\",\"market\":{\"name\":\"MEXC\",\"identifier\":\"mxc\"},"
+                + "\"last\":0.00312,\"bid_ask_spread_percentage\":0.647249,\"last_fetch_at\":\"2026-11-09T09:53:00+00:00\","
+                + "\"is_anomaly\":false,\"is_stale\":false}";
+        long now = 1_794_218_100_000L;   // 09:55:00 UTC, two minutes after CoinGecko's fetch
+        double[] r = MexcFeed.parseGeckoMexc(new JSONObject("{\"name\":\"Minima\",\"tickers\":[" + row + "]}"), now);
+        assertEquals(0.00312 * (1 - 0.647249 / 200), r[0], 1e-12);
+        assertEquals(0.00312 * (1 + 0.647249 / 200), r[1], 1e-12);
+        assertEquals(1_794_217_980_000L, (long) r[2]);
+        // only MEXC's own MINIMA/USDT row counts; stale or anomalous is no price; a future stamp counts as now
+        assertNull(MexcFeed.parseGeckoMexc(new JSONObject("{\"tickers\":[" + row.replace("\"mxc\"", "\"xt\"") + "]}"), now));
+        assertNull(MexcFeed.parseGeckoMexc(new JSONObject("{\"tickers\":[" + row.replace("\"is_stale\":false", "\"is_stale\":true") + "]}"), now));
+        assertNull(MexcFeed.parseGeckoMexc(new JSONObject("{\"tickers\":[" + row.replace("\"is_anomaly\":false", "\"is_anomaly\":true") + "]}"), now));
+        assertNull(MexcFeed.parseGeckoMexc(new JSONObject("{\"tickers\":[]}"), now));
+        assertEquals(now - 180_000, (long) MexcFeed.parseGeckoMexc(new JSONObject("{\"tickers\":[" + row + "]}"), now - 180_000)[2]);
+        // taken, named, aged from CoinGecko's fetch; a >3 % move from it is still held; a crossed read is still refused
+        assertNull(MexcFeed.accept(r[0], r[1], now, (long) r[2], "MEXC via CoinGecko"));
+        assertEquals("MEXC via CoinGecko", MexcFeed.source());
+        assertTrue(MexcFeed.ageMs() >= 120_000 - 5);
+        assertTrue(MexcFeed.describe(), MexcFeed.describe().contains("MEXC direct unreachable") && MexcFeed.describe().contains("received"));
+        assertNotNull(MexcFeed.accept(0.0040, 0.0041, now + 1000, now + 1000, "MEXC"));
+        assertNotNull(MexcFeed.accept(0.0031, 0.0030, now + 2000, now + 2000, "MEXC via CoinGecko"));
+        assertEquals(0.00312, MexcFeed.mid(), 1e-12);
     }
 }

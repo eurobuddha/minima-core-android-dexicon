@@ -128,6 +128,9 @@ final class MarketMaker {
         box.addView(label(act, "AUTO MARKET-MAKE — PEG TO MEXC"));
         final Switch peg = sw(act, "Peg ladder to MEXC (auto-reprice)", c.peg); box.addView(peg);
         final TextView feed = text(act, MexcFeed.describe(), Design.DIM(), 10.5f, false); box.addView(feed);
+        android.widget.Button refreshBtn = new android.widget.Button(act); refreshBtn.setText("Refresh price"); refreshBtn.setAllCaps(false);
+        refreshBtn.setOnClickListener(v -> { MexcFeed.refreshNow(); feed.setText(MexcFeed.describe()); });
+        box.addView(refreshBtn);
         box.addView(text(act, "While pegged, the ladder regenerates around the MEXC MINIMA/USDT mid (± step %, your size per rung) and each "
                 + "rung is repriced the moment the market moves ≥ your threshold — a fast order edit, no block. If the feed goes stale the "
                 + "spread widens (up to ×10); with no price at all the ladder is withdrawn, then restored when it recovers. MEXC's MINIMA "

@@ -31,12 +31,11 @@ public final class MexcFeed {
     static final String DEPTH_URL = "https://api.mexc.com/api/v3/depth?symbol=MINIMAUSDT&limit=50";
     static final String BOOK_URL = "https://api.mexc.com/api/v3/ticker/bookTicker?symbol=MINIMAUSDT";
     /** 9 Nov: the S10+ could not get ANY reply from MEXC's CDN (read timed out on every MEXC host) while the Fold on the same
-     *  Wi-Fi got one in 18 ms, and the pegged ladder was withdrawn for hours. When MEXC is UNREACHABLE (a network error, not
-     *  a thin book) the feed falls back, in order, to XT.COM's MINIMA/USDT book (same 100-USDT depth rule, so its thin book
-     *  quotes wide, never a guess) and then CoinGecko's MINIMA price (aged by its own timestamp). Every read still passes
-     *  accept(): spread, crossed-book and the 3 %/60 s jump rules apply to fallback prices exactly as to MEXC's. */
-    static final String XT_URL = "https://sapi.xt.com/v4/public/depth?symbol=minima_usdt&limit=50";
-    static final String GECKO_URL = "https://api.coingecko.com/api/v3/simple/price?ids=minima&vs_currencies=usd&include_last_updated_at=true";
+     *  Wi-Fi got one in 18 ms, and the pegged ladder was withdrawn for hours. MEXC is the only price (owner, 9 Nov); when it is
+     *  UNREACHABLE (a network error, not a thin book) the feed reads MEXC's OWN MINIMA/USDT ticker as CoinGecko rebroadcasts it
+     *  (exchange_ids=mxc: MEXC's last trade and bid-ask spread, refused when CoinGecko flags it stale or anomalous, aged by
+     *  CoinGecko's fetch time). It passes accept() like any read: spread, crossed-book and the 3 %/60 s jump rules all apply. */
+    static final String GECKO_MEXC_URL = "https://api.coingecko.com/api/v3/coins/minima/tickers?exchange_ids=mxc";
     public static final long FRESH_MS = 5 * 60_000;
     static final long FETCH_GAP_MS = 30_000;
     static final long STALE_WIDEN_FULL_MS = 90 * 60_000;
@@ -53,7 +52,7 @@ public final class MexcFeed {
     private static final ExecutorService EXEC = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-mexc"); t.setDaemon(true); return t; });
     private static double price, bid, ask, suspect;
     private static long suspectAtMs;
-    private static long goodAtMs, lastTryMs;
+    private static long goodAtMs, lastTryMs, gotAtMs;
     private static boolean fetching;
     private static String lastError;
     private static String source = "MEXC";
@@ -89,17 +88,23 @@ public final class MexcFeed {
             if (price <= 0) return fetching ? "MEXC: fetching…" + (lastError != null ? " (last try: " + lastError + ")" : "")
                     : lastError != null ? "MEXC: unavailable (" + lastError + ")" : "MEXC: no price yet";
             long age = System.currentTimeMillis() - goodAtMs;
-            String s = ("MEXC".equals(source) ? "MEXC mid " : source + " mid (fallback: MEXC unreachable) ") + fmt(price) + (bid > 0 ? "  (bid " + fmt(bid) + " / ask " + fmt(ask) + ")" : "") + "  ·  " + (age / 1000) + "s ago";
+            String s = ("MEXC".equals(source) ? "MEXC mid " : source + " mid (MEXC direct unreachable) ") + fmt(price)
+                    + (bid > 0 ? "  (bid " + fmt(bid) + " / ask " + fmt(ask) + ")" : "") + "  ·  received "
+                    + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT).format(new java.util.Date(gotAtMs)) + ", price " + (age / 1000) + "s old"
+                    + (fetching ? "  ·  refreshing…" : lastError != null ? "  ·  last try: " + lastError : "");
             return age > FRESH_MS ? s + "  — STALE · defensive spread ×" + new BigDecimal(wideningFactor(age), new MathContext(2)).stripTrailingZeros().toPlainString() : s;
         }
     }
     private static String fmt(double v) { return new BigDecimal(v, new MathContext(6)).stripTrailingZeros().toPlainString(); }
 
     /** Rate-limited background refresh — safe to call from any thread, every tick. */
-    public static void refreshAsync() {
+    public static void refreshAsync() { refresh(false); }
+    /** The Refresh button: fetch now unless a fetch is already running (no 30 s gap). */
+    public static void refreshNow() { refresh(true); }
+    private static void refresh(boolean force) {
         synchronized (LOCK) {
             long now = System.currentTimeMillis();
-            if (fetching || now - lastTryMs < FETCH_GAP_MS) return;
+            if (fetching || (!force && now - lastTryMs < FETCH_GAP_MS)) return;
             fetching = true; lastTryMs = now;
         }
         EXEC.execute(() -> { try { fetchOnce(); } finally { synchronized (LOCK) { fetching = false; } } });
@@ -123,37 +128,41 @@ public final class MexcFeed {
             return;
         } catch (Exception e) { errs.append("MEXC ").append(why(e)); }
         try {
-            double[] r = parseXt(httpGet(XT_URL));
-            if (r == null) throw new IOException("no XT.COM book");
+            JSONObject t;
+            try { t = httpGet(GECKO_MEXC_URL); }
+            catch (IOException e) { t = httpGetIpv4(GECKO_MEXC_URL); }   // a network with broken IPv6 (the S10+'s) stalls on AAAA
             long now = System.currentTimeMillis();
-            accept(r[0], r[1], now, now, "XT.COM");
-            return;
-        } catch (Exception e) { errs.append("; XT.COM ").append(why(e)); }
-        try {
-            long now = System.currentTimeMillis();
-            double[] r = parseGecko(httpGet(GECKO_URL), now);
-            if (r == null) throw new IOException("no CoinGecko price");
-            accept(r[0], r[1], now, (long) r[2], "CoinGecko");
-            return;
-        } catch (Exception e) { errs.append("; CoinGecko ").append(why(e)); }
+            double[] r = parseGeckoMexc(t, now);
+            if (r == null) throw new IOException("no fresh MEXC ticker on CoinGecko");
+            String err = accept(r[0], r[1], now, (long) r[2], "MEXC via CoinGecko");
+            if (err == null) return;
+            errs.append("; via CoinGecko ").append(err);
+        } catch (Exception e) { errs.append("; via CoinGecko ").append(why(e)); }
         synchronized (LOCK) { lastError = errs.toString(); }
     }
     private static String why(Exception e) { return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(); }
 
-    /** XT.COM v4 depth → {bid, ask} at the 100-USDT depth level, or null (bad answer). Pure, for tests. */
-    static double[] parseXt(JSONObject d) {
-        if (d == null || d.optInt("rc", -1) != 0) return null;
-        JSONObject r = d.optJSONObject("result");
-        if (r == null) return null;
-        return new double[]{effectiveLevel(r.optJSONArray("bids")), effectiveLevel(r.optJSONArray("asks"))};
+    /** CoinGecko's MEXC MINIMA/USDT ticker → {bid, ask, dataAtMs}: MEXC's last trade ± half MEXC's bid-ask spread, dated by
+     *  CoinGecko's fetch (a future stamp counts as now). Null unless the MEXC/USDT row is there and not stale/anomalous. Pure. */
+    static double[] parseGeckoMexc(JSONObject d, long nowMs) {
+        JSONArray ts = d == null ? null : d.optJSONArray("tickers");
+        if (ts == null) return null;
+        for (int i = 0; i < ts.length(); i++) {
+            JSONObject t = ts.optJSONObject(i);
+            JSONObject m = t == null ? null : t.optJSONObject("market");
+            if (m == null || !"mxc".equals(m.optString("identifier")) || !"USDT".equals(t.optString("target"))) continue;
+            if (t.optBoolean("is_stale", false) || t.optBoolean("is_anomaly", false)) return null;
+            double last = t.optDouble("last", 0), sp = t.optDouble("bid_ask_spread_percentage", -1);
+            long at = isoMs(t.optString("last_fetch_at", ""));
+            if (!(last > 0) || !(sp >= 0) || at <= 0) return null;
+            double half = last * sp / 200;
+            return new double[]{last - half, last + half, Math.min(at, nowMs)};
+        }
+        return null;
     }
-    /** CoinGecko simple price → {mid, mid, dataAtMs}, or null. A future timestamp counts as now. Pure, for tests. */
-    static double[] parseGecko(JSONObject d, long nowMs) {
-        JSONObject m = d == null ? null : d.optJSONObject("minima");
-        if (m == null) return null;
-        double p = m.optDouble("usd", 0); long at = m.optLong("last_updated_at", 0) * 1000;
-        if (!(p > 0) || at <= 0) return null;
-        return new double[]{p, p, Math.min(at, nowMs)};
+    private static long isoMs(String s) {
+        try { return new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", java.util.Locale.ROOT).parse(s).getTime(); }
+        catch (Exception e) { return 0; }
     }
 
     /** Apply one read (bid, ask) with AtomiX's sanity rules. Returns the error, or null when the price was taken. */
@@ -176,7 +185,7 @@ public final class MexcFeed {
                 else { suspect = m; if (nowMs - suspectAtMs < CONFIRM_MS) err = "confirming jump " + fmt(price) + "→" + fmt(m); }
             }
             if (err != null) { lastError = err; return err; }
-            suspect = 0; price = m; bid = b; ask = a; goodAtMs = Math.min(nowMs, dataAtMs); lastError = null; source = src;
+            suspect = 0; price = m; bid = b; ask = a; goodAtMs = Math.min(nowMs, dataAtMs); gotAtMs = nowMs; lastError = null; source = src;
             return null;
         }
     }
@@ -200,6 +209,35 @@ public final class MexcFeed {
     /** Test hook: forget everything. */
     static void reset() { synchronized (LOCK) { price = bid = ask = suspect = 0; goodAtMs = lastTryMs = suspectAtMs = 0; lastError = null; source = "MEXC"; } }
     static String source() { synchronized (LOCK) { return source; } }
+    static String lastError() { synchronized (LOCK) { return lastError; } }
+
+    /** GET over IPv4 only, with SNI and full hostname verification (HTTP/1.0: no chunking). For networks whose IPv6 is
+     *  broken but still advertised, where the default client spends every timeout on AAAA addresses. */
+    static JSONObject httpGetIpv4(String u) throws IOException {
+        URL url = new URL(u); String host = url.getHost();
+        IOException last = new IOException("no IPv4 address for " + host);
+        for (java.net.InetAddress a : java.net.InetAddress.getAllByName(host)) {
+            if (!(a instanceof java.net.Inet4Address)) continue;
+            try (java.net.Socket raw = new java.net.Socket()) {
+                raw.connect(new java.net.InetSocketAddress(a, 443), 10_000); raw.setSoTimeout(10_000);
+                javax.net.ssl.SSLSocket s = (javax.net.ssl.SSLSocket) ((javax.net.ssl.SSLSocketFactory) javax.net.ssl.SSLSocketFactory.getDefault()).createSocket(raw, host, 443, true);
+                javax.net.ssl.SSLParameters p = s.getSSLParameters(); p.setEndpointIdentificationAlgorithm("HTTPS"); s.setSSLParameters(p);
+                s.startHandshake();
+                s.getOutputStream().write(("GET " + url.getFile() + " HTTP/1.0\r\nHost: " + host + "\r\nAccept: application/json\r\nUser-Agent: Dexicon\r\n\r\n").getBytes("UTF-8"));
+                ByteArrayOutputStream bos = new ByteArrayOutputStream(); byte[] buf = new byte[4096]; int n;
+                InputStream in = s.getInputStream();
+                while ((n = in.read(buf)) > 0) { bos.write(buf, 0, n); if (bos.size() > 65536) throw new IOException("reply too large"); }
+                s.close();
+                String r = bos.toString("UTF-8"); int head = r.indexOf("\r\n\r\n");
+                if (!r.startsWith("HTTP/1.") || head < 0) throw new IOException("bad HTTP reply");
+                int code = Integer.parseInt(r.substring(9, 12));
+                if (code < 200 || code >= 300) throw new IOException("HTTP " + code);
+                return new JSONObject(r.substring(head + 4));
+            } catch (IOException e) { last = e; }
+            catch (org.json.JSONException | RuntimeException e) { last = new IOException(e.getMessage()); }
+        }
+        throw last;
+    }
 
     private static JSONObject httpGet(String u) throws IOException {
         HttpURLConnection c = null;
