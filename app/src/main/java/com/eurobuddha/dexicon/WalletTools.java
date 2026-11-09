@@ -32,7 +32,7 @@ final class WalletTools {
                 .setPositiveButton("Consolidate", (d, w) -> com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(act.nodeApi(), tokenid, error -> {
                     // the one node-picked-spend guard: never let the node pick a pool owner coin it must not sign
                     if (error != null) message(act, "Nothing consolidated", error);
-                    else run(act, tokenid, "consolidate tokenid:" + tokenid, "Consolidate " + name);
+                    else run(act, tokenid, "consolidate tokenid:" + tokenid, "Consolidate " + name, walletRow("consolidate", "", name, ""));
                 })).show();
     }
 
@@ -50,7 +50,7 @@ final class WalletTools {
                 .setPositiveButton("Split", (d, w) -> com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(act.nodeApi(), tokenid, error -> {
                     // a self-send lets the node pick the coins too: the same guard applies
                     if (error != null) message(act, "Nothing split", error);
-                    else run(act, tokenid, cmd, "Split " + name);
+                    else run(act, tokenid, cmd, "Split " + name, walletRow("split", amt, name, ""));
                 })).show();
     }
 
@@ -104,7 +104,7 @@ final class WalletTools {
                                     .setPositiveButton("Withdraw", (x, y) -> com.eurobuddha.pandapools.DexiconPools.guardNodePickedSpend(act.nodeApi(), tokenid, error -> {
                                         // send picks the coins: never a pool owner coin it must not sign (same guard as Split)
                                         if (error != null) message(act, "Nothing withdrawn", error);
-                                        else run(act, tokenid, cmd, "Withdraw " + name);
+                                        else run(act, tokenid, cmd, "Withdraw " + name, walletRow("withdraw", a.stripTrailingZeros().toPlainString(), name, addr));
                                     })).create();
                             c.show();
                             android.widget.TextView tv = c.findViewById(android.R.id.message);
@@ -119,7 +119,14 @@ final class WalletTools {
         try { return org.minima.objects.Address.convertMinimaAddress(a).getLength() == 32; } catch (RuntimeException bad) { return false; }
     }
 
-    private static void run(MainActivity act, String tokenid, String cmd, String label) {
+    /** An ACTIVITY row for a wallet action (kind withdraw / consolidate / split); filled in when the post returns. */
+    static JSONObject walletRow(String kind, String amount, String token, String to) {
+        JSONObject r = new JSONObject();
+        try { r.put("kind", kind).put("amount", amount).put("token", token).put("to", to); } catch (Exception ignored) { }
+        return r;
+    }
+
+    private static void run(MainActivity act, String tokenid, String cmd, String label, JSONObject row) {
         act.toast(label + " — signing…");
         SignGate.submit(release -> {
             // AtomiX's wallet lock only now, at the front of the signing queue: never held while waiting behind other signers
@@ -130,6 +137,15 @@ final class WalletTools {
                 release.free(); unlock.run();
                 JSONObject r = j.optJSONObject("response");
                 String id = r == null ? "" : r.optString("txpowid", r.optJSONObject("txpow") == null ? "" : r.optJSONObject("txpow").optString("txpowid", ""));
+                if (row != null && j.optBoolean("status", false)) {   // the wallet history row (ACTIVITY), tracked to its block like a trade
+                    try {
+                        long now = System.currentTimeMillis();
+                        JSONObject ids = ActivityLog.fromPostReply(j, "");
+                        ActivityLog.add(act.db(), row.put("id", ActivityLog.newId("wal_")).put("ts", now).put("postedMs", now)
+                                .put("stage", ActivityLog.POSTED).put("txpowid", id).put("txnid", ids.optString("txnid"))
+                                .put("outs", ids.optJSONArray("outs")).put("ins", ids.optJSONArray("ins")).put("tokenid", tokenid));
+                    } catch (Exception ignored) { }
+                }
                 act.refreshBalances();
                 message(act, label + " submitted", "It is final after the next block; ASSETS updates when it confirms."
                         + (id.isEmpty() ? "" : "\n\ntxpow " + id));

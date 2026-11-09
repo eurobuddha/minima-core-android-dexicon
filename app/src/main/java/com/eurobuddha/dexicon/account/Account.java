@@ -32,6 +32,10 @@ public final class Account {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
     private final VirtualWallet wallet;
+    private Context app;
+    private SharedPreferences sp;
+    private String seenKey;
+    private long scannedAt;
     private final AccountKeys keys;
     private volatile long trackedAt;
     private static final long RETRACK_MS = 10 * 60_000L;   // a companion can downgrade our script rows (newscript replaces)
@@ -56,10 +60,14 @@ public final class Account {
         // cached key 0 is this account's key 0), else an upgraded account would lose every address past index 0.
         final AccountKeys k0 = keys;
         migrateKeyCount(sp, countKey, () -> k0.publicKey(0));
+        final String ownKey = "own_outs_" + fp[0];
         VirtualWallet.Store store = new VirtualWallet.Store() {
             public int keyCount() { return sp.getInt(countKey, 0); }
             public void setKeyCount(int n) { if (!sp.edit().putInt(countKey, n).commit()) throw new IllegalStateException("could not save key count"); }
+            public void ownOutputs(java.util.Collection<String> ids) { sp.edit().putString(ownKey, VirtualWallet.boundedAdd(sp.getString(ownKey, "[]"), ids)).commit(); }
+            public boolean isOwnOutput(String id) { return sp.getString(ownKey, "").toLowerCase(java.util.Locale.ROOT).contains("\"" + id.toLowerCase(java.util.Locale.ROOT) + "\""); }
         };
+        this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
         wallet = new VirtualWallet(cmd -> blocking(current, cmd), keys, store,
                 new HashSet<>(Arrays.asList(com.eurobuddha.atomix.swap.MinimaHtlc.HTLC_ADDRESSES)));
@@ -167,6 +175,7 @@ public final class Account {
                     if (knownAddresses == null) refreshKnown();
                     reply = wallet.handle(command, guard == null ? null : () -> onMain(guard));
                     if (command.trim().startsWith("newaddress")) refreshKnown();
+                    if (command.trim().startsWith("balance") && reply != null) scanIncoming();
                     passThrough = reply == null;
                 }
             } catch (Exception e) { error = e.getMessage() == null ? e.toString() : e.getMessage(); }
@@ -181,6 +190,40 @@ public final class Account {
             }
             MAIN.post(() -> { if (cb == null) return; if (err != null) cb.onError(err); else cb.onResult(r); });
         });
+    }
+
+    /** Every 30 s at most, on the worker (after a balance read): account coins never seen before that are NOT outputs
+     *  of a transaction this account signed arrived from outside — one "Received" row each in ACTIVITY. The first scan
+     *  only records a baseline (no backfill: earlier coins can't be told apart). Best effort: never fails the caller. */
+    private void scanIncoming() {
+        long now = System.currentTimeMillis();
+        if (now - scannedAt < 30_000L || app == null) return;
+        scannedAt = now;
+        try {
+            JSONObject r = wallet.handle("coins relevant:true");
+            if (r == null || !r.optBoolean("status")) return;
+            org.json.JSONArray rows = r.optJSONArray("response");
+            if (rows == null) return;
+            String prev = sp.getString(seenKey, null);
+            java.util.List<String> ids = new java.util.ArrayList<>();
+            for (int i = 0; i < rows.length(); i++) ids.add(VirtualWallet.norm(rows.getJSONObject(i).optString("coinid")));
+            sp.edit().putString(seenKey, VirtualWallet.boundedAdd(prev == null ? "[]" : prev, ids)).commit();
+            if (prev == null) return;
+            String seen = prev.toLowerCase(java.util.Locale.ROOT);
+            com.eurobuddha.dexicon.DexDb db = null;
+            for (int i = 0; i < rows.length(); i++) {
+                JSONObject c = rows.getJSONObject(i);
+                String id = VirtualWallet.norm(c.optString("coinid"));
+                if (id.isEmpty() || seen.contains("\"" + id.toLowerCase(java.util.Locale.ROOT) + "\"") || wallet.isOwnOutput(id)) continue;
+                if (db == null) db = new com.eurobuddha.dexicon.DexDb(app);
+                String tok = c.optString("tokenid");
+                String name = "0x00".equals(tok) ? "MINIMA" : tok.equalsIgnoreCase(com.eurobuddha.dexicon.fill.Tokens.MXUSD()) ? "MxUSD" : tok;
+                com.eurobuddha.dexicon.ActivityLog.add(db, new JSONObject().put("id", "recv_" + id).put("kind", "received")
+                        .put("amount", c.optString("tokenamount", c.optString("amount"))).put("token", name).put("tokenid", tok)
+                        .put("to", c.optString("address")).put("ts", now).put("stage", com.eurobuddha.dexicon.ActivityLog.POSTED)
+                        .put("block", c.optLong("created", 0)).put("outs", new org.json.JSONArray().put(c.optString("coinid"))));
+            }
+        } catch (Exception later) { android.util.Log.w("Dexicon", "incoming scan deferred: " + later); }
     }
 
     /** The account's receive address (index 0), full 0x and Mx forms: [0x, Mx]. Computed on the worker. */

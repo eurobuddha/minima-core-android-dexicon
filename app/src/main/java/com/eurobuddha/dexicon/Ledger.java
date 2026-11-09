@@ -138,6 +138,7 @@ public final class Ledger {
 
     /** One ACTIVITY row: headline, steps, proof. */
     public static Item activity(JSONObject a, long chainBlock, long nowMs, TimeZone tz) {
+        if (!a.optString("kind").isEmpty()) return wallet(a, chainBlock, nowMs, tz);
         Item it = new Item();
         String stage = a.optString("stage"), why = MainActivity.here(a.optString("reason", ""));
         boolean buy = "buy".equals(a.optString("side")), maker = "maker".equals(a.optString("role")), fast = ActivityLog.fast(a);
@@ -201,6 +202,52 @@ public final class Ledger {
         it.proof(maker ? "Your order" : "Order", a.optString("orderId"));
         if (fast) it.proof(maker ? "Taker ID" : "Maker's pay-to address", a.optString("counterparty"));
         it.group("Coins you received", "Received", a.optJSONArray("outs"));
+        it.group("Coins spent", "Spent", a.optJSONArray("ins"));
+        return it;
+    }
+
+    /** One wallet row in ACTIVITY: money in (received / deposit) or a wallet action (withdraw, consolidate, split).
+     *  Amounts exactly as the chain gives them; addresses in full. */
+    static Item wallet(JSONObject a, long chainBlock, long nowMs, TimeZone tz) {
+        Item it = new Item();
+        String kind = a.optString("kind"), amt = a.optString("amount"), tok = a.optString("token"), to = a.optString("to");
+        boolean in = "received".equals(kind), failed = ActivityLog.failedTerminal(a), confirmed = ActivityLog.confirmed(a, chainBlock);
+        long ts = a.optLong("ts");
+        it.id = "act_" + a.optString("id");
+        it.sortMs = ts;
+        it.live = !ActivityLog.settled(a, chainBlock);
+        it.icon = failed ? "!" : it.live ? "●" : in ? "↓" : "withdraw".equals(kind) ? "↑" : "≡";
+        it.tone = failed ? Tone.BAD : it.live ? Tone.LIVE : in ? Tone.OK : Tone.DIM;
+        switch (kind) {
+            case "received":    it.title = "Received " + amt + " " + tok; break;
+            case "withdraw":    it.title = (confirmed ? "Withdrew " : "Withdraw ") + amt + " " + tok; break;
+            case "consolidate": it.title = (confirmed ? "Consolidated " : "Consolidate ") + tok; break;
+            case "split":       it.title = "Split " + amt + " " + tok; break;
+            default:            it.title = kind + " " + tok;
+        }
+        it.amount = amt.isEmpty() ? tok : amt + " " + tok;
+        it.chip = ActivityLog.chip(a, chainBlock);
+        it.chipTone = failed ? Tone.BAD : confirmed ? Tone.OK : Tone.LIVE;
+        it.sub = dayTime(ts, tz) + " · wallet" + (it.live ? " · " + Util.ago(nowMs - ts).replace(" ago", "") + " elapsed" : "");
+        long block = a.optLong("block", 0), depth = ActivityLog.depth(a, chainBlock);
+        if (in) it.step(Mark.OK, hms(ts, tz), "Arrived in your Trading Account" + (block > 0 ? " (block " + block + ")" : ""));
+        else {
+            it.step(Mark.OK, hms(ts, tz), "Signed by your Trading Account and posted");
+            if (block > 0) it.step(Mark.OK, "", "In block " + block);
+            else if (!failed) { String w = ActivityLog.waiting(a, chainBlock); it.step(Mark.WAIT, "", Character.toUpperCase(w.charAt(0)) + w.substring(1)); }
+        }
+        if (block > 0 && !failed) {
+            if (depth >= ActivityLog.CONFIRM_BLOCKS) it.step(Mark.OK, "", "Confirmed — " + ActivityLog.confirmationText(depth));
+            else it.step(Mark.WAIT, "", "Confirming — " + ActivityLog.confirmationText(depth) + " of " + ActivityLog.CONFIRM_BLOCKS);
+        }
+        String why = MainActivity.here(a.optString("reason", ""));
+        if (ActivityLog.DROPPED.equals(a.optString("stage"))) it.step(Mark.WARN, "", "Dropped — " + why);
+        if (ActivityLog.FAILED.equals(a.optString("stage"))) it.step(Mark.WARN, "", "Failed — " + why);
+        it.proof("Transaction (txpow)", a.optString("txpowid"));
+        it.proof("Transaction id", a.optString("txnid"));
+        if (!to.isEmpty()) it.proof(in ? "Received at" : "Sent to", to);
+        it.proof("Token", a.optString("tokenid"));
+        it.group(in ? "Coin received" : "Coins created", in ? "Coin" : "Created", a.optJSONArray("outs"));
         it.group("Coins spent", "Spent", a.optJSONArray("ins"));
         return it;
     }

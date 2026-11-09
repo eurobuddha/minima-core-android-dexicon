@@ -57,6 +57,10 @@ public final class VirtualWallet {
     public interface Store {
         int keyCount();
         void setKeyCount(int n);
+        /** Output coin ids of every transaction this account signed: a later account coin NOT among them arrived
+         *  from outside (a deposit) — the wallet history's "Received" rows. */
+        default void ownOutputs(java.util.Collection<String> coinIds) {}
+        default boolean isOwnOutput(String coinId) { return false; }
     }
 
     /** Wall clock (tests inject one). */
@@ -753,6 +757,11 @@ public final class VirtualWallet {
                 found.put(keys.publicKey(k));
             }
         }
+        if (!toSign.isEmpty()) {   // our key is in this transaction: its outputs are never "received from outside"
+            List<String> outs = new ArrayList<>();
+            for (Coin c : t.getAllOutputs()) outs.add(norm(c.getCoinID().to0xString()));
+            store.ownOutputs(outs);
+        }
         JSONObject resp = new JSONObject().put("keys", found);
         if (nonsimple.length() > 0) resp.put("nonsimple", nonsimple);
         if (notfound.length() > 0) resp.put("notfound", notfound);
@@ -1008,6 +1017,18 @@ public final class VirtualWallet {
         if (a.toUpperCase().startsWith("MX")) return org.minima.objects.Address.convertMinimaAddress(a).to0xString();
         return a;
     }
+
+    /** A JSON array of ids plus {@code add}, oldest dropped past 2000 (enough for any live wallet's history window). */
+    public static String boundedAdd(String json, java.util.Collection<String> add) {
+        java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
+        try { org.json.JSONArray a = new org.json.JSONArray(json); for (int i = 0; i < a.length(); i++) set.add(a.getString(i)); } catch (Exception fresh) { }
+        for (String id : add) if (id != null && !id.isEmpty()) { set.remove(id); set.add(id); }
+        java.util.List<String> l = new java.util.ArrayList<>(set);
+        return new org.json.JSONArray(l.subList(Math.max(0, l.size() - 2000), l.size())).toString();
+    }
+
+    /** True when {@code coinId} is an output of a transaction this account signed. */
+    public boolean isOwnOutput(String coinId) { return store.isOwnOutput(norm(coinId)); }
 
     static String norm(String s) {
         if (s == null) return "";
