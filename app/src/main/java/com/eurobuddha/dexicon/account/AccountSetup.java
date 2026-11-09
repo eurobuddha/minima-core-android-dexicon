@@ -32,22 +32,40 @@ public final class AccountSetup {
     public interface Done { void ready(); }
     private static NodeApi lastNode;
 
-    public static void show(Activity a, NodeApi node, Done done) {
+    public static void show(Activity a, NodeApi node, Done done) { show(a, node, done, false, null); }
+
+    /** {@code restoreOnly}: the account on this phone was lost while {@code open} positions remain locked to its keys —
+     *  only RESTORE of the same words is offered (a new account could never settle them). */
+    public static void show(Activity a, NodeApi node, Done done, boolean restoreOnly, String open) {
         if (node != null) lastNode = node; else node = lastNode;
         final NodeApi n = node;
+        if (restoreOnly) {
+            new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Restore your Trading Account")
+                    .setView(pad(a, text(a, "This phone's Trading Account can no longer be unlocked, and it still has " + open
+                            + ". Only its own 24 words can settle them: restore them now. (The locked copy is kept.)", false)))
+                    .setCancelable(false).setPositiveButton("Restore 24 words", (d, w) -> restore(a, done)).show();
+            return;
+        }
         boolean tradedBefore = !a.getSharedPreferences("dexicon_doors", Context.MODE_PRIVATE).getString("swap_pk", "").isEmpty();
         TextView body = text(a, "Dexicon keeps its own Trading Account and signs every trade itself. Your Minima node only "
                 + "reads the chain and posts what Dexicon has already signed — so no other app on this phone can touch "
                 + "these funds, and Dexicon needs no ADMIN rights.\n\nMove funds in from your Minima wallet with "
                 + "RECEIVE; send them back any time."
-                + (tradedBefore ? "\n\n⚠ You have swapped with AtomiX here before: the Trading Account has its OWN Ethereum "
-                + "wallet. Move any ETH / USDT out of the old AtomiX Ethereum wallet first (① MxUSD › Wallet › Send) — after "
-                + "this step Dexicon shows the new one." : ""), false);
+                + (tradedBefore ? "\n\n⚠ You have swapped with AtomiX here before. The Trading Account has its OWN Ethereum "
+                + "wallet: after this step Dexicon shows the new one, and any ETH / USDT left in the old AtomiX Ethereum wallet "
+                + "is reachable only from the standalone AtomiX app or the AtomiX MiniDapp on your node (both derive it from "
+                + "your node's seed). Choose NOT NOW and move it out first if you need to." : ""), false);
         new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Your Trading Account").setView(pad(a, body)).setCancelable(false)
                 .setPositiveButton("Create new", (d, w) -> create(a, done))
                 .setNeutralButton("Restore 24 words", (d, w) -> restore(a, done))
                 .setNegativeButton("Use node seed", (d, w) -> fromNode(a, n, done))
                 .show();
+        if (tradedBefore) {
+            new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Before you continue")
+                    .setMessage("Move any ETH / USDT out of the old AtomiX Ethereum wallet first? You can come back to this step any time.")
+                    .setPositiveButton("Continue", null)
+                    .setNegativeButton("Not now", (d, w) -> a.finish()).show();
+        }
     }
 
     private static void create(Activity a, Done done) {
@@ -113,7 +131,7 @@ public final class AccountSetup {
     }
 
 
-    /** Show the 24 words again (phrase mode), with a copy button. */
+    /** Show the 24 words again (phrase mode). No copy: they are written down, never put on a clipboard. */
     public static void reveal(Activity a) {
         try {
             String p = new AccountVault(a).revealPhrase();
@@ -142,7 +160,7 @@ public final class AccountSetup {
         TextView t = new TextView(c);
         t.setText(s); t.setTextColor(Design.TEXT()); t.setTextSize(mono ? 15 : 14);
         t.setTypeface(mono ? Design.mono() : Design.sans(), Typeface.NORMAL);
-        t.setTextIsSelectable(mono);
+        t.setTextIsSelectable(false);   // the 24 words are never selectable / copyable — write them down
         t.setPadding(0, Design.dp(c, 6), 0, Design.dp(c, 6));
         return t;
     }

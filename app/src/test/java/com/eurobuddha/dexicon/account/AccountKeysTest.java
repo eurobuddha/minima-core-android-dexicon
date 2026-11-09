@@ -112,6 +112,22 @@ public class AccountKeysTest {
         catch (IllegalStateException expected) { assertTrue(expected.getMessage().contains("does not match")); }
     }
 
+    @Test public void aReplacedSeedNeverInheritsTheOldAddresses() {
+        Map<Integer, String> shared = new HashMap<>();   // one prefs file, keyed the way Account keys it: by fingerprint
+        String other = "ZOO ZONE ZERO YOUTH YOUNG YELLOW YEAR YARD WRONG WRITE WRIST WRESTLE WRECK WRAP WORTH WORRY WORLD "
+                + "WORK WORD WOOL WOOD WOMAN WOLF WITNESS";
+        AccountKeys a = AccountKeys.fromPhrase(PHRASE, new Mem(), null), b = AccountKeys.fromPhrase(other, new Mem(), null);
+        assertNotEquals(a.fingerprint(), b.fingerprint());
+        assertEquals(16, a.fingerprint().length());
+        java.util.function.Function<AccountKeys, AccountKeys.PubCache> keyed = k -> new AccountKeys.PubCache() {
+            public String get(int i) { return shared.get((k.fingerprint() + "_" + i).hashCode()); }
+            public void put(int i, String p) { shared.put((k.fingerprint() + "_" + i).hashCode(), p); }
+        };
+        String addrA = AccountKeys.fromPhrase(PHRASE, new Mem(), keyed.apply(a)).address(0);
+        String addrB = AccountKeys.fromPhrase(other, new Mem(), keyed.apply(b)).address(0);
+        assertNotEquals("a new account must never show the lost account's address", addrA, addrB);
+    }
+
     @Test public void seedRandomMatchesTheNodeFormula() {
         AccountKeys k = AccountKeys.fromPhrase(PHRASE, new Mem(), null);
         String a = k.seedRandom("ethbridge"), b = k.seedRandom("ethbridge"), c = k.seedRandom("dexicon-identity-v1");

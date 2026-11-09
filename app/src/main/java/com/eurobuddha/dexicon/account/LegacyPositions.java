@@ -26,6 +26,9 @@ public final class LegacyPositions {
 
     public static boolean exist(Context c) { return describe(c) != null; }
 
+    /** Open positions whoever signed them (for a LOST account: only its own words may settle them). */
+    public static String describeAny(Context c) { return scan(c.getApplicationContext()); }
+
     public static void invalidate() { cachedAt = 0; }
 
     private static String scan(Context c) {

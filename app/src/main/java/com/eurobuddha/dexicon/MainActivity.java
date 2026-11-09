@@ -253,16 +253,31 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     /** First run: set up the Trading Account — unless an earlier Dexicon still has node-key positions here, which settle
      *  the old way first (owner, 9 Nov: finish before upgrading). */
     private boolean offering, legacyNoticeShown;
+    private int lockedTries;
+    private final Runnable retryOffer = this::offerAccount;
     private void offerAccount() {
-        if (offering || com.eurobuddha.dexicon.account.Account.get(this, node) != null) return;
+        if (offering || com.eurobuddha.dexicon.account.Account.get(this, node) != null) { lockedTries = 0; return; }
         if (com.eurobuddha.dexicon.account.Account.exists(this)) {   // vault present but the keystore is busy: retry, delete nothing
-            toast("Your Trading Account is temporarily locked — Dexicon retries in a moment.");
-            ui.postDelayed(this::offerAccount, 5_000);
+            ui.removeCallbacks(retryOffer);
+            if (++lockedTries <= 6) { toast("Your Trading Account is temporarily locked — Dexicon retries in a moment."); ui.postDelayed(retryOffer, 5_000); return; }
+            offering = true;
+            track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Trading Account locked")
+                    .setMessage("This phone's keystore will not unlock your Trading Account. You can restore it from its 24 words "
+                            + "(the locked copy is kept, never deleted).")
+                    .setPositiveButton("Restore", (d, w) -> { offering = false; com.eurobuddha.dexicon.account.Account.quarantineForRestore(this); offerAccount(); })
+                    .setNegativeButton("Later", (d, w) -> { offering = false; lockedTries = 0; }).show());
             return;
         }
         offering = true;
+        if (com.eurobuddha.dexicon.account.Account.everCreated(this)) {
+            // The account existed here and was lost: its positions are locked to ITS keys — only the same words can settle
+            // them, so a brand-new account is not offered while any remain.
+            String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(this);
+            com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady, open != null, open);
+            return;
+        }
         String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);
-        if (legacy == null) { com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady); return; }
+        if (legacy == null) { com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady, false, null); return; }
         offering = false;
         if (legacyNoticeShown) return;
         legacyNoticeShown = true;
@@ -281,12 +296,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         // (doors, maker, pools) boots on the Trading Account.
         getSharedPreferences("dexicon_doors", MODE_PRIVATE).edit().remove("swap_addr").remove("swap_pk").commit();
         com.eurobuddha.atomix.IdentityWatch.forceNext();
-        Intent again = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 0x7a11, again,
-                android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_CANCEL_CURRENT);
-        ((android.app.AlarmManager) getSystemService(ALARM_SERVICE)).set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 800, pi);
         toast("Trading Account ready — Dexicon restarts once.");
-        ui.postDelayed(() -> { stopService(new Intent(this, MakerService.class)); android.os.Process.killProcess(android.os.Process.myPid()); }, 400);
+        stopService(new Intent(this, MakerService.class));
+        com.eurobuddha.dexicon.account.RestartActivity.restart(this);
     }
 
     private void onPaired() {

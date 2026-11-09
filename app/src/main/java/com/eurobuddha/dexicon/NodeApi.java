@@ -155,8 +155,16 @@ public class NodeApi {
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         // Trading Account: wallet + txn verbs are answered in-app (VirtualWallet); only signed postfrom reaches the node.
         String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
-        if (com.eurobuddha.dexicon.account.VirtualWallet.handles(verb) && !com.eurobuddha.dexicon.account.Account.chainRead(command)) {
+        if (com.eurobuddha.dexicon.account.VirtualWallet.handles(verb)) {
             com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);
+            if (com.eurobuddha.dexicon.account.Account.chainRead(command)) {          // a pure chain read: never queued
+                if (acct == null) { cmdDirect(command, guard, timeoutMs, cb); return; }
+                cmdDirect(command, guard, timeoutMs, new Cb() {
+                    public void onResult(JSONObject j) { acct.noticeLocks(command, j); if (cb != null) cb.onResult(j); }
+                    public void onError(String m) { if (cb != null) cb.onError(m); }
+                });
+                return;
+            }
             if (acct != null) {
                 queuedCommands++;   // the account may still be posting: never release the transport underneath it
                 acct.submit(this, command, guard, timeoutMs, new Cb() {
@@ -165,9 +173,9 @@ public class NodeApi {
                 });
                 return;
             }
-            // No account yet. Positions an earlier Dexicon signed with the NODE's keys settle the old way (ADMIN) until
-            // they are finished; otherwise never fall back to the node's wallet or seed. Chain reads still pass.
-            if (!verb.equals("coins") && !com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext)) {
+            // No account loaded. Positions an earlier Dexicon signed with the NODE's keys settle the old way (ADMIN) until
+            // they are finished; otherwise never fall back to the node's wallet, seed or unbounded relevant set.
+            if (!com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext)) {
                 if (cb != null) mMain.post(() -> cb.onError(ERR_NO_ACCOUNT)); return;
             }
         }

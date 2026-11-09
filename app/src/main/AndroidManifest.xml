@@ -57,6 +57,14 @@
 
         <service android:name=".NodeTransportService" android:exported="false"
             android:process=":nodeipc" />
+        <!-- One restart after the Trading Account is created: its own process, so the relaunch survives the main one. -->
+        <activity
+            android:name=".account.RestartActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:process=":phoenix" />
 
         <service
             android:name=".maker.MakerService"

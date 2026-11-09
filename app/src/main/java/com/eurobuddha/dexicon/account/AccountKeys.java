@@ -73,6 +73,12 @@ public final class AccountKeys {
         return new AccountKeys(new MiniData(baseHex), uses, cache);
     }
 
+    /** A public fingerprint of THIS account's seed (16 hex chars of hash(hash(base))): every cache keyed by it can never
+     *  hand one account's keys or addresses to another (a replaced or restored vault). Reveals nothing about the seed. */
+    public String fingerprint() {
+        return Crypto.getInstance().hashObjects(new MiniString("fingerprint"), Crypto.getInstance().hashObject(base)).to0xString().substring(2, 18);
+    }
+
     /** Deterministic per-modifier secret, the in-app {@code seedrandom}: same formula as the node's, on our base. */
     public String seedRandom(String modifier) {
         MiniData mod = MiniData.getMiniDataVersion(new MiniString(modifier));

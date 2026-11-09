@@ -51,10 +51,10 @@ public final class AccountVault {
     public boolean exists() { return !prefs.getString(P_CT, "").isEmpty(); }
     public String mode() { return prefs.getString(P_MODE, ""); }
     /** Record the durable marker for a vault that predates it (called after a successful open). */
-    void markCreated() { if (!everCreated()) marker.edit().putLong(P_CREATED, System.currentTimeMillis()).commit(); }
+    void markCreated() { if (marker.getLong(P_CREATED, 0) <= 0) marker.edit().putLong(P_CREATED, System.currentTimeMillis()).commit(); }
 
     /** A Trading Account was created on this phone at some point (never cleared, not even by a quarantine). */
-    public boolean everCreated() { return marker.getLong(P_CREATED, 0) > 0; }
+    public boolean everCreated() { return exists() || marker.getLong(P_CREATED, 0) > 0; }
     /** The minimum leaf for every key: set when the account was restored or node-derived; 0 for a brand-new phrase. */
     public int restoreFloor() { return prefs.getInt(P_FLOOR, 0); }
 
@@ -110,10 +110,12 @@ public final class AccountVault {
 
     /** Only after {@link Lost}: move the ciphertext aside (kept, never deleted) so setup offers RESTORE 24 WORDS. */
     void quarantine() {
+        markCreated();   // a vault that predates the marker must keep it after quarantine
         SharedPreferences q = app.getSharedPreferences(QUARANTINE, Context.MODE_PRIVATE);
         String t = "_" + System.currentTimeMillis();
         q.edit().putString(P_MODE + t, prefs.getString(P_MODE, "")).putString(P_CT + t, prefs.getString(P_CT, ""))
                 .putString(P_IV + t, prefs.getString(P_IV, "")).putString(P_ALIAS + t, prefs.getString(P_ALIAS, KEY_ALIAS)).commit();
+        if (!q.getString(P_CT + t, "").equals(prefs.getString(P_CT, ""))) return;   // the copy did not land: keep the vault
         prefs.edit().remove(P_CT).remove(P_IV).remove(P_MODE).remove(P_ALIAS).remove(P_FLOOR).commit();
     }
 
@@ -130,7 +132,7 @@ public final class AccountVault {
                 .putString(P_IV, Base64.encodeToString(c.getIV(), Base64.NO_WRAP))
                 .putString(P_CT, Base64.encodeToString(ct, Base64.NO_WRAP)).commit();
         if (!ok) throw new IllegalStateException("Could not save the Trading Account.");
-        if (!everCreated()) marker.edit().putLong(P_CREATED, System.currentTimeMillis()).commit();
+        markCreated();
     }
 
     /** Keys are created only while storing a NEW vault — reading never creates one (a missing key = Lost). */

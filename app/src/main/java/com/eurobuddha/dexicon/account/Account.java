@@ -41,17 +41,20 @@ public final class Account {
     private Account(Context c, String secret, String mode, int restoreFloor, NodeApi node) {
         Context app = c.getApplicationContext();
         SharedPreferences sp = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        final String[] fp = {""};   // filled once the keys exist: the cache below is keyed by the seed's fingerprint
         AccountKeys.PubCache cache = new AccountKeys.PubCache() {
-            // keyed by tree shape: a cached key of another shape must never be mistaken for this one
-            public String get(int i) { return sp.getString("pub" + AccountKeys.KEYS_PER_LEVEL + "x" + AccountKeys.LEVELS + "_" + i, null); }
-            public void put(int i, String p) { sp.edit().putString("pub" + AccountKeys.KEYS_PER_LEVEL + "x" + AccountKeys.LEVELS + "_" + i, p).commit(); }
+            private String key(int i) { return "pub" + AccountKeys.KEYS_PER_LEVEL + "x" + AccountKeys.LEVELS + "_" + fp[0] + "_" + i; }
+            public String get(int i) { return fp[0].isEmpty() ? null : sp.getString(key(i), null); }
+            public void put(int i, String p) { if (!fp[0].isEmpty()) sp.edit().putString(key(i), p).commit(); }
         };
         KeyUses uses = new PrefsKeyUses(app);
         keys = AccountVault.MODE_NODE.equals(mode) ? AccountKeys.fromBase(secret, uses, cache) : AccountKeys.fromPhrase(secret, uses, cache);
         keys.setRestoreFloor(restoreFloor);
+        fp[0] = keys.fingerprint();
+        final String countKey = "keys_" + fp[0];
         VirtualWallet.Store store = new VirtualWallet.Store() {
-            public int keyCount() { return sp.getInt("keys", 0); }
-            public void setKeyCount(int n) { if (!sp.edit().putInt("keys", n).commit()) throw new IllegalStateException("could not save key count"); }
+            public int keyCount() { return sp.getInt(countKey, 0); }
+            public void setKeyCount(int n) { if (!sp.edit().putInt(countKey, n).commit()) throw new IllegalStateException("could not save key count"); }
         };
         current = node;
         wallet = new VirtualWallet(cmd -> blocking(current, cmd), keys, store,
@@ -66,9 +69,10 @@ public final class Account {
             if (instance != null) return instance;
             AccountVault v = new AccountVault(c);
             if (!v.exists()) return null;
+            if (System.currentTimeMillis() - lockedAt < 5_000L) return null;   // backoff: never decrypt on every command
             String secret;
             try { secret = v.secret(); }
-            catch (AccountVault.Unavailable later) { return null; }            // keystore busy: retry later, delete nothing
+            catch (AccountVault.Unavailable later) { lockedAt = System.currentTimeMillis(); return null; }   // retry later, delete nothing
             catch (AccountVault.Lost lost) { v.quarantine(); return null; }    // key gone for good: setup offers RESTORE
             v.markCreated();
             instance = new Account(c, secret, v.mode(), v.restoreFloor(), node);
@@ -78,7 +82,8 @@ public final class Account {
 
     public static boolean exists(Context c) { return instance != null || new AccountVault(c).exists(); }
 
-    private static volatile java.util.Set<String> knownAddresses = java.util.Collections.emptySet();
+    private static volatile java.util.Set<String> knownAddresses;   // null until the worker has listed them
+    private static volatile long lockedAt;
 
     /** A {@code coins} read that names no account address and is not wallet-scoped (a coinid, a state search, a foreign
      *  address): straight to the node on the caller's thread — it must never wait behind a post on the account worker. */
@@ -89,12 +94,14 @@ public final class Account {
             if (p.containsKey("relevant") || p.containsKey("sendable")) return false;
             Object a = p.get("address");
             if (a == null) return p.containsKey("coinid") || p.containsKey("state") || p.containsKey("tokenid");
-            String n = VirtualWallet.norm(String.valueOf(a));
-            if (knownAddresses.contains(n)) return false;
-            for (String h : com.eurobuddha.atomix.swap.MinimaHtlc.HTLC_ADDRESSES) if (VirtualWallet.norm(h).equals(n)) return false;
-            return true;
+            java.util.Set<String> mine = knownAddresses;
+            if (mine == null) return false;                                    // not known yet: the account decides
+            return !mine.contains(VirtualWallet.norm(String.valueOf(a)));      // foreign (book, pool, HTLC): straight through
         } catch (RuntimeException unparsable) { return false; }
     }
+
+    /** The user chose RESTORE for a vault the keystore will not unlock: move it aside (kept), so setup can restore. */
+    public static void quarantineForRestore(Context c) { synchronized (Account.class) { if (instance == null) new AccountVault(c).quarantine(); } }
 
     /** A Trading Account was created on this phone at some point — from then on Dexicon never falls back to the node's
      *  own keys, even while the account itself is locked or being restored. */
@@ -121,7 +128,9 @@ public final class Account {
                         }
                         catch (Exception later) { android.util.Log.w("Dexicon", "account re-track deferred: " + later); }   // never fails a claim
                     }
+                    if (knownAddresses == null) refreshKnown();
                     reply = wallet.handle(command, guard == null ? null : () -> onMain(guard));
+                    if (command.trim().startsWith("newaddress")) refreshKnown();
                     passThrough = reply == null;
                 }
             } catch (Exception e) { error = e.getMessage() == null ? e.toString() : e.getMessage(); }
@@ -134,6 +143,21 @@ public final class Account {
     /** The account's receive address (index 0), full 0x and Mx forms: [0x, Mx]. Computed on the worker. */
     public void receiveAddress(java.util.function.Consumer<String[]> got) {
         WORKER.execute(() -> { String[] a = {keys.address(0), keys.miniAddress(0)}; MAIN.post(() -> got.accept(a)); });
+    }
+
+    private void refreshKnown() {
+        java.util.Set<String> k = new java.util.HashSet<>();
+        for (String a : wallet.accountAddresses()) k.add(VirtualWallet.norm(a));
+        knownAddresses = k;
+    }
+
+    /** A chain read of a swap-lock address has just returned: look for locks addressed to us, off the caller's thread. */
+    public void noticeLocks(String command, JSONObject reply) {
+        if (reply == null || !command.contains("address:")) return;
+        boolean htlc = false;
+        for (String h : com.eurobuddha.atomix.swap.MinimaHtlc.HTLC_ADDRESSES) if (command.contains(h)) htlc = true;
+        if (!htlc) return;
+        WORKER.execute(() -> { try { wallet.noticeLocksToUs(reply); } catch (RuntimeException ignored) { } });
     }
 
     /** Engine guards read UI-thread state: evaluate them there, as they always were. */
