@@ -57,6 +57,18 @@ public final class AccountVault {
             marker.edit().putString("fp", fingerprint).putString("mode", mode).commit();
     }
     public String lostFingerprint() { return marker.getString("fp", ""); }
+
+    /** Every account fingerprint this phone has seen: the marker's, else the key-count slots 0.3.0+ wrote
+     *  ("keys_<fp>" in dexicon_account_state) — so a vault lost before its identity was recorded still restores only
+     *  as itself. Empty = no record at all. */
+    public java.util.Set<String> knownFingerprints() {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        String m = lostFingerprint();
+        if (!m.isEmpty()) { out.add(m.toLowerCase(java.util.Locale.ROOT)); return out; }
+        for (String k : app.getSharedPreferences("dexicon_account_state", Context.MODE_PRIVATE).getAll().keySet())
+            if (k.startsWith("keys_") && k.length() > 5) out.add(k.substring(5).toLowerCase(java.util.Locale.ROOT));
+        return out;
+    }
     public String lostMode() { return marker.getString("mode", ""); }
 
     /** Record the durable marker for a vault that predates it (called after a successful open). */
@@ -120,6 +132,8 @@ public final class AccountVault {
     /** Only after {@link Lost}: move the ciphertext aside (kept, never deleted) so setup offers RESTORE 24 WORDS. */
     void quarantine() {
         markCreated();   // a vault that predates the marker must keep it after quarantine
+        if (marker.getString("mode", "").isEmpty() && !prefs.getString(P_MODE, "").isEmpty())
+            marker.edit().putString("mode", prefs.getString(P_MODE, "")).commit();   // so a node-mode account restores as one
         SharedPreferences q = app.getSharedPreferences(QUARANTINE, Context.MODE_PRIVATE);
         String t = "_" + System.currentTimeMillis();
         q.edit().putString(P_MODE + t, prefs.getString(P_MODE, "")).putString(P_CT + t, prefs.getString(P_CT, ""))

@@ -556,9 +556,12 @@ public final class VirtualWallet {
             picked.add(c); t.addInput(c.getCoin()); sum = sum.add(c.getCoin().getAmount());
             if (token == null) token = c.getCoin().getToken();
         }
-        MiniNumber half = sum.div(MiniNumber.TWO);
-        t.addOutput(out(keys.address(0), half, tokenid, token, false));
-        t.addOutput(out(keys.address(0), sum.sub(half), tokenid, token, false));
+        if (picked.size() < 3) t.addOutput(out(keys.address(0), sum, tokenid, token, false));   // 2 coins -> 1: the count drops
+        else {
+            MiniNumber half = sum.div(MiniNumber.TWO);
+            t.addOutput(out(keys.address(0), half, tokenid, token, false));
+            t.addOutput(out(keys.address(0), sum.sub(half), tokenid, token, false));
+        }
         TxnRow row = new TxnRow(freshId(), t, new Witness());
         for (CoinProof c : picked) row.getWitness().addCoinProof(c);
         TxPoWGenerator.precomputeTransactionCoinID(t);

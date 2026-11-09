@@ -80,9 +80,9 @@ public final class AccountSetup {
                         + " (The locked copy is kept.)", false)))
                 .setPositiveButton(nodeMode ? "Use node seed" : "Restore 24 words", (d, w) -> { if (nodeMode) fromNode(a, n, done); else restore(a, done); });
         if (nothingOpen) b.setNegativeButton("Lost the words?", (d, w) -> new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Start a NEW account?")
-                .setMessage("Anything still at the old Trading Account's addresses stays there, reachable ONLY with its own words. "
-                        + "Start a new, empty account anyway?").setCancelable(false)
-                .setPositiveButton("Start new", (x, y) -> { restoreOnly = false; restoreOpen = null; create(a, done); })
+                .setMessage("Anything still at the old Trading Account's addresses stays there, reachable ONLY with its own words "
+                        + "(restore them in Dexicon on a fresh install). Start a new, empty account anyway?").setCancelable(false)
+                .setPositiveButton("Start new", (x, y) -> create(a, done))
                 .setNegativeButton("Back", (x, y) -> back(a, done)).show());
         b.show();
     }
@@ -90,8 +90,8 @@ public final class AccountSetup {
     /** A restore while recovering a LOST account must be that account (same fingerprint). */
     private static String wrongAccount(Activity a, String fingerprint) {
         if (!restoreOnly) return null;
-        String expected = new AccountVault(a).lostFingerprint();
-        return expected.isEmpty() || expected.equalsIgnoreCase(fingerprint) ? null
+        java.util.Set<String> known = new AccountVault(a).knownFingerprints();
+        return known.isEmpty() || known.contains(fingerprint.toLowerCase(java.util.Locale.ROOT)) ? null
                 : "That is not this phone's Trading Account — its positions need the SAME account. Nothing was changed.";
     }
 
@@ -109,7 +109,7 @@ public final class AccountSetup {
         secure(d);
         d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if (!ok.isChecked()) { Toast.makeText(a, "Write the words down first.", Toast.LENGTH_LONG).show(); return; }
-            try { new AccountVault(a).storeNewPhrase(phrase); d.dismiss(); done.ready(); }
+            try { new AccountVault(a).storeNewPhrase(phrase); restoreOnly = false; restoreOpen = null; d.dismiss(); done.ready(); }
             catch (Exception e) { Toast.makeText(a, "Could not save: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
         }));
         d.show();

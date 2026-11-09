@@ -221,6 +221,16 @@ public class H1 {
         JSONObject list = raw("txnlist", "0xFF");
         check("node txn table holds none of our drafts", list.optJSONArray("response") == null || list.getJSONArray("response").length() == 0, list);
 
+        System.out.println("\n== 8. consolidate the Trading Account's MINIMA (one address, one signature)");
+        int before = must(A, "coins relevant:true sendable:true tokenid:0x00").getJSONArray("response").length();
+        JSONObject cons = v(A, "consolidate tokenid:0x00");
+        System.out.println("  " + before + " coins before; consolidate -> " + (cons.optBoolean("status") ? "posted" : cons.optString("error")));
+        waitBlocks(5);
+        int after = must(A, "coins relevant:true sendable:true tokenid:0x00").getJSONArray("response").length();
+        check("consolidate reduced the coin count (" + before + " -> " + after + ")", before < 2 || after < before, before + " -> " + after);
+        JSONObject dry = v(A, "send address:" + bAddr + " amount:1 dryrun:true");
+        check("dryrun send signs and posts nothing", dry.optBoolean("status") && dry.getJSONObject("response").optBoolean("dryrun"), dry);
+
         System.out.println("\n===== H1: " + pass + " passed, " + failn + " failed =====");
         System.exit(failn == 0 ? 0 : 1);
     }

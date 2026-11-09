@@ -54,7 +54,8 @@ public final class Account {
         final String countKey = "keys_" + fp[0];
         // 0.2.98 / 0.2.99 kept the key count under "keys": migrate it ONLY when it provably belongs to this seed (its
         // cached key 0 is this account's key 0), else an upgraded account would lose every address past index 0.
-        migrateKeyCount(sp, countKey, keys.publicKey(0));
+        final AccountKeys k0 = keys;
+        migrateKeyCount(sp, countKey, () -> k0.publicKey(0));
         VirtualWallet.Store store = new VirtualWallet.Store() {
             public int keyCount() { return sp.getInt(countKey, 0); }
             public void setKeyCount(int n) { if (!sp.edit().putInt(countKey, n).commit()) throw new IllegalStateException("could not save key count"); }
@@ -106,10 +107,13 @@ public final class Account {
 
     /** 0.2.98 / 0.2.99 stored the key count under "keys" (and key i's public key under "pub128x4_i"). Move it to the
      *  fingerprint-keyed slot ONLY when the old key 0 is this account's key 0 — never hand one seed's count to another. */
-    static void migrateKeyCount(SharedPreferences sp, String countKey, String myPub0) {
+    static void migrateKeyCount(SharedPreferences sp, String countKey, java.util.function.Supplier<String> myPub0) {
+        if (!sp.contains("keys")) return;                       // nothing to migrate: never build key 0 here (main thread)
         String legacyPub0 = sp.getString("pub" + AccountKeys.KEYS_PER_LEVEL + "x" + AccountKeys.LEVELS + "_0", "");
-        if (!sp.contains(countKey) && sp.contains("keys") && !legacyPub0.isEmpty() && legacyPub0.equalsIgnoreCase(myPub0))
-            sp.edit().putInt(countKey, sp.getInt("keys", 1)).remove("keys").commit();
+        if (legacyPub0.isEmpty() || !legacyPub0.equalsIgnoreCase(myPub0.get())) return;
+        // max: 0.3.0 already created the slot as 1 while "keys" held the real count (0.2.99 -> 0.3.0 -> 0.3.1)
+        int merged = Math.max(sp.getInt(countKey, 0), sp.getInt("keys", 1));
+        sp.edit().putInt(countKey, merged).remove("keys").commit();
     }
 
     /** A plain {@code coins} read (no relevant / sendable): with no account loaded there are no account addresses, so
