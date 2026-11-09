@@ -264,7 +264,12 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Trading Account locked")
                     .setMessage("This phone's keystore will not unlock your Trading Account. You can restore it from its 24 words "
                             + "(the locked copy is kept, never deleted).")
-                    .setPositiveButton("Restore", (d, w) -> { offering = false; com.eurobuddha.dexicon.account.Account.quarantineForRestore(this); offerAccount(); })
+                    .setPositiveButton("Restore", (d, w) -> {
+                        com.eurobuddha.dexicon.account.Account.quarantineForRestore(this);
+                        // straight to RESTORE of the SAME account (fingerprint-checked) — never "Create new" over it
+                        String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(this);
+                        com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
+                    })
                     .setNegativeButton("Later", (d, w) -> { offering = false; lockedTries = 0; }).show());
             return;
         }
@@ -273,7 +278,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             // The account existed here and was lost: its positions are locked to ITS keys — only the same words can settle
             // them, so a brand-new account is not offered while any remain.
             String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(this);
-            com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady, open != null, open);
+            com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
             return;
         }
         String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);

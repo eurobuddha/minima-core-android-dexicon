@@ -52,6 +52,9 @@ public final class Account {
         keys.setRestoreFloor(restoreFloor);
         fp[0] = keys.fingerprint();
         final String countKey = "keys_" + fp[0];
+        // 0.2.98 / 0.2.99 kept the key count under "keys": migrate it ONLY when it provably belongs to this seed (its
+        // cached key 0 is this account's key 0), else an upgraded account would lose every address past index 0.
+        migrateKeyCount(sp, countKey, keys.publicKey(0));
         VirtualWallet.Store store = new VirtualWallet.Store() {
             public int keyCount() { return sp.getInt(countKey, 0); }
             public void setKeyCount(int n) { if (!sp.edit().putInt(countKey, n).commit()) throw new IllegalStateException("could not save key count"); }
@@ -76,6 +79,7 @@ public final class Account {
             catch (AccountVault.Lost lost) { v.quarantine(); return null; }    // key gone for good: setup offers RESTORE
             v.markCreated();
             instance = new Account(c, secret, v.mode(), v.restoreFloor(), node);
+            v.recordIdentity(instance.keys.fingerprint(), v.mode());
             return instance;
         }
     }
@@ -99,6 +103,35 @@ public final class Account {
             return !mine.contains(VirtualWallet.norm(String.valueOf(a)));      // foreign (book, pool, HTLC): straight through
         } catch (RuntimeException unparsable) { return false; }
     }
+
+    /** 0.2.98 / 0.2.99 stored the key count under "keys" (and key i's public key under "pub128x4_i"). Move it to the
+     *  fingerprint-keyed slot ONLY when the old key 0 is this account's key 0 — never hand one seed's count to another. */
+    static void migrateKeyCount(SharedPreferences sp, String countKey, String myPub0) {
+        String legacyPub0 = sp.getString("pub" + AccountKeys.KEYS_PER_LEVEL + "x" + AccountKeys.LEVELS + "_0", "");
+        if (!sp.contains(countKey) && sp.contains("keys") && !legacyPub0.isEmpty() && legacyPub0.equalsIgnoreCase(myPub0))
+            sp.edit().putInt(countKey, sp.getInt("keys", 1)).remove("keys").commit();
+    }
+
+    /** A plain {@code coins} read (no relevant / sendable): with no account loaded there are no account addresses, so
+     *  it can only be a chain read (the book, pools, the HTLC market feed) — the market screens work before setup. */
+    public static boolean plainRead(String command) {
+        if (!command.trim().toLowerCase(java.util.Locale.ROOT).startsWith("coins")) return false;
+        try {
+            org.minima.utils.json.JSONObject p = org.minima.system.commands.CommandRunner.getRunner().getCommand(command).getParams();
+            return !p.containsKey("relevant") && !p.containsKey("sendable")
+                    && (p.containsKey("address") || p.containsKey("coinid") || p.containsKey("state") || p.containsKey("tokenid"));
+        } catch (RuntimeException unparsable) { return false; }
+    }
+
+    /** The fingerprint a typed phrase / node base would give: a restore must match the lost account's. */
+    public static String fingerprintOfPhrase(String phrase) { return AccountKeys.fromPhrase(phrase, NO_USES, null).fingerprint(); }
+    public static String fingerprintOfBase(String base) { return AccountKeys.fromBase(base, NO_USES, null).fingerprint(); }
+    private static final KeyUses NO_USES = new KeyUses() {
+        public int currentUses(int k) { return 0; }
+        public int reserveNextUse(int k) { throw new IllegalStateException("fingerprint only"); }
+        public void recordExternalUses(int k, int n) { }
+        public java.util.Map<Integer, Integer> snapshotAllUses() { return java.util.Collections.emptyMap(); }
+    };
 
     /** The user chose RESTORE for a vault the keystore will not unlock: move it aside (kept), so setup can restore. */
     public static void quarantineForRestore(Context c) { synchronized (Account.class) { if (instance == null) new AccountVault(c).quarantine(); } }
@@ -135,7 +168,13 @@ public final class Account {
                 }
             } catch (Exception e) { error = e.getMessage() == null ? e.toString() : e.getMessage(); }
             final JSONObject r = reply; final String err = error;
-            if (passThrough) { MAIN.post(() -> node.cmdDirect(command, guard, timeoutMs, cb)); return; }
+            if (passThrough) {
+                MAIN.post(() -> node.cmdDirect(command, guard, timeoutMs, new NodeApi.Cb() {
+                    public void onResult(JSONObject j) { noticeLocks(command, j); if (cb != null) cb.onResult(j); }
+                    public void onError(String m) { if (cb != null) cb.onError(m); }
+                }));
+                return;
+            }
             MAIN.post(() -> { if (cb == null) return; if (err != null) cb.onError(err); else cb.onResult(r); });
         });
     }

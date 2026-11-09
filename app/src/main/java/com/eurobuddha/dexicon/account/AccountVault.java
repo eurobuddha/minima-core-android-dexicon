@@ -50,6 +50,15 @@ public final class AccountVault {
 
     public boolean exists() { return !prefs.getString(P_CT, "").isEmpty(); }
     public String mode() { return prefs.getString(P_MODE, ""); }
+    /** The identity of the account this phone held (fingerprint + mode), kept in the never-cleared marker: a restore after
+     *  a loss must be THE SAME account, or its open positions would be stranded. */
+    void recordIdentity(String fingerprint, String mode) {
+        if (!fingerprint.equals(marker.getString("fp", "")) || !mode.equals(marker.getString("mode", "")))
+            marker.edit().putString("fp", fingerprint).putString("mode", mode).commit();
+    }
+    public String lostFingerprint() { return marker.getString("fp", ""); }
+    public String lostMode() { return marker.getString("mode", ""); }
+
     /** Record the durable marker for a vault that predates it (called after a successful open). */
     void markCreated() { if (marker.getLong(P_CREATED, 0) <= 0) marker.edit().putLong(P_CREATED, System.currentTimeMillis()).commit(); }
 
@@ -114,7 +123,8 @@ public final class AccountVault {
         SharedPreferences q = app.getSharedPreferences(QUARANTINE, Context.MODE_PRIVATE);
         String t = "_" + System.currentTimeMillis();
         q.edit().putString(P_MODE + t, prefs.getString(P_MODE, "")).putString(P_CT + t, prefs.getString(P_CT, ""))
-                .putString(P_IV + t, prefs.getString(P_IV, "")).putString(P_ALIAS + t, prefs.getString(P_ALIAS, KEY_ALIAS)).commit();
+                .putString(P_IV + t, prefs.getString(P_IV, "")).putString(P_ALIAS + t, prefs.getString(P_ALIAS, KEY_ALIAS))
+                .putInt(P_FLOOR + t, prefs.getInt(P_FLOOR, 0)).commit();
         if (!q.getString(P_CT + t, "").equals(prefs.getString(P_CT, ""))) return;   // the copy did not land: keep the vault
         prefs.edit().remove(P_CT).remove(P_IV).remove(P_MODE).remove(P_ALIAS).remove(P_FLOOR).commit();
     }

@@ -157,7 +157,8 @@ public class NodeApi {
         String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
         if (com.eurobuddha.dexicon.account.VirtualWallet.handles(verb)) {
             com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);
-            if (com.eurobuddha.dexicon.account.Account.chainRead(command)) {          // a pure chain read: never queued
+            if (com.eurobuddha.dexicon.account.Account.chainRead(command)
+                    || (acct == null && com.eurobuddha.dexicon.account.Account.plainRead(command))) {   // a pure chain read: never queued
                 if (acct == null) { cmdDirect(command, guard, timeoutMs, cb); return; }
                 cmdDirect(command, guard, timeoutMs, new Cb() {
                     public void onResult(JSONObject j) { acct.noticeLocks(command, j); if (cb != null) cb.onResult(j); }

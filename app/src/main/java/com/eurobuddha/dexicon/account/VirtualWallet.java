@@ -545,7 +545,7 @@ public final class VirtualWallet {
         for (JSONObject r : all) byAddr.computeIfAbsent(norm(r.optString("address")), x -> new ArrayList<>()).add(r);
         List<JSONObject> rows = new ArrayList<>();
         for (List<JSONObject> l : byAddr.values()) if (l.size() > rows.size()) rows = l;
-        if (rows.size() < 3) return fail("consolidate", "Not enough coins (" + rows.size() + ") at one address to consolidate");
+        if (rows.size() < 2) return fail("consolidate", "Nothing to consolidate: no address holds 2 or more coins of this token.");
         rows.sort((a, b) -> new MiniNumber(a.optString("amount", "0")).compareTo(new MiniNumber(b.optString("amount", "0"))));   // smallest first: sweep dust
         Transaction t = new Transaction();
         List<CoinProof> picked = new ArrayList<>();
