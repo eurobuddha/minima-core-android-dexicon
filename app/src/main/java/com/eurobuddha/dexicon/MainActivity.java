@@ -252,10 +252,20 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     /** First run: set up the Trading Account — unless an earlier Dexicon still has node-key positions here, which settle
      *  the old way first (owner, 9 Nov: finish before upgrading). */
+    private boolean offering, legacyNoticeShown;
     private void offerAccount() {
-        if (com.eurobuddha.dexicon.account.Account.exists(this)) return;
+        if (offering || com.eurobuddha.dexicon.account.Account.get(this, node) != null) return;
+        if (com.eurobuddha.dexicon.account.Account.exists(this)) {   // vault present but the keystore is busy: retry, delete nothing
+            toast("Your Trading Account is temporarily locked — Dexicon retries in a moment.");
+            ui.postDelayed(this::offerAccount, 5_000);
+            return;
+        }
+        offering = true;
         String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);
         if (legacy == null) { com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady); return; }
+        offering = false;
+        if (legacyNoticeShown) return;
+        legacyNoticeShown = true;
         track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Finish these first")
                 .setMessage("This Dexicon still has " + legacy + " made with your node's own keys. They settle exactly as before "
                         + "(Dexicon needs ADMIN in your node until they are done). Once they are finished, Dexicon moves to its own "
@@ -265,9 +275,18 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     /** The Trading Account was just created: pair again (no ADMIN needed now) and wake the maker service. */
     private void onAccountReady() {
-        node.reRegister();
-        try { ContextCompat.startForegroundService(this, new Intent(this, MakerService.class).setAction(MakerService.ACTION_HEARTBEAT)); } catch (Exception ignored) {}
-        repaint();
+        offering = false;
+        // The old AtomiX swap identity was a NODE key: forget it (no legacy position remains — offerAccount checked), so
+        // IdentityWatch adopts the account's key instead of halting as "orphaned". Then restart once so every engine
+        // (doors, maker, pools) boots on the Trading Account.
+        getSharedPreferences("dexicon_doors", MODE_PRIVATE).edit().remove("swap_addr").remove("swap_pk").commit();
+        com.eurobuddha.atomix.IdentityWatch.forceNext();
+        Intent again = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 0x7a11, again,
+                android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_CANCEL_CURRENT);
+        ((android.app.AlarmManager) getSystemService(ALARM_SERVICE)).set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 800, pi);
+        toast("Trading Account ready — Dexicon restarts once.");
+        ui.postDelayed(() -> { stopService(new Intent(this, MakerService.class)); android.os.Process.killProcess(android.os.Process.myPid()); }, 400);
     }
 
     private void onPaired() {
@@ -1704,6 +1723,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     }
 
     @Override protected void onResume() {
+        if (node != null && !offering) ui.post(this::offerAccount);   // the last legacy position may have just settled
         super.onResume();
         // PandaPools re-shows its visible tab on resume: onStop stopped the pool views, and coming back from the forced
         // backup's file picker must restart My pools' fast "confirming" poll, not wait for a page switch.

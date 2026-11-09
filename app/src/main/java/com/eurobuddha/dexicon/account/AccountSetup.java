@@ -35,10 +35,14 @@ public final class AccountSetup {
     public static void show(Activity a, NodeApi node, Done done) {
         if (node != null) lastNode = node; else node = lastNode;
         final NodeApi n = node;
+        boolean tradedBefore = !a.getSharedPreferences("dexicon_doors", Context.MODE_PRIVATE).getString("swap_pk", "").isEmpty();
         TextView body = text(a, "Dexicon keeps its own Trading Account and signs every trade itself. Your Minima node only "
                 + "reads the chain and posts what Dexicon has already signed — so no other app on this phone can touch "
                 + "these funds, and Dexicon needs no ADMIN rights.\n\nMove funds in from your Minima wallet with "
-                + "RECEIVE; send them back any time.", false);
+                + "RECEIVE; send them back any time."
+                + (tradedBefore ? "\n\n⚠ You have swapped with AtomiX here before: the Trading Account has its OWN Ethereum "
+                + "wallet. Move any ETH / USDT out of the old AtomiX Ethereum wallet first (① MxUSD › Wallet › Send) — after "
+                + "this step Dexicon shows the new one." : ""), false);
         new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Your Trading Account").setView(pad(a, body)).setCancelable(false)
                 .setPositiveButton("Create new", (d, w) -> create(a, done))
                 .setNeutralButton("Restore 24 words", (d, w) -> restore(a, done))
@@ -60,7 +64,7 @@ public final class AccountSetup {
         secure(d);
         d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if (!ok.isChecked()) { Toast.makeText(a, "Write the words down first.", Toast.LENGTH_LONG).show(); return; }
-            try { new AccountVault(a).storePhrase(phrase); d.dismiss(); done.ready(); }
+            try { new AccountVault(a).storeNewPhrase(phrase); d.dismiss(); done.ready(); }
             catch (Exception e) { Toast.makeText(a, "Could not save: " + e.getMessage(), Toast.LENGTH_LONG).show(); }
         }));
         d.show();
@@ -81,7 +85,7 @@ public final class AccountSetup {
         d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             try {
                 String p = AccountVault.cleanPhrase(in.getText().toString());
-                new AccountVault(a).storePhrase(p);
+                new AccountVault(a).storeRestoredPhrase(p);
                 d.dismiss(); done.ready();
             } catch (Exception e) { Toast.makeText(a, e.getMessage(), Toast.LENGTH_LONG).show(); }
         }));
@@ -114,15 +118,9 @@ public final class AccountSetup {
         try {
             String p = new AccountVault(a).revealPhrase();
             if (p == null) { Toast.makeText(a, "This account comes from your node's seed: your node's 24 words restore it.", Toast.LENGTH_LONG).show(); return; }
+            // No Copy: the 24 words never go on a clipboard any other app can read. Write them down.
             AlertDialog d = new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Trading Account words").setView(pad(a, text(a, numbered(p), true)))
-                    .setPositiveButton("Done", null)
-                    .setNeutralButton("Copy", (x, w) -> {
-                        ClipData clip = ClipData.newPlainText("Trading Account", p);
-                        android.os.PersistableBundle extras = new android.os.PersistableBundle();
-                        extras.putBoolean("android.content.extra.IS_SENSITIVE", true);   // ClipDescription.EXTRA_IS_SENSITIVE
-                        clip.getDescription().setExtras(extras);
-                        ((ClipboardManager) a.getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(clip);
-                    }).create();
+                    .setPositiveButton("Done", null).create();
             secure(d);
             d.show();
         } catch (Exception e) { Toast.makeText(a, e.getMessage(), Toast.LENGTH_LONG).show(); }

@@ -38,7 +38,7 @@ public final class Account {
     /** The NodeApi of the call being handled: screens come and go, the account outlives them. Worker-thread only. */
     private volatile NodeApi current;
 
-    private Account(Context c, String secret, String mode, NodeApi node) {
+    private Account(Context c, String secret, String mode, int restoreFloor, NodeApi node) {
         Context app = c.getApplicationContext();
         SharedPreferences sp = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         AccountKeys.PubCache cache = new AccountKeys.PubCache() {
@@ -48,6 +48,7 @@ public final class Account {
         };
         KeyUses uses = new PrefsKeyUses(app);
         keys = AccountVault.MODE_NODE.equals(mode) ? AccountKeys.fromBase(secret, uses, cache) : AccountKeys.fromPhrase(secret, uses, cache);
+        keys.setRestoreFloor(restoreFloor);
         VirtualWallet.Store store = new VirtualWallet.Store() {
             public int keyCount() { return sp.getInt("keys", 0); }
             public void setKeyCount(int n) { if (!sp.edit().putInt("keys", n).commit()) throw new IllegalStateException("could not save key count"); }
@@ -66,17 +67,38 @@ public final class Account {
             AccountVault v = new AccountVault(c);
             if (!v.exists()) return null;
             String secret;
-            try { secret = v.secret(); } catch (Exception unreadable) { unreadable(c); return null; }
-            instance = new Account(c, secret, v.mode(), node);
+            try { secret = v.secret(); }
+            catch (AccountVault.Unavailable later) { return null; }            // keystore busy: retry later, delete nothing
+            catch (AccountVault.Lost lost) { v.quarantine(); return null; }    // key gone for good: setup offers RESTORE
+            v.markCreated();
+            instance = new Account(c, secret, v.mode(), v.restoreFloor(), node);
             return instance;
         }
     }
 
     public static boolean exists(Context c) { return instance != null || new AccountVault(c).exists(); }
 
-    /** The vault exists but cannot be decrypted (the keystore key is gone, e.g. after a device restore): clear it so the
-     *  setup screen offers RESTORE 24 WORDS. The time floor keeps a restore from ever reusing a leaf. */
-    private static void unreadable(Context c) { new AccountVault(c).clearUnreadable(); }
+    private static volatile java.util.Set<String> knownAddresses = java.util.Collections.emptySet();
+
+    /** A {@code coins} read that names no account address and is not wallet-scoped (a coinid, a state search, a foreign
+     *  address): straight to the node on the caller's thread — it must never wait behind a post on the account worker. */
+    public static boolean chainRead(String command) {
+        if (!command.trim().toLowerCase(java.util.Locale.ROOT).startsWith("coins")) return false;
+        try {
+            org.minima.utils.json.JSONObject p = org.minima.system.commands.CommandRunner.getRunner().getCommand(command).getParams();
+            if (p.containsKey("relevant") || p.containsKey("sendable")) return false;
+            Object a = p.get("address");
+            if (a == null) return p.containsKey("coinid") || p.containsKey("state") || p.containsKey("tokenid");
+            String n = VirtualWallet.norm(String.valueOf(a));
+            if (knownAddresses.contains(n)) return false;
+            for (String h : com.eurobuddha.atomix.swap.MinimaHtlc.HTLC_ADDRESSES) if (VirtualWallet.norm(h).equals(n)) return false;
+            return true;
+        } catch (RuntimeException unparsable) { return false; }
+    }
+
+    /** A Trading Account was created on this phone at some point — from then on Dexicon never falls back to the node's
+     *  own keys, even while the account itself is locked or being restored. */
+    public static boolean everCreated(Context c) { return new AccountVault(c).everCreated(); }
 
     /** Run {@code command} on the account worker. Delivers on the main thread. A null local answer = pass through. */
     public void submit(NodeApi node, String command, java.util.function.BooleanSupplier guard, long timeoutMs, NodeApi.Cb cb) {
@@ -86,12 +108,20 @@ public final class Account {
             JSONObject reply = null; String error = null; boolean passThrough = false;
             try {
                 if (System.currentTimeMillis() - queued > patience) error = "The Trading Account was busy too long; nothing was sent. Try again.";
-                else if (guard != null && !guard.getAsBoolean()) error = "Market changed; refresh and try again. No command was sent.";
+                else if (guard != null && !onMain(guard)) error = "Market changed; refresh and try again. No command was sent.";
                 else {
                     current = node;
                     long now = System.currentTimeMillis();
-                    if (now - trackedAt > RETRACK_MS) { wallet.ensureTracked(); trackedAt = now; }
-                    reply = wallet.handle(command, guard);
+                    if (now - trackedAt > RETRACK_MS) {
+                        try {
+                            wallet.ensureTracked(); trackedAt = now;
+                            java.util.Set<String> k = new java.util.HashSet<>();
+                            for (String a : wallet.accountAddresses()) k.add(VirtualWallet.norm(a));
+                            knownAddresses = k;
+                        }
+                        catch (Exception later) { android.util.Log.w("Dexicon", "account re-track deferred: " + later); }   // never fails a claim
+                    }
+                    reply = wallet.handle(command, guard == null ? null : () -> onMain(guard));
                     passThrough = reply == null;
                 }
             } catch (Exception e) { error = e.getMessage() == null ? e.toString() : e.getMessage(); }
@@ -104,6 +134,15 @@ public final class Account {
     /** The account's receive address (index 0), full 0x and Mx forms: [0x, Mx]. Computed on the worker. */
     public void receiveAddress(java.util.function.Consumer<String[]> got) {
         WORKER.execute(() -> { String[] a = {keys.address(0), keys.miniAddress(0)}; MAIN.post(() -> got.accept(a)); });
+    }
+
+    /** Engine guards read UI-thread state: evaluate them there, as they always were. */
+    private static boolean onMain(java.util.function.BooleanSupplier guard) {
+        if (Looper.myLooper() == Looper.getMainLooper()) return guard.getAsBoolean();
+        CountDownLatch done = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicBoolean out = new java.util.concurrent.atomic.AtomicBoolean(false);
+        MAIN.post(() -> { try { out.set(guard.getAsBoolean()); } catch (RuntimeException e) { out.set(false); } finally { done.countDown(); } });
+        try { return done.await(30, TimeUnit.SECONDS) && out.get(); } catch (InterruptedException e) { return false; }
     }
 
     /** One node call from the worker thread, waiting for the reply (never on the main thread). */

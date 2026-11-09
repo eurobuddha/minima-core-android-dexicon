@@ -55,6 +55,8 @@ public final class AccountKeys {
     private final Map<Integer, String> pubs = new HashMap<>();
     private final Map<Integer, TreeKey> trees = new HashMap<>();   // TreeKeyNode caches built branches: warm signs are cheap
     private final Object signLock = new Object();
+    /** A restored / node-derived account's minimum leaf on EVERY key (see {@link #restoreFloor}). */
+    private volatile int restoreFloor;
 
     private AccountKeys(MiniData base, KeyUses uses, PubCache cache) {
         if (base == null || base.getLength() < 16) throw new IllegalArgumentException("account seed missing");
@@ -108,6 +110,16 @@ public final class AccountKeys {
     public int usesOf(int index) { return uses.currentUses(index); }
     public int maxUses() { return (int) Math.pow(KEYS_PER_LEVEL, LEVELS); }
 
+    /** Leaf floor stored once when an account is RESTORED (or derived from the node seed): the time floor now, plus two
+     *  phones' worth of allowed clock skew (2 × 30 min), plus a margin for an earlier install that signed faster than
+     *  the clock — so a restore on a slow phone never lands on a leaf a fast one already signed. */
+    public static int restoreFloor(long nowMillis) {
+        long skewLeaves = 2 * (30 * 60_000L) / LEAF_MILLIS;
+        return (int) Math.min(Integer.MAX_VALUE, (long) timeFloor(nowMillis) + skewLeaves + 10_000L);
+    }
+
+    public void setRestoreFloor(int floor) { restoreFloor = Math.max(0, floor); }
+
     /** The lowest leaf a signature at wall-clock {@code nowMillis} may use. */
     public static int timeFloor(long nowMillis) {
         long f = (nowMillis - EPOCH_MS) / LEAF_MILLIS;
@@ -121,7 +133,7 @@ public final class AccountKeys {
             TreeKey key = tree(index);
             if (!key.getPublicKey().to0xString().equalsIgnoreCase(publicKey(index)))
                 throw new IllegalStateException("account key " + index + " does not match its cached public key — refusing to sign");
-            int floor = timeFloor(nowMillis);
+            int floor = Math.max(timeFloor(nowMillis), restoreFloor);
             if (uses.currentUses(index) < floor) uses.recordExternalUses(index, floor);
             int leaf = uses.reserveNextUse(index);
             if (leaf < floor) throw new IllegalStateException("account key " + index + " leaf store did not advance — refusing to sign");

@@ -98,10 +98,10 @@ public class MinimaAPI {
         } catch (Exception ignored) { }
         return null;
     }
-    public static void writePreferredNode(Context c, String pkg) {
+    public static boolean writePreferredNode(Context c, String pkg) {
         try { java.nio.file.Files.write(new java.io.File(c.getApplicationContext().getFilesDir(), "preferred_node").toPath(),
-                (pkg == null ? "" : pkg).getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
-        catch (Exception e) { throw new IllegalStateException("could not save the node choice", e); }
+                (pkg == null ? "" : pkg).getBytes(java.nio.charset.StandardCharsets.UTF_8)); return true; }
+        catch (Exception e) { return false; }
     }
     /** The node packages that answered the last discovery. */
     public static volatile java.util.Set<String> lastReplied = java.util.Collections.emptySet();

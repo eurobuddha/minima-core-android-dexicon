@@ -61,7 +61,7 @@ public class NodeApi {
     private Boolean enabled, admin;
     /** The node said Dexicon is enabled but NOT admin (or parked a command as pending): nothing runs until it is. */
     public boolean needsAdmin() { return Boolean.FALSE.equals(admin) && !com.eurobuddha.dexicon.account.Account.exists(mContext)
-            && com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext); }
+            && !com.eurobuddha.dexicon.account.Account.everCreated(mContext) && com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext); }
     /** Stock Minima Core edition: once a Trading Account exists Dexicon signs itself and never needs ADMIN. */
     public boolean hasAccount() { return com.eurobuddha.dexicon.account.Account.exists(mContext); }
     /** True once a node has REPLIED to a register (even "not enabled"); false while nothing has answered. A reply
@@ -74,7 +74,7 @@ public class NodeApi {
 
     /** The node the user picked when several are installed (Settings → NODE); null = whichever one answers. */
     public static String preferredNode(Context c) { return com.eurobuddha.minimaapi.MinimaAPI.readPreferredNode(c); }
-    public static void setPreferredNode(Context c, String pkg) { com.eurobuddha.minimaapi.MinimaAPI.writePreferredNode(c, pkg); }
+    public static boolean setPreferredNode(Context c, String pkg) { return com.eurobuddha.minimaapi.MinimaAPI.writePreferredNode(c, pkg); }
 
     public NodeApi(Context ctx, PairingListener pairing) {
         mContext = ctx;
@@ -155,7 +155,7 @@ public class NodeApi {
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         // Trading Account: wallet + txn verbs are answered in-app (VirtualWallet); only signed postfrom reaches the node.
         String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
-        if (com.eurobuddha.dexicon.account.VirtualWallet.handles(verb)) {
+        if (com.eurobuddha.dexicon.account.VirtualWallet.handles(verb) && !com.eurobuddha.dexicon.account.Account.chainRead(command)) {
             com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);
             if (acct != null) {
                 queuedCommands++;   // the account may still be posting: never release the transport underneath it

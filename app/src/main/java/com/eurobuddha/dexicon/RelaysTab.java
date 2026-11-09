@@ -87,7 +87,10 @@ public final class RelaysTab extends LinearLayout {
                 {"com.eurobuddha.minimacore", "PandaBear"}, {"com.eurobuddha.pandamonium", "Pandamonium"}}) {
             try { act.getPackageManager().getPackageInfo(n[0], 0); } catch (Exception notInstalled) { continue; }
             TextView b = button((n[0].equals(pref) ? "● " : "○ ") + n[1]);
-            b.setOnClickListener(v -> { NodeApi.setPreferredNode(act, n[0]); act.dexNode().reRegister(); act.toast("Dexicon will use " + n[1]); renderAccount(); });
+            b.setOnClickListener(v -> {
+                if (!NodeApi.setPreferredNode(act, n[0])) { act.toast("Could not save the node choice — try again."); return; }
+                act.dexNode().reRegister(); act.toast("Dexicon will use " + n[1]); renderAccount();
+            });
             LayoutParams bl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); bl.topMargin = Design.dp(act, 6);
             nodeCard.addView(b, bl);
         }

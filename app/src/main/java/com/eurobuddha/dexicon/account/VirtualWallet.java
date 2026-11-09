@@ -69,8 +69,12 @@ public final class VirtualWallet {
     /** The phone clock may disagree with the chain tip's time by at most this much before we refuse to sign: the
      *  one-time-leaf floor is wall-clock time (AccountKeys). */
     public static final long MAX_CLOCK_SKEW_MS = 30 * 60_000L;
-    /** postfrom data limit: the command must stay well under the IPC's 100K-char command cap (CommandSafety). */
-    public static final int MAX_POST_HEX = 92_000;
+    /** postfrom data limit. The node's REPLY echoes the data AND the whole TxPoW as JSON (~2.2–2.8× the hex), and a
+     *  reply over ~131K chars kills the receiving process on stock Minima Core — so the posted hex stays ≤ 40K
+     *  (≈ 3 signatures + a handful of coin proofs). Measured on 1.1.2.31: 46,456 hex → 54,418 chars of TxPoW JSON. */
+    public static final int MAX_POST_HEX = 40_000;
+    /** Inputs one send / consolidate may spend, so a signed transaction fits {@link #MAX_POST_HEX}. */
+    public static final int MAX_SEND_INPUTS = 8, MAX_CONSOLIDATE_INPUTS = 6;
     /** A signature of a 128×4 TreeKey, hex chars (measured on a 1.1.2.31 Signature: 4 SignatureProofs). */
     static final int SIG_HEX_ESTIMATE = 12_000;
     /** At most this many coin rows in ONE node reply — stock Minima Core has no content:// hand-off and a reply of
@@ -242,7 +246,8 @@ public final class VirtualWallet {
         for (int i = 0; i < store.keyCount(); i++) {
             if (!only.isEmpty() && !norm(only).equals(norm(keys.publicKey(i)))) continue;
             arr.put(new JSONObject().put("size", AccountKeys.KEYS_PER_LEVEL).put("depth", AccountKeys.LEVELS)
-                    .put("uses", keys.usesOf(i)).put("maxuses", keys.maxUses()).put("modifier", i).put("publickey", keys.publicKey(i)));
+                    .put("uses", keys.usesOf(i)).put("maxuses", keys.maxUses())
+                    .put("modifier", new MiniData(java.math.BigInteger.valueOf(i)).to0xString()).put("publickey", keys.publicKey(i)));
         }
         return ok("keys", new JSONObject().put("keys", arr).put("total", arr.length()).put("maxuses", keys.maxUses()));
     }
@@ -286,7 +291,12 @@ public final class VirtualWallet {
         boolean relevant = p.has("relevant") || (!p.has("coinid") && !p.has("address") && !p.has("state") && !p.has("tokenid"));
         boolean sendable = p.b("sendable", false);
         if (p.has("coinid")) return coinById(p, relevant, sendable);
-        if (!address.isEmpty() && indexOfAddress(address) < 0) return null;      // a contract / shared address
+        if (!address.isEmpty() && indexOfAddress(address) < 0) {                  // a contract / shared address
+            if (!contractAddresses.contains(norm(address))) return null;
+            JSONObject r = node.call(command);                                      // the engine bounds these (state / depth)
+            noticeLocksToUs(r);
+            return r;
+        }
         if (!relevant && address.isEmpty()) return null;                          // chain search (state / tokenid)
         if (sendable || !address.isEmpty()) {                                     // MY spendable coins
             String extra = rebuild(p, "relevant", "sendable", "address", "tokenid", "checkmempool", "coinage");
@@ -298,17 +308,63 @@ public final class VirtualWallet {
             }
             return ok("coins", new JSONArray(rows));
         }
-        // relevant:true wallet-wide: the node's relevant set minus the NODE wallet's own coins (we cannot sign those).
-        JSONObject r = node.call(command);
-        if (!r.optBoolean("status")) return r;
-        JSONArray rows = r.optJSONArray("response"), kept = new JSONArray();
-        Set<String> nodeOwn = nodeSimpleAddresses();
-        if (rows != null) for (int k = 0; k < rows.length(); k++) {
-            JSONObject row = rows.getJSONObject(k);
-            if (!nodeOwn.contains(norm(row.optString("address")))) kept.put(row);
+        // relevant:true wallet-wide = MY relevant coins: the account's own + those at the contract addresses (my locks carry
+        // the owner port, locks to me are imported with tracking). Never the node's unbounded relevant set: it holds the
+        // user's whole node wallet, and a fragmented one would kill the app (the 0.1.57 parcel kill, by another road).
+        String extra = rebuild(p, "relevant", "sendable", "address", "tokenid", "checkmempool", "coinage");
+        String tok = p.s("tokenid", ""), age = p.s("coinage", "");
+        boolean mem = p.b("checkmempool", false);
+        JSONArray all = new JSONArray(accountCoinRows(tok, mem, age, extra));
+        for (String ca : contractAddresses) for (JSONObject row : coinRowsAt(ca, tok, mem, age, extra)) all.put(row);
+        return ok("coins", all);
+    }
+
+    /** Relevant coins at one contract address, count-capped like the account's. */
+    private List<JSONObject> coinRowsAt(String address, String tokenid, boolean checkMempool, String coinage, String extra) throws Exception {
+        String addr = address.startsWith("MX") || address.startsWith("Mx") ? address : "0x" + address;
+        List<JSONObject> out = new ArrayList<>();
+        int n = coinCount(addr, tokenid);
+        if (n == 0) return out;
+        if (n > MAX_COIN_ROWS) throw new IllegalStateException(n + " relevant coins at " + addr + " — too many to read safely in one reply.");
+        StringBuilder q = new StringBuilder("coins relevant:true address:").append(addr);
+        if (tokenid != null && !tokenid.isEmpty()) q.append(" tokenid:").append(tokenid);
+        if (checkMempool) q.append(" checkmempool:true");
+        if (coinage != null && !coinage.isEmpty()) q.append(" coinage:").append(coinage);
+        if (extra != null && !extra.isEmpty()) q.append(' ').append(extra);
+        JSONObject r = node.call(q.toString());
+        if (!r.optBoolean("status")) throw new IllegalStateException("coins: " + err(r));
+        JSONArray rows = r.optJSONArray("response");
+        if (rows != null) for (int k = 0; k < rows.length(); k++) out.add(rows.getJSONObject(k));
+        return out;
+    }
+
+    private final Set<String> imported = new HashSet<>();
+
+    /** A counterparty's lock that names one of our keys is not relevant on our node (the node's key table never holds
+     *  account keys). Track it the moment a scan first sees it — not at claim time, when it may be past the window. */
+    private void noticeLocksToUs(JSONObject reply) {
+        JSONArray rows = reply == null ? null : reply.optJSONArray("response");
+        if (rows == null) return;
+        for (int k = 0; k < rows.length(); k++) {
+            JSONObject row = rows.optJSONObject(k);
+            if (row == null) continue;
+            String id = norm(row.optString("coinid"));
+            if (id.isEmpty() || imported.contains(id)) continue;
+            JSONArray st = row.optJSONArray("state");
+            boolean ours = false;
+            if (st != null) for (int i = 0; i < st.length() && !ours; i++) {
+                JSONObject v = st.optJSONObject(i);
+                String d = v == null ? "" : v.optString("data", "");
+                ours = indexOfKey(d) >= 0 || indexOfAddress(d) >= 0;
+            }
+            if (!ours) continue;
+            try {
+                JSONObject ex = node.call("coinexport coinid:" + row.optString("coinid"));
+                JSONObject resp = ex.optJSONObject("response");
+                if (ex.optBoolean("status") && resp != null) node.call("coinimport track:true data:" + resp.getString("data"));
+                imported.add(id);
+            } catch (Exception later) { /* retried on the next scan */ }
         }
-        r.put("response", kept);
-        return r;
     }
 
     /** One coin. {@code sendable:true} means "spendable by ME": an account address (the node's own sendable flag means
@@ -455,8 +511,8 @@ public final class VirtualWallet {
                 return fail("send", "This token has its own script — the Trading Account only sends plain tokens.");
         }
         MiniNumber want = token == null ? amount : token.getScaledMinimaAmount(amount);
-        List<JSONObject> pickedRows = select(rows, want, 20);
-        if (pickedRows == null) return fail("send", "Insufficient funds");
+        List<JSONObject> pickedRows = select(rows, want, MAX_SEND_INPUTS);
+        if (pickedRows == null) return fail("send", "Insufficient funds in " + MAX_SEND_INPUTS + " coins — consolidate first (ASSETS › CONSOLIDATE).");
 
         Transaction t = new Transaction();
         List<CoinProof> picked = new ArrayList<>();
@@ -499,7 +555,7 @@ public final class VirtualWallet {
         String tokenid = p.s("tokenid", "");
         if (tokenid.isEmpty()) return fail("consolidate", "consolidate needs tokenid:");
         int coinage = Math.max(3, Integer.parseInt(p.s("coinage", "3")));
-        int maxcoins = Math.max(3, Math.min(10, Integer.parseInt(p.s("maxcoins", "10"))));   // ≤10: stays under the postfrom size cap
+        int maxcoins = Math.max(3, Math.min(MAX_CONSOLIDATE_INPUTS, Integer.parseInt(p.s("maxcoins", String.valueOf(MAX_CONSOLIDATE_INPUTS)))));   // stays under the postfrom size cap
         List<JSONObject> rows = spendableRows(tokenid, coinage, "");
         if (rows.size() < 3) return fail("consolidate", "Not enough coins (" + rows.size() + ") to consolidate");
         rows.sort((a, b) -> new MiniNumber(a.optString("amount", "0")).compareTo(new MiniNumber(b.optString("amount", "0"))));   // smallest first: sweep dust
@@ -853,8 +909,10 @@ public final class VirtualWallet {
      *  the CHECK lie — we never sign or post the node's copy. */
     private JSONObject txnCheck(P p) throws Exception {
         TxnRow r = row(p);
+        String data = hex(r);
+        if (data.length() > MAX_POST_HEX) return fail("txncheck", "Transaction too large to check over the node link (" + data.length() + " chars).");
         String tmp = freshId();
-        JSONObject imp = node.call("txnimport id:" + tmp + " data:" + hex(r));
+        JSONObject imp = node.call("txnimport id:" + tmp + " data:" + data);
         if (!imp.optBoolean("status")) return imp;
         try { return node.call("txncheck id:" + tmp); }
         finally { try { node.call("txndelete id:" + tmp); } catch (Exception ignored) { } }

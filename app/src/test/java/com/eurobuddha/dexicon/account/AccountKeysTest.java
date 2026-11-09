@@ -74,6 +74,24 @@ public class AccountKeysTest {
         }
     }
 
+    @Test public void restoreOnASlowPhoneAfterAFastOneNeverRepeatsALeaf() {
+        long skew = 30 * 60_000L;
+        Mem a = new Mem();
+        AccountKeys fast = AccountKeys.fromPhrase(PHRASE, a, null);
+        java.util.Set<Integer> leaves = new java.util.HashSet<>();
+        for (int i = 0; i < 2000; i++) {                       // a burst well beyond 1 signature / 2 s
+            fast.sign(new MiniData("0x" + String.format("%064x", i)), 0, NOW + skew);
+            leaves.add(a.currentUses(0) - 1);
+        }
+        Mem b = new Mem();                                      // restored a minute later on a phone 30 min SLOW
+        AccountKeys slow = AccountKeys.fromPhrase(PHRASE, b, null);
+        slow.setRestoreFloor(AccountKeys.restoreFloor(NOW + 60_000 - skew));
+        for (int i = 0; i < 50; i++) {
+            slow.sign(new MiniData("0x" + String.format("%064x", 10_000 + i)), 0, NOW + 60_000 - skew);
+            assertTrue("leaf reused after a skewed restore", leaves.add(b.currentUses(0) - 1));
+        }
+    }
+
     @Test public void refusesPastCapacityInsteadOfWrappingToLeafZero() {
         Mem uses = new Mem();
         uses.recordExternalUses(0, 268_435_456);

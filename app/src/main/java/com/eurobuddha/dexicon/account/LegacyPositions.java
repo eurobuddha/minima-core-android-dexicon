@@ -16,6 +16,7 @@ public final class LegacyPositions {
 
     /** Null when there is nothing to finish; else a one-line description. Cached 30 s (reads three local databases). */
     public static String describe(Context c) {
+        if (new AccountVault(c).everCreated()) return null;   // the account owns everything from here on (never the node)
         long now = System.currentTimeMillis();
         if (now - cachedAt < 30_000L) return cached;
         String d = scan(c.getApplicationContext());
@@ -30,7 +31,13 @@ public final class LegacyPositions {
     private static String scan(Context c) {
         StringBuilder b = new StringBuilder();
         try {
-            int swaps = new com.eurobuddha.atomix.swap.SwapDb(c).activeHashes().size();
+            com.eurobuddha.atomix.swap.SwapDb db = new com.eurobuddha.atomix.swap.SwapDb(c);
+            int swaps = db.activeHashes().size();
+            // ERROR swaps of the last 14 days: a Minima lock of mine may still need its owner refund (node key) —
+            // SwapEngine.finalizeEthLost marks ERROR while the lock "refunds independently at its own timelock".
+            long since = System.currentTimeMillis() - 14L * 24 * 3600_000L;
+            for (com.eurobuddha.atomix.swap.SwapDb.Swap sw : db.allSwaps())
+                if (com.eurobuddha.atomix.swap.SwapDb.ST_ERROR.equals(sw.status) && sw.created > since) swaps++;
             if (swaps > 0) b.append(swaps).append(swaps == 1 ? " swap in flight" : " swaps in flight");
         } catch (RuntimeException unreadable) { b.append("swap history unreadable"); }
         try {
