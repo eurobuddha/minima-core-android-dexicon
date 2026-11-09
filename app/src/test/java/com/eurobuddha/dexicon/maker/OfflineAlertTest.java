@@ -17,4 +17,15 @@ public class OfflineAlertTest {
         assertTrue("hourly", MakerService.offlineAlertDue(false, true, T, T + 3 * MIN, T + 63 * MIN));
         assertFalse("never unpaired", MakerService.offlineAlertDue(false, true, 0, 0, T));
     }
+
+    /** 9 Nov: no reply from any price source for 5 min while pegged -> one "check Wi-Fi" alert, then at most hourly. */
+    @Test public void netAlertOnlyForAPeggedLadderAfterFiveMinutesThenHourly() {
+        long T = 1_000_000_000L, MIN = 60_000;
+        assertFalse("not pegged: nothing waits on the feed", MakerService.netAlertDue(false, 30 * MIN, 0, T));
+        assertFalse("under 5 min", MakerService.netAlertDue(true, 5 * MIN - 1, 0, T));
+        assertTrue(MakerService.netAlertDue(true, 5 * MIN, 0, T));
+        assertFalse("not again within the hour", MakerService.netAlertDue(true, 40 * MIN, T, T + 59 * MIN));
+        assertTrue("hourly while it lasts", MakerService.netAlertDue(true, 70 * MIN, T, T + 60 * MIN));
+        assertFalse("answering again: 0 down", MakerService.netAlertDue(true, 0, 0, T));
+    }
 }

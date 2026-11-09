@@ -53,6 +53,8 @@ public final class MexcFeed {
     private static double price, bid, ask, suspect;
     private static long suspectAtMs;
     private static long goodAtMs, lastTryMs, gotAtMs;
+    /** When every source last started failing at the NETWORK level (no reply at all), or 0 while any source answers. */
+    private static long unreachableSinceMs;
     private static boolean fetching;
     private static String lastError;
     private static String source = "MEXC";
@@ -124,13 +126,17 @@ public final class MexcFeed {
                 b = book.optDouble("bidPrice", 0); a = book.optDouble("askPrice", 0);
             }
             long now = System.currentTimeMillis();
+            reachable();
             accept(b, a, now, now, "MEXC");
             return;
         } catch (Exception e) { errs.append("MEXC ").append(why(e)); }
+        boolean geckoAnswered = false;
         try {
             JSONObject t;
             try { t = httpGet(GECKO_MEXC_URL); }
             catch (IOException e) { t = httpGetIpv4(GECKO_MEXC_URL); }   // a network with broken IPv6 (the S10+'s) stalls on AAAA
+            geckoAnswered = true;
+            reachable();
             long now = System.currentTimeMillis();
             double[] r = parseGeckoMexc(t, now);
             if (r == null) throw new IOException("no fresh MEXC ticker on CoinGecko");
@@ -138,7 +144,16 @@ public final class MexcFeed {
             if (err == null) return;
             errs.append("; via CoinGecko ").append(err);
         } catch (Exception e) { errs.append("; via CoinGecko ").append(why(e)); }
-        synchronized (LOCK) { lastError = errs.toString(); }
+        synchronized (LOCK) {
+            lastError = errs.toString();
+            if (!geckoAnswered && unreachableSinceMs == 0) unreachableSinceMs = System.currentTimeMillis();
+        }
+    }
+    private static void reachable() { synchronized (LOCK) { unreachableSinceMs = 0; } }
+    /** How long MEXC direct AND MEXC-via-CoinGecko have both given no reply at all (0 = something answers). 9 Nov: that was
+     *  the S10+'s own Wi-Fi dropping 20-30 % of packets, not MEXC - the maker service turns it into a "reset Wi-Fi" alert. */
+    public static long unreachableForMs() {
+        synchronized (LOCK) { return unreachableSinceMs == 0 ? 0 : Math.max(0, System.currentTimeMillis() - unreachableSinceMs); }
     }
     private static String why(Exception e) { return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(); }
 
@@ -207,7 +222,7 @@ public final class MexcFeed {
     }
 
     /** Test hook: forget everything. */
-    static void reset() { synchronized (LOCK) { price = bid = ask = suspect = 0; goodAtMs = lastTryMs = suspectAtMs = 0; lastError = null; source = "MEXC"; } }
+    static void reset() { synchronized (LOCK) { price = bid = ask = suspect = 0; goodAtMs = lastTryMs = suspectAtMs = unreachableSinceMs = 0; lastError = null; source = "MEXC"; } }
     static String source() { synchronized (LOCK) { return source; } }
     static String lastError() { synchronized (LOCK) { return lastError; } }
 

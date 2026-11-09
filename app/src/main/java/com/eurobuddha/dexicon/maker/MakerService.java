@@ -214,6 +214,7 @@ public class MakerService extends Service {
             else if (door % 3 == 0 && paired) try { com.eurobuddha.dexicon.doors.DoorHost.get(MakerService.this).discover(); }
             catch (RuntimeException e) { log("doors discover: " + e); }
             try { maybeOfflineAlert(); } catch (RuntimeException e) { log("offline alert: " + e); }
+            try { maybeNetAlert(); } catch (RuntimeException e) { log("net alert: " + e); }
             // The MiniHub re-read (the trading gate's MiniDapp half) never waits behind a slow relay chain either.
             long nowMs = System.currentTimeMillis();
             if (paired && nowMs - lastHubMs >= HUB_EVERY_MS) { lastHubMs = nowMs; com.eurobuddha.dexicon.TradingGate.checkMiniHub(MakerService.this, node, MakerService.this::changed); }
@@ -659,11 +660,50 @@ public class MakerService extends Service {
         try { NotificationManager nm = getSystemService(NotificationManager.class); if (nm != null) nm.cancel(OFFLINE_ID); } catch (Exception ignored) {}
     }
 
+    // ----- 9 Nov: the price feed gets no reply at all while the phone says it is online -> "reset Wi-Fi" -----
+    private static final String CH_NET = "dexicon_net";
+    private static final int NET_ID = 7603;
+    static final long NET_ALERT_AFTER_MS = 5 * 60_000, NET_REALERT_MS = 60 * 60_000;
+    private long lastNetAlertMs;
+    private boolean netAlertShown;
+
+    /** A pegged ladder whose price feed has had NO reply from MEXC or CoinGecko for 5 min: almost always this phone's own
+     *  connection (the S10+'s Wi-Fi was losing 20-30 % of packets and the ladder sat withdrawn for hours). Android lets no
+     *  app toggle Wi-Fi, so a HIGH alert opens the system Internet/Wi-Fi panel instead; re-posted hourly, cleared on recovery. */
+    private void maybeNetAlert() {
+        Ladder.Config c = Ladder.Config.fromJson(db.meta(LadderRunner.CONFIG, ""));
+        long now = System.currentTimeMillis(), down = MexcFeed.unreachableForMs();
+        if (netAlertShown && down == 0) { netAlertShown = false; lastNetAlertMs = 0; cancelNetAlert(); return; }
+        if (!netAlertDue(c.enabled && c.peg, down, lastNetAlertMs, now)) return;
+        lastNetAlertMs = now; netAlertShown = true;
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        Intent panel = Build.VERSION.SDK_INT >= 29 ? new Intent(android.provider.Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+                : new Intent(android.provider.Settings.ACTION_WIFI_SETTINGS);
+        PendingIntent pi = PendingIntent.getActivity(this, 14, panel.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        String body = "No reply from MEXC or CoinGecko for " + down / 60_000 + " min, so your pegged ladder is withdrawn. This is "
+                + "usually this phone's own connection dropping packets. Tap to turn Wi-Fi off and on.";
+        try {
+            nm.notify(NET_ID, new NotificationCompat.Builder(this, CH_NET).setContentTitle("No price: check this phone's Wi-Fi").setContentText(body)
+                    .setStyle(new NotificationCompat.BigTextStyle().bigText(body)).setSmallIcon(android.R.drawable.stat_notify_error)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH).setContentIntent(pi).setAutoCancel(true).build());
+        } catch (SecurityException noPermission) { /* notifications off: the maker dialog still shows the error */ }
+        log("net alert: price feed unreachable " + down / 60_000 + " min");
+    }
+    static boolean netAlertDue(boolean pegged, long downMs, long lastAlertMs, long now) {
+        return pegged && downMs >= NET_ALERT_AFTER_MS && (lastAlertMs == 0 || now - lastAlertMs >= NET_REALERT_MS);
+    }
+    private void cancelNetAlert() {
+        try { NotificationManager nm = getSystemService(NotificationManager.class); if (nm != null) nm.cancel(NET_ID); } catch (Exception ignored) {}
+    }
+
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) nm.createNotificationChannel(new NotificationChannel(CH_FG, "Maker engine", NotificationManager.IMPORTANCE_LOW));
             if (nm != null) nm.createNotificationChannel(new NotificationChannel(CH_OFFLINE, "Market offline", NotificationManager.IMPORTANCE_HIGH));
+            if (nm != null) nm.createNotificationChannel(new NotificationChannel(CH_NET, "No price feed", NotificationManager.IMPORTANCE_HIGH));
             Notifier.ensureChannels(this);
         }
     }
