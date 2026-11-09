@@ -152,8 +152,7 @@ public final class Account {
             JSONObject reply = null; String error = null; boolean passThrough = false;
             try {
                 if (System.currentTimeMillis() - queued > patience) error = "The Trading Account was busy too long; nothing was sent. Try again.";
-                else if (guard != null && !onMain(guard)) error = "Market changed; refresh and try again. No command was sent.";
-                else {
+                else {   // the guard is evaluated exactly once, inside the wallet (it may have side effects)
                     current = node;
                     long now = System.currentTimeMillis();
                     if (now - trackedAt > RETRACK_MS) {
@@ -173,7 +172,8 @@ public final class Account {
             } catch (Exception e) { error = e.getMessage() == null ? e.toString() : e.getMessage(); }
             final JSONObject r = reply; final String err = error;
             if (passThrough) {
-                MAIN.post(() -> node.cmdDirect(command, guard, timeoutMs, new NodeApi.Cb() {
+                // the wallet already evaluated the guard (exactly once) before passing the command through
+                MAIN.post(() -> node.cmdDirect(command, null, timeoutMs, new NodeApi.Cb() {
                     public void onResult(JSONObject j) { noticeLocks(command, j); if (cb != null) cb.onResult(j); }
                     public void onError(String m) { if (cb != null) cb.onError(m); }
                 }));
@@ -218,11 +218,13 @@ public final class Account {
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<JSONObject> out = new AtomicReference<>();
         AtomicReference<String> err = new AtomicReference<>();
-        MAIN.post(() -> node.cmdDirect(cmd, null, 0, new NodeApi.Cb() {
+        java.util.concurrent.atomic.AtomicBoolean abandoned = new java.util.concurrent.atomic.AtomicBoolean(false);
+        // a command still queued when we stop waiting is never sent: the caller has already been told it failed
+        MAIN.post(() -> node.cmdDirect(cmd, () -> !abandoned.get(), 0, new NodeApi.Cb() {
             public void onResult(JSONObject j) { out.set(j); done.countDown(); }
             public void onError(String m) { err.set(m == null ? "node error" : m); done.countDown(); }
         }));
-        if (!done.await(200, TimeUnit.SECONDS)) throw new IllegalStateException("The node did not answer " + cmd.split(" ", 2)[0]);
+        if (!done.await(200, TimeUnit.SECONDS)) { abandoned.set(true); throw new IllegalStateException("The node did not answer " + cmd.split(" ", 2)[0]); }
         if (err.get() != null) throw new IllegalStateException(err.get());
         return out.get();
     }

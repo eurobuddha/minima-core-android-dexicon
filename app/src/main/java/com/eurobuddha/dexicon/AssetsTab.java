@@ -255,5 +255,14 @@ public final class AssetsTab extends LinearLayout {
         LayoutParams l1 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f); l1.rightMargin = Design.dp(getContext(), 6);
         tools.addView(cons, l1); tools.addView(split, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         box.addView(tools, Ui.wide(act, 8, 0));
+        // the Trading Account: move funds in from the Minima wallet and back out again
+        LinearLayout move = new LinearLayout(getContext());
+        TextView dep = Ui.button(act, "DEPOSIT"), wd = Ui.button(act, "WITHDRAW");
+        dep.setTextColor(Design.ACCENT()); wd.setTextColor(Design.ACCENT());
+        dep.setOnClickListener(v -> WalletTools.deposit(act, name));
+        wd.setOnClickListener(v -> WalletTools.withdraw(act, tokenid, name, sendable));
+        LayoutParams l2 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f); l2.rightMargin = Design.dp(getContext(), 6);
+        move.addView(dep, l2); move.addView(wd, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
+        box.addView(move, Ui.wide(act, 6, 0));
     }
 }

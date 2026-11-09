@@ -158,9 +158,32 @@ public final class VirtualWallet {
 
     /** Answer {@code command} locally, or return null to pass it to the node unchanged. {@code guard} is re-checked right
      *  before any post. */
+    /** Engine guards can have SIDE EFFECTS (PandaPools' Write.admit records a pending-write marker and refuses a second
+     *  call), so a guard is evaluated EXACTLY ONCE — as the node's own queue does: immediately before the post for a
+     *  command that writes (txnpost / send / consolidate), at the start for everything else. */
     public synchronized JSONObject handle(String command, BooleanSupplier guard) {
-        postGuard = guard;
+        String verb = command.trim().split("\\s+", 2)[0].toLowerCase();
+        boolean writes = verb.equals("txnpost") || verb.equals("send") || verb.equals("consolidate");
+        if (guard != null && !writes) {
+            boolean go; try { go = guard.getAsBoolean(); } catch (RuntimeException e) { go = false; }
+            if (!go) throw new ToCaller("Market changed; refresh and try again. No command was sent.");
+        }
+        postGuard = writes ? guard : null;
         try { return handle(command); } finally { postGuard = null; }
+    }
+
+    /** An answer that is NOT an ordinary node reply: an engine guard's refusal, or a post whose outcome is unknown. It
+     *  reaches the caller's onError (as the node's own queue does), so an engine keeps its pending-write marker and its
+     *  coin locks — a "status:false" would tell it nothing was broadcast and invite a second spend. */
+    public static final class ToCaller extends RuntimeException { ToCaller(String m) { super(m); } }
+
+    /** The engine's guard, evaluated exactly once, BEFORE any key leaf is spent on a write. */
+    private void admit() {
+        if (postGuard == null) return;
+        BooleanSupplier g = postGuard;
+        postGuard = null;
+        boolean go; try { go = g.getAsBoolean(); } catch (RuntimeException e) { go = false; }
+        if (!go) throw new ToCaller("Market changed; refresh and try again. Nothing was signed or posted.");
     }
 
     public synchronized JSONObject handle(String command) {
@@ -197,6 +220,8 @@ public final class VirtualWallet {
                 case "txnclear":    return txnClear(p);
                 default:            return fail(verb, verb + " is not available on the Trading Account.");
             }
+        } catch (ToCaller e) {
+            throw e;
         } catch (Exception e) {
             return fail(verb, e.getMessage() == null ? e.toString() : e.getMessage());
         }
@@ -240,6 +265,7 @@ public final class VirtualWallet {
 
     private JSONObject keysCmd(P p) throws Exception {
         String action = p.s("action", "list");
+        if ("genkey".equals(action)) return genkey(p);
         if (!"list".equals(action)) return fail("keys", "keys action:" + action + " is not available on the Trading Account.");
         String only = p.s("publickey", "");
         JSONArray arr = new JSONArray();
@@ -250,6 +276,22 @@ public final class VirtualWallet {
                     .put("modifier", new MiniData(java.math.BigInteger.valueOf(i)).to0xString()).put("publickey", keys.publicKey(i)));
         }
         return ok("keys", new JSONObject().put("keys", arr).put("total", arr.length()).put("maxuses", keys.maxUses()));
+    }
+
+    /** The node's {@code keys action:genkey phrase:} — a throw-away key from a PUBLIC phrase, stored nowhere. PandaPools'
+     *  owner recovery uses it as its key-mode probe (BlockOwnerRecovery.MODE_COMMAND), so it must give the node's exact
+     *  answer: seed = BIP39(phrase), key = TreeKey(hash(seed, 0)) in this account's 128x4 shape (= the node in block
+     *  mode). Phrase required (no random keys), and the private key is never returned. */
+    private JSONObject genkey(P p) throws Exception {
+        String phrase = p.s("phrase", "");
+        if (phrase.isEmpty()) return fail("keys", "keys action:genkey needs phrase: on the Trading Account.");
+        MiniData seed = org.minima.utils.BIP39.convertStringToSeed(phrase);
+        MiniData priv = org.minima.utils.Crypto.getInstance().hashObjects(seed, new MiniData(java.math.BigInteger.ZERO));
+        String pub = new org.minima.objects.keys.TreeKey(priv, AccountKeys.KEYS_PER_LEVEL, AccountKeys.LEVELS).getPublicKey().to0xString();
+        String script = "RETURN SIGNEDBY(" + pub + ")";
+        org.minima.objects.Address a = new org.minima.objects.Address(script);
+        return ok("keys", new JSONObject().put("phrase", phrase).put("modifier", 0).put("publickey", pub).put("script", script)
+                .put("address", a.getAddressData().to0xString()).put("miniaddress", org.minima.objects.Address.makeMinimaAddress(a.getAddressData())));
     }
 
     /** Coin rows (node JSON) at every account address, with optional filters passed to the node. A count preflight
@@ -520,6 +562,7 @@ public final class VirtualWallet {
         t.calculateTransactionID();
         if (p.b("dryrun", false)) return ok("send", new JSONObject().put("dryrun", true).put("txn", new JSONObject(row.toJSON().toString())));
         attachScripts(row);
+        admit();
         JSONObject signed = signInputs(row, null);
         if (signed.has("error")) return fail("send", signed.getString("error"));
         JSONObject posted = post(row);
@@ -568,6 +611,7 @@ public final class VirtualWallet {
         t.calculateTransactionID();
         if (p.b("dryrun", false)) return ok("consolidate", new JSONObject().put("dryrun", true).put("coins", picked.size()).put("txn", new JSONObject(row.toJSON().toString())));
         attachScripts(row);
+        admit();
         JSONObject signed = signInputs(row, null);
         if (signed.has("error")) return fail("consolidate", signed.getString("error"));
         JSONObject posted = post(row);
@@ -820,24 +864,32 @@ public final class VirtualWallet {
         return ok("txnpost", res.opt("response"));
     }
 
-    /** The ONE write: a fully-signed transaction to the node through postfrom, under a fresh unguessable id. */
+    /** The ONE write: a fully-signed transaction to the node through postfrom, under a fresh unguessable id.
+     *  ALWAYS mine:false, whatever the caller asked: stock Minima Core runs IPC commands on its UI thread, and mine:true
+     *  mines there synchronously for up to 120 s (ANR risk; a timed-out mine also leaves the inputs flagged "in the
+     *  mempool" until the node restarts). The reply's txpowid is then the pre-mining id; the engines reconcile from
+     *  the chain (proven on mainnet 9 Nov: AtomiX lock + claim, pool swap/create/close, DEX take). */
     private JSONObject post(TxnRow r) throws Exception {
-        if (postGuard != null) {
-            boolean go; try { go = postGuard.getAsBoolean(); } catch (RuntimeException e) { go = false; }
-            if (!go) return fail("txnpost", "Market changed; refresh and try again. Nothing was posted.");
-        }
+        admit();
         refreshProofs(r);
         TxnRow out = new TxnRow(freshId(), r.getTransaction(), r.getWitness());
         String hex = hex(out);
         if (hex.length() > MAX_POST_HEX) return fail("txnpost", "Transaction too large for the node link (" + hex.length() + " chars) — split it. Nothing was posted.");
-        JSONObject res = node.call("postfrom data:" + hex + " mine:false");
+        JSONObject res;
+        try { res = node.call("postfrom data:" + hex + " mine:false"); }
+        catch (Exception noAnswer) {
+            // The node may have posted it: lock the inputs as in flight and report UNCERTAIN, never "not accepted".
+            long now = clock.now();
+            for (Coin c : r.getTransaction().getAllInputs()) if (indexOfAddress(c.getAddress().to0xString()) >= 0) spending.put(norm(c.getCoinID().to0xString()), now);
+            throw new ToCaller("UNCERTAIN: the node did not answer (" + noAnswer.getMessage() + "); the transaction may still be on its way. Check your coins before trying again.");
+        }
         Object resp = res.opt("response");
         if (!res.optBoolean("status") || !(resp instanceof JSONObject) || ((JSONObject) resp).optString("txpowid", "").isEmpty())
             return fail("txnpost", "The node did not accept the transaction" + (res.has("error") ? ": " + res.optString("error") : "") + ". Nothing was spent.");
         String posted = postedTxnId((JSONObject) resp);
-        String mine = r.getTransaction().getTransactionID().to0xString();
-        if (posted != null && !posted.equalsIgnoreCase(mine))
-            return fail("txnpost", "The node posted a different transaction (" + posted + ") than ours (" + mine + ") — another app interfered. Check your coins.");
+        String ours = r.getTransaction().getTransactionID().to0xString();
+        if (posted != null && !posted.equalsIgnoreCase(ours))
+            return fail("txnpost", "The node posted a different transaction (" + posted + ") than ours (" + ours + ") — another app interfered. Check your coins.");
         long now = clock.now();
         for (Coin c : r.getTransaction().getAllInputs()) if (indexOfAddress(c.getAddress().to0xString()) >= 0) spending.put(norm(c.getCoinID().to0xString()), now);
         return ok("txnpost", resp);

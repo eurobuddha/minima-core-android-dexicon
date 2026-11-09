@@ -17,6 +17,10 @@ import java.util.function.Consumer;
 final class CombinedBackupUi {
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
     static void backup(MainActivity act, Recovery recovery, List<Pool> live, Consumer<String> status, Runnable done) {
+        // STOCK (Dexicon Trading Account): the pool owner key comes from the account's 24 words, never the node — so
+        // the backup is the pool recipes alone (no node backup: stock Minima Core has no FILE bridge and `backup` is
+        // admin-only). Saved as the plain recipe JSON that open() already reads; it holds no secret.
+        if (com.eurobuddha.dexicon.account.Account.everCreated(act)) { recipesOnly(act, recovery, live, status, done); return; }
         password(act, true, pass -> {
             status.accept("Preparing encrypted pool + node backup…");
             final List<Pool> owned = OwnPoolStore.all(act);
@@ -26,8 +30,66 @@ final class CombinedBackupUi {
                     NodeBackupCapture.start(act, json, pass, new NodeBackupCapture.Done() {
                         public void failed(String reason) { status.accept(reason); done.run(); show(act,"Backup still required",reason); }
                         public void ready(File encrypted,String recipes) {
-                            if(act.isFinishing()||act.isDestroyed()){encrypted.delete();done.run();return;}
-                            act.pickSaveFile("pandapools-full-"+System.currentTimeMillis()+".ppbackup",uri->{
+                            save(act,encrypted,recipes,owned,"pandapools-full-"+System.currentTimeMillis()+".ppbackup",
+                                    "Encrypted pool + node backup saved and verified.","Complete backup verified",
+                                    "The saved file contains your pool recipes and encrypted node backup, including wallet keys and backup-time signing state. Keep this file and its password safe, preferably off this device.\n\nFuture wallet activity can make signing state in this backup stale. Recovery checks the state it can verify and refreshes reserve proofs when needed.",status,done);
+                        }
+                    });
+                }
+            });
+        }, done);
+    }
+    private static void recipesOnly(MainActivity act, Recovery recovery, List<Pool> live, Consumer<String> status, Runnable done) {
+        status.accept("Preparing pool backup…");
+        final List<Pool> owned = OwnPoolStore.all(act);
+        recovery.backup(act, live, act.chainBlock(), new Recovery.BackupCb() {
+            public void onError(String message) { status.accept(message); done.run(); }
+            public void onBackup(String json) {
+                String invalid = BackupState.verifyExport(json, owned, 0);
+                if (invalid != null) { status.accept("POOL_BACKUP_INVALID: " + invalid); done.run(); return; }
+                NodeApi node = act.node();
+                if (node == null) { status.accept("NODE_UNAVAILABLE: connect to your node, then back up again."); done.run(); return; }
+                // Recipes alone recover a pool ONLY if the account's words own it: every owner key must be an account key
+                // with a known index (restore re-creates keys up to it). Anything else still needs a node backup.
+                node.cmd("keys", new NodeApi.Cb() {
+                    public void onResult(org.json.JSONObject keys) {
+                        String gap = accountOwnsAll(json, keys);
+                        if (gap != null) { status.accept(gap); done.run(); show(act, "Backup still required", gap); return; }
+                        saveRecipes(act, json, owned, status, done);
+                    }
+                    public void onError(String m) { status.accept("WALLET_UNREADABLE: could not read the account's keys. Nothing saved."); done.run(); }
+                });
+            }
+        });
+    }
+    /** Null when every pool recipe's owner key is an account key with its index recorded; else why not. */
+    static String accountOwnsAll(String json, org.json.JSONObject keys) {
+        try {
+            org.json.JSONArray pools = new org.json.JSONObject(json).getJSONArray("pools");
+            for (int i = 0; i < pools.length(); i++) {
+                org.json.JSONObject e = pools.getJSONObject(i);
+                String opk = e.optString("opk", "");
+                int kidx = e.optInt("kidx", -1);
+                if (kidx < 0 || KeyUses.modifierOf(keys, opk) != kidx)
+                    return "NODE_KEY_POOL: pool " + e.optString("addr", "") + " is owned by a key that is not in your Trading Account"
+                            + " (or its index is unknown). Its recovery needs a Minima Core wallet backup, which stock Minima Core can only make from its own Backup screen.";
+            }
+            return null;
+        } catch (Exception bad) { return "POOL_BACKUP_INVALID: the pool list could not be read."; }
+    }
+    private static void saveRecipes(MainActivity act, String json, List<Pool> owned, Consumer<String> status, Runnable done) {
+                File file;
+                try {
+                    file = File.createTempFile("pandapools-recipes-", ".json", NodeBackupCapture.directory(act));
+                    try (OutputStream out = new FileOutputStream(file)) { out.write(json.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+                } catch (IOException e) { status.accept("BACKUP_BUILD_FAILED: could not write the pool backup. Check free storage and retry."); done.run(); return; }
+                save(act, file, json, owned, "pandapools-pools-" + System.currentTimeMillis() + ".json",
+                        "Pool backup saved and verified.", "Pool backup verified",
+                        "The saved file holds your pool recipes. Your Trading Account's 24 words hold the keys that own these pools — keep both. Open this file under Recover pools on any phone restored from those words.", status, done);
+    }
+    private static void save(MainActivity act, File encrypted, String recipes, List<Pool> owned, String fileName,
+                             String okStatus, String okTitle, String okMessage, Consumer<String> status, Runnable done) {
+                            act.pickSaveFile(fileName,uri->{
                                 if(uri==null){encrypted.delete();status.accept("Backup not saved. Save it before creating another pool.");done.run();return;}
                                 status.accept("Saving and checking the encrypted file…");
                                 IO.execute(()->{
@@ -53,17 +115,12 @@ final class CombinedBackupUi {
                                     act.runOnUiThread(()->{
                                         done.run();if(act.isFinishing()||act.isDestroyed())return;
                                         if(error!=null){status.accept(error);show(act,"Backup still required",error);return;}
-                                        status.accept("Encrypted pool + node backup saved and verified.");
-                                        show(act,"Complete backup verified","The saved file contains your pool recipes and encrypted node backup, including wallet keys and backup-time signing state. Keep this file and its password safe, preferably off this device.\n\nFuture wallet activity can make signing state in this backup stale. Recovery checks the state it can verify and refreshes reserve proofs when needed.");
+                                        status.accept(okStatus);
+                                        show(act,okTitle,okMessage);
                                         act.pools().refresh();
                                     });
                                 });
                             });
-                        }
-                    });
-                }
-            });
-        }, done);
     }
     /** Authenticate a combined file before exposing its recipes; legacy public JSON remains readable. */
     static void inspect(MainActivity act,Uri uri,Consumer<String> recipes,Consumer<String> status){open(act,uri,recipes,status,false);}

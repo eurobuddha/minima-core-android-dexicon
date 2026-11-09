@@ -15,7 +15,7 @@ public class VirtualWalletTest {
     static final class Store implements VirtualWallet.Store { int n; public int keyCount() { return n; } public void setKeyCount(int x) { n = x; } }
 
     /** Records every node call; answers scripts/newscript and empty coin lists. */
-    static final class FakeNode implements VirtualWallet.Node {
+    static class FakeNode implements VirtualWallet.Node {
         final List<String> calls = new ArrayList<>();
         public JSONObject call(String cmd) throws Exception {
             calls.add(cmd);
@@ -89,5 +89,54 @@ public class VirtualWalletTest {
         assertEquals(1, b.length());
         assertEquals("0x00", b.getJSONObject(0).getString("tokenid"));
         assertEquals("0", b.getJSONObject(0).getString("sendable"));
+    }
+
+    @Test public void anEngineGuardIsEvaluatedExactlyOnce() throws Exception {
+        // PandaPools' Write.admit records a pending-write marker and refuses a SECOND call: never ask twice.
+        VirtualWallet w = wallet(new FakeNode());
+        int[] calls = {0};
+        java.util.function.BooleanSupplier once = () -> ++calls[0] == 1;
+        assertTrue(w.handle("txncreate id:g", once).getBoolean("status"));
+        assertEquals(1, calls[0]);
+        calls[0] = 0;
+        w.handle("txnpost id:g mine:true", once);                // posts nothing (empty txn) but asks the guard once
+        assertEquals(1, calls[0]);
+        calls[0] = 0;
+        try { w.handle("txncreate id:h", () -> { calls[0]++; return false; }); fail("a refusal must reach onError"); }
+        catch (VirtualWallet.ToCaller refused) { assertTrue(refused.getMessage().startsWith("Market changed")); }
+        assertEquals(1, calls[0]);
+    }
+
+    @Test public void alwaysPostsWithMineFalse() throws Exception {
+        // stock Minima Core mines mine:true on its UI thread for up to 120 s: never ask it to
+        FakeNode n = new FakeNode();
+        VirtualWallet w = wallet(n);
+        w.handle("txncreate id:m");
+        w.handle("txnpost id:m mine:true");
+        w.handle("txnpost id:m");
+        List<String> posts = new ArrayList<>();
+        for (String c : n.calls) if (c.startsWith("postfrom ")) posts.add(c.substring(c.lastIndexOf(' ') + 1));
+        assertEquals(java.util.Arrays.asList("mine:false", "mine:false"), posts);
+    }
+
+    @Test public void aPostWithNoAnswerIsUncertainNeverFailed() throws Exception {
+        FakeNode n = new FakeNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                if (cmd.startsWith("postfrom")) { calls.add(cmd); throw new IllegalStateException("The node did not answer postfrom"); }
+                return super.call(cmd);
+            }
+        };
+        VirtualWallet w = wallet(n);
+        w.handle("txncreate id:u");
+        try { w.handle("txnpost id:u"); fail("an unanswered post must not read as status:false"); }
+        catch (VirtualWallet.ToCaller uncertain) { assertTrue(uncertain.getMessage().startsWith("UNCERTAIN")); }
+    }
+
+    @Test public void genkeyMatchesTheNodesBlockModeProbe() throws Exception {
+        // PandaPools' BlockOwnerRecovery probe: the node in block mode answers BLOCK_PROBE for this public phrase
+        JSONObject r = wallet(new FakeNode()).handle("keys action:genkey phrase:\"PandaPools public recovery mode probe v1\"");
+        assertTrue(r.toString(), r.getBoolean("status"));
+        assertEquals("0x3FFDB1A06A2DCA90BEE0D7C0F5BA62B9AF23BF5D73A23D63555492F88D1E3828", r.getJSONObject("response").getString("publickey"));
+        assertFalse(r.getJSONObject("response").has("privatekey"));
     }
 }
