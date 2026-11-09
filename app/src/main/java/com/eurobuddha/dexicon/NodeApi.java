@@ -36,6 +36,8 @@ public class NodeApi {
     public static final String ERR_NOT_ADMIN = "NOT_ADMIN";
     /** The node dropped an over-256KB reply (it returns a stub instead of the data). */
     public static final String ERR_TOO_LONG = "TOO_LONG";
+    /** Wallet / txn verbs before the Trading Account is set up (AccountSetup). */
+    public static final String ERR_NO_ACCOUNT = "Set up your Trading Account first.";
 
     private static final long READ_TIMEOUT_MS = 30000;
     private static final long WRITE_TIMEOUT_MS = 180000;   // sign + proof-of-work + post is slow on mobile
@@ -43,7 +45,7 @@ public class NodeApi {
     static boolean writesFunds(String command) {
         String verb = command == null ? "" : command.trim().split("\\s+", 2)[0];
         return verb.equals("sign") || verb.equals("txnsign") || verb.equals("txnpost") || verb.equals("send")
-                || verb.equals("consolidate") || verb.equals("tokencreate");
+                || verb.equals("consolidate") || verb.equals("tokencreate") || verb.equals("postfrom");
     }
     private static long timeoutFor(String command) {
         String c = command == null ? "" : command.trim();
@@ -58,7 +60,10 @@ public class NodeApi {
     private boolean mReleased = false, destroyRequested = false;
     private Boolean enabled, admin;
     /** The node said Dexicon is enabled but NOT admin (or parked a command as pending): nothing runs until it is. */
-    public boolean needsAdmin() { return Boolean.FALSE.equals(admin); }
+    public boolean needsAdmin() { return Boolean.FALSE.equals(admin) && !com.eurobuddha.dexicon.account.Account.exists(mContext)
+            && com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext); }
+    /** Stock Minima Core edition: once a Trading Account exists Dexicon signs itself and never needs ADMIN. */
+    public boolean hasAccount() { return com.eurobuddha.dexicon.account.Account.exists(mContext); }
     /** True once a node has REPLIED to a register (even "not enabled"); false while nothing has answered. A reply
      *  timeout and a real "disabled" used to look identical to the screen (live on the Fold 2026-10-22). */
     private boolean answered;
@@ -66,6 +71,10 @@ public class NodeApi {
     private long lastOk;
     private int consecutiveTimeouts, queuedCommands;
     private static final SerialQueue IPC_QUEUE = new SerialQueue();
+
+    /** The node the user picked when several are installed (Settings → NODE); null = whichever one answers. */
+    public static String preferredNode(Context c) { return com.eurobuddha.minimaapi.MinimaAPI.readPreferredNode(c); }
+    public static void setPreferredNode(Context c, String pkg) { com.eurobuddha.minimaapi.MinimaAPI.writePreferredNode(c, pkg); }
 
     public NodeApi(Context ctx, PairingListener pairing) {
         mContext = ctx;
@@ -82,6 +91,10 @@ public class NodeApi {
         // Name the node Dexicon is actually paired with (the one that answered discovery), not the first one installed:
         // with Pandamonium and BlackBear both installed, a BlackBear pairing was shown as "connecting to Pandamonium".
         String pinned = com.eurobuddha.minimaapi.MinimaAPI.pinnedNode;
+        String chosen = preferredNode(c);
+        if (chosen != null) for (String[] a : apps) if (a[0].equals(chosen)) {
+            try { c.getPackageManager().getPackageInfo(a[0], 0); return a; } catch (Exception notInstalled) { break; }
+        }
         java.util.List<String[]> installed = new java.util.ArrayList<>();
         for (String[] a : apps) {
             if (a[0].equals(pinned)) return a;
@@ -138,6 +151,32 @@ public class NodeApi {
      *  default for the verb). The vendored PandaPools engine waits 180 s for `backup`, `newaddress` and its key probe. */
     public void cmd(String command, java.util.function.BooleanSupplier guard, long timeoutMs, Cb cb) {
         if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, guard, timeoutMs, cb)); return; }
+        String invalid = CommandSafety.failure(command);
+        if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
+        // Trading Account: wallet + txn verbs are answered in-app (VirtualWallet); only signed postfrom reaches the node.
+        String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
+        if (com.eurobuddha.dexicon.account.VirtualWallet.handles(verb)) {
+            com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);
+            if (acct != null) {
+                queuedCommands++;   // the account may still be posting: never release the transport underneath it
+                acct.submit(this, command, guard, timeoutMs, new Cb() {
+                    public void onResult(JSONObject j) { queuedCommands--; try { if (cb != null) cb.onResult(j); } finally { finishDestroy(); } }
+                    public void onError(String m) { queuedCommands--; try { if (cb != null) cb.onError(m); } finally { finishDestroy(); } }
+                });
+                return;
+            }
+            // No account yet. Positions an earlier Dexicon signed with the NODE's keys settle the old way (ADMIN) until
+            // they are finished; otherwise never fall back to the node's wallet or seed. Chain reads still pass.
+            if (!verb.equals("coins") && !com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext)) {
+                if (cb != null) mMain.post(() -> cb.onError(ERR_NO_ACCOUNT)); return;
+            }
+        }
+        cmdDirect(command, guard, timeoutMs, cb);
+    }
+
+    /** Straight to the node (no Trading Account interception). The account itself reaches the node only through this. */
+    public void cmdDirect(String command, java.util.function.BooleanSupplier guard, long timeoutMs, Cb cb) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmdDirect(command, guard, timeoutMs, cb)); return; }
         String invalid = CommandSafety.failure(command);
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         if (mReleased) { if (cb != null) mMain.post(() -> cb.onError("Node connection closed.")); return; }
@@ -239,7 +278,7 @@ public class NodeApi {
                             return;
                         }
                         if (!zResponse.optBoolean("enabled", true)) { noteEnabled(false); cb.onError(ERR_NOT_ENABLED); return; }
-                        if (zResponse.optBoolean("pending", false)) { admin = false; noteEnabled(false); cb.onError(ERR_NOT_ADMIN); return; }   // belt: parked, not run
+                        if (zResponse.optBoolean("pending", false)) { admin = false; if (!hasAccount()) noteEnabled(false); cb.onError(ERR_NOT_ADMIN); return; }   // belt: parked, not run
                         if (isTooLong(zResponse)) { cb.onError(ERR_TOO_LONG); return; }
                         lastOk = System.currentTimeMillis();
                         consecutiveTimeouts = 0;

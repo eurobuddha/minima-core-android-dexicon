@@ -7,12 +7,14 @@ android {
     compileSdk 36
 
     defaultConfig {
-        applicationId "com.eurobuddha.dexicon"
+        // -PstockTest builds a side-by-side test install (com.eurobuddha.dexicon.stock) that pairs with its own node row
+        // and shares no data with an installed Dexicon — used to prove the Trading Account on stock Minima Core.
+        applicationId "com.eurobuddha.dexicon" + (project.hasProperty('stockTest') ? '.stock' : '')
         minSdk 28
         targetSdk 35
         // Every code change bumps BOTH (pre-commit hook .githooks/pre-commit enforces it).
-        versionCode 294
-        versionName "0.2.94"
+        versionCode 298
+        versionName "0.2.98"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

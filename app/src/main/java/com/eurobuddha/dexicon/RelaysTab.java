@@ -21,6 +21,7 @@ public final class RelaysTab extends LinearLayout {
     private final MainActivity act;
     private final LinearLayout body;
     private final EditText in;
+    private final LinearLayout accountCard, nodeCard;
     private boolean discovering;
 
     public RelaysTab(MainActivity act) {
@@ -29,6 +30,10 @@ public final class RelaysTab extends LinearLayout {
         setOrientation(VERTICAL);
         int pad = Design.dp(act, 12);
         setPadding(pad, pad, pad, pad);
+
+        accountCard = card(this);
+        nodeCard = card(this);
+        renderAccount();
 
         LinearLayout add = card(this);
         add.addView(t("ADD RELAY", Design.DIM(), 10f, Design.sansBold()));
@@ -53,6 +58,39 @@ public final class RelaysTab extends LinearLayout {
 
         body = new LinearLayout(act); body.setOrientation(VERTICAL);
         addView(body);
+    }
+
+    /** TRADING ACCOUNT (the keys Dexicon signs with) + NODE (which installed node to use when several answer). */
+    private void renderAccount() {
+        accountCard.removeAllViews();
+        accountCard.addView(t("TRADING ACCOUNT", Design.DIM(), 10f, Design.sansBold()));
+        if (!com.eurobuddha.dexicon.account.Account.exists(act)) {
+            accountCard.addView(t("Not set up yet.", Design.DIM2(), 11f, Design.sans()));
+        } else {
+            accountCard.addView(t("Dexicon signs every trade with this account. Fund it from your Minima wallet; your node never holds its keys.", Design.DIM2(), 9.5f, Design.sans()));
+            TextView addr = t("…", Design.TEXT(), 11f, Design.mono());
+            accountCard.addView(addr);
+            com.eurobuddha.dexicon.account.Account a = com.eurobuddha.dexicon.account.Account.get(act, act.dexNode());
+            if (a != null) a.receiveAddress(x -> { addr.setText(x[1] + "\n" + x[0]); addr.setOnClickListener(v -> act.copy("Trading Account address", x[1])); });
+            TextView words = button("SHOW 24 WORDS");
+            words.setOnClickListener(v -> com.eurobuddha.dexicon.account.AccountSetup.reveal(act));
+            LayoutParams wl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); wl.topMargin = Design.dp(act, 8);
+            accountCard.addView(words, wl);
+        }
+        nodeCard.removeAllViews();
+        nodeCard.addView(t("NODE", Design.DIM(), 10f, Design.sansBold()));
+        String pref = NodeApi.preferredNode(act);
+        String[] using = NodeApi.nodeApp(act);
+        nodeCard.addView(t("Using: " + (using[0].isEmpty() ? "no node app found" : using[1] + " (" + using[0] + ")")
+                + (act.dexNode() != null && act.dexNode().isEnabled() ? " · paired" : " · not paired yet"), Design.DIM2(), 9.5f, Design.mono()));
+        for (String[] n : new String[][]{{"org.minima.core", "Minima Core (Play Store)"}, {"com.eurobuddha.minimablock", "BlackBear"},
+                {"com.eurobuddha.minimacore", "PandaBear"}, {"com.eurobuddha.pandamonium", "Pandamonium"}}) {
+            try { act.getPackageManager().getPackageInfo(n[0], 0); } catch (Exception notInstalled) { continue; }
+            TextView b = button((n[0].equals(pref) ? "● " : "○ ") + n[1]);
+            b.setOnClickListener(v -> { NodeApi.setPreferredNode(act, n[0]); act.dexNode().reRegister(); act.toast("Dexicon will use " + n[1]); renderAccount(); });
+            LayoutParams bl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); bl.topMargin = Design.dp(act, 6);
+            nodeCard.addView(b, bl);
+        }
     }
 
     private TextView t(String s, int color, float size, android.graphics.Typeface tf) {
@@ -93,6 +131,7 @@ public final class RelaysTab extends LinearLayout {
     }
 
     public void render() {
+        renderAccount();
         body.removeAllViews();
         List<String> relays = RelayStore.load(act);
         Set<String> discovered = RelayStore.discovered(act);

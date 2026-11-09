@@ -80,7 +80,7 @@ final class GateView extends ScrollView {
             body.addView(para("Before trading opens, Dexicon reads your node's MiniHub once to make sure the AtomiX and PandaPools MiniDapps are "
                     + "not paired with it (one trading app per node). This takes a moment."));
         } else {
-            body.addView(para("Dexicon needs your node first. Open " + node + " → Apps, enable Dexicon and give it ADMIN. Dexicon then checks "
+            body.addView(para("Dexicon needs your node first. Open " + node + " → Apps, enable Dexicon (no ADMIN needed — Dexicon signs with its own Trading Account). Dexicon then checks "
                     + "that the AtomiX and PandaPools MiniDapps are not paired with your node, and trading opens."));
             TextView open = Ui.button(act, "Open " + node);
             open.setOnClickListener(v -> act.openNodeApp());

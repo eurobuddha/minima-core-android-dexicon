@@ -212,6 +212,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             repaint();
             applyGate();   // the "Checking your node…" screen says what is needed while unpaired
         });
+        offerAccount();
         restingRepo = new BookRepository(node);
         poolRepo = new PoolLiquidityRepository(node);
         restingTxn = new DexTxn(node);
@@ -241,10 +242,32 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         ui.postDelayed(liveTask, 1000);
     }
 
+    NodeApi dexNode() { return node; }
+
     /** Relay list + dev token override are shared prefs; re-read whenever they may have changed. */
     void applySettings() {
         relay.setRelays(RelayStore.load(this));
         Tokens.setMxUsd(RelayStore.mxusdOverride(this));
+    }
+
+    /** First run: set up the Trading Account — unless an earlier Dexicon still has node-key positions here, which settle
+     *  the old way first (owner, 9 Nov: finish before upgrading). */
+    private void offerAccount() {
+        if (com.eurobuddha.dexicon.account.Account.exists(this)) return;
+        String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);
+        if (legacy == null) { com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady); return; }
+        track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Finish these first")
+                .setMessage("This Dexicon still has " + legacy + " made with your node's own keys. They settle exactly as before "
+                        + "(Dexicon needs ADMIN in your node until they are done). Once they are finished, Dexicon moves to its own "
+                        + "Trading Account and no longer needs ADMIN.")
+                .setPositiveButton("OK", null).show());
+    }
+
+    /** The Trading Account was just created: pair again (no ADMIN needed now) and wake the maker service. */
+    private void onAccountReady() {
+        node.reRegister();
+        try { ContextCompat.startForegroundService(this, new Intent(this, MakerService.class).setAction(MakerService.ACTION_HEARTBEAT)); } catch (Exception ignored) {}
+        repaint();
     }
 
     private void onPaired() {
@@ -283,6 +306,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     private void deriveIdentity() {
         if (deriving) return;
+        if (!com.eurobuddha.dexicon.account.Account.exists(this) && !com.eurobuddha.dexicon.account.LegacyPositions.exist(this)) return;   // AccountSetup first
         deriving = true;
         SeedSource.derive(node, SeedSource.DEX, new SeedSource.Cb() {   // one-way: the node's phrase never enters the app
             public void got(String seed) {

@@ -87,6 +87,24 @@ public class MinimaAPI {
     private String nodePackage;
     /** The node package the last discovery pinned (the one that answered), for labels; null until one has. */
     public static volatile String pinnedNode;
+    /** The node the USER chose when several answer (e.g. BlackBear and the Play Store Minima Core on one phone). Kept in
+     *  a file, read fresh at every discovery: discovery runs in the :nodeipc process, the choice is made in the app. */
+    public static String readPreferredNode(Context c) {
+        try {
+            java.io.File f = new java.io.File(c.getApplicationContext().getFilesDir(), "preferred_node");
+            if (!f.exists()) return null;
+            String s = new String(java.nio.file.Files.readAllBytes(f.toPath()), java.nio.charset.StandardCharsets.UTF_8).trim();
+            for (String[] node : MinimaAPIMessages.NODES) if (node[0].equals(s)) return s;
+        } catch (Exception ignored) { }
+        return null;
+    }
+    public static void writePreferredNode(Context c, String pkg) {
+        try { java.nio.file.Files.write(new java.io.File(c.getApplicationContext().getFilesDir(), "preferred_node").toPath(),
+                (pkg == null ? "" : pkg).getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+        catch (Exception e) { throw new IllegalStateException("could not save the node choice", e); }
+    }
+    /** The node packages that answered the last discovery. */
+    public static volatile java.util.Set<String> lastReplied = java.util.Collections.emptySet();
     private boolean discovering;
     private boolean ambiguous;
     private int discoveryGeneration;
@@ -357,8 +375,11 @@ public class MinimaAPI {
                 if (id != null) finish(id, MinimaAPIResponse.failure("Node discovery finished."), true);
             }
             discovering = false;
-            ambiguous = registrations.size() > 1;
-            nodePackage = registrations.size() == 1 ? registrations.keySet().iterator().next() : null;
+            lastReplied = java.util.Collections.unmodifiableSet(new java.util.LinkedHashSet<>(registrations.keySet()));
+            String chosen = readPreferredNode(mContext);
+            boolean useChosen = chosen != null && registrations.containsKey(chosen);
+            ambiguous = registrations.size() > 1 && !useChosen;
+            nodePackage = useChosen ? chosen : registrations.size() == 1 ? registrations.keySet().iterator().next() : null;
             if (nodePackage != null) pinnedNode = nodePackage;   // what the UI should name (not install order)
             JSONObject result = nodePackage == null ? routingFailure() : registrations.get(nodePackage);
             java.util.List<Runnable> waiting = new java.util.ArrayList<>(awaitingNode);

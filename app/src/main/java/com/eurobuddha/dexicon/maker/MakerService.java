@@ -138,6 +138,7 @@ public class MakerService extends Service {
      *  Activity's copy matches. */
     private void deriveIdentity() {
         if (me != null || deriving || node == null) return;
+        if (!com.eurobuddha.dexicon.account.Account.exists(this) && !com.eurobuddha.dexicon.account.LegacyPositions.exist(this)) { log("boot waiting: no Trading Account yet"); return; }
         deriving = true;
         SeedSource.derive(node, SeedSource.DEX, new SeedSource.Cb() {
             public void got(String seed) {
