@@ -114,6 +114,10 @@ public final class AccountKeys {
     public String miniAddress(int index) { return Address.makeMinimaAddress(new MiniData(address(index))); }
 
     public int usesOf(int index) { return uses.currentUses(index); }
+    /** The counter as the node would show it: the leaf the NEXT signature will use at the earliest (stored counter,
+     *  wall-clock floor, restore floor). A restored phone's store starts at 0, but it never signs below the floors —
+     *  reporting the raw 0 would read as a counter regression to anything that recorded the old phone's count. */
+    public int reportedUses(int index, long nowMillis) { return Math.max(uses.currentUses(index), Math.max(timeFloor(nowMillis), restoreFloor)); }
     public int maxUses() { return (int) Math.pow(KEYS_PER_LEVEL, LEVELS); }
 
     /** Leaf floor stored once when an account is RESTORED (or derived from the node seed): the time floor now, plus two

@@ -70,6 +70,8 @@ final class CombinedBackupUi {
                 org.json.JSONObject e = pools.getJSONObject(i);
                 String opk = e.optString("opk", "");
                 int kidx = e.optInt("kidx", -1);
+                // a CLOSED pool owned by another wallet's key (as BlockOwnerRecovery.backupOwnersMatch) holds nothing
+                if (e.optBoolean("retired", false) && KeyUses.modifierOf(keys, opk) < 0) continue;
                 if (kidx < 0 || KeyUses.modifierOf(keys, opk) != kidx)
                     return "NODE_KEY_POOL: pool " + e.optString("addr", "") + " is owned by a key that is not in your Trading Account"
                             + " (or its index is unknown). Its recovery needs a Minima Core wallet backup, which stock Minima Core can only make from its own Backup screen.";

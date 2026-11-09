@@ -1356,7 +1356,7 @@ public final class DoorHost {
                 gate.free();
                 // A lost reply to a `send` may still have gone through — never resend that automatically. A pool owner-coin
                 // guard refusal never reached the node: never uncertain, whatever its words.
-                boolean unknown = m != null && !com.eurobuddha.pandapools.DexiconPools.refusal(m) && (m.contains("may still complete") || m.contains("didn't respond") || m.contains("Outcome is unknown"));
+                boolean unknown = m != null && !com.eurobuddha.pandapools.DexiconPools.refusal(m) && (m.startsWith("UNCERTAIN") || m.contains("may still complete") || m.contains("didn't respond") || m.contains("Outcome is unknown"));
                 done.run(m, null, unknown);
             }
         }));

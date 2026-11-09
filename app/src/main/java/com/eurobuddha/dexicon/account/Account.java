@@ -208,8 +208,14 @@ public final class Account {
         if (Looper.myLooper() == Looper.getMainLooper()) return guard.getAsBoolean();
         CountDownLatch done = new CountDownLatch(1);
         java.util.concurrent.atomic.AtomicBoolean out = new java.util.concurrent.atomic.AtomicBoolean(false);
-        MAIN.post(() -> { try { out.set(guard.getAsBoolean()); } catch (RuntimeException e) { out.set(false); } finally { done.countDown(); } });
-        try { return done.await(30, TimeUnit.SECONDS) && out.get(); } catch (InterruptedException e) { return false; }
+        // 0 = waiting, 1 = the main thread took it, 2 = we gave up. A guard with side effects (PandaPools Write.admit)
+        // runs only if it claims the slot first, so it can never run AFTER we reported a refusal.
+        java.util.concurrent.atomic.AtomicInteger slot = new java.util.concurrent.atomic.AtomicInteger(0);
+        MAIN.post(() -> { try { if (slot.compareAndSet(0, 1)) out.set(guard.getAsBoolean()); } catch (RuntimeException e) { out.set(false); } finally { done.countDown(); } });
+        try {
+            if (done.await(30, TimeUnit.SECONDS) || !slot.compareAndSet(0, 2)) { done.await(); return out.get(); }
+            return false;
+        } catch (InterruptedException e) { slot.compareAndSet(0, 2); return false; }
     }
 
     /** One node call from the worker thread, waiting for the reply (never on the main thread). */

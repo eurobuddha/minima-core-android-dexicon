@@ -129,7 +129,10 @@ public class VirtualWalletTest {
         VirtualWallet w = wallet(n);
         w.handle("txncreate id:u");
         try { w.handle("txnpost id:u"); fail("an unanswered post must not read as status:false"); }
-        catch (VirtualWallet.ToCaller uncertain) { assertTrue(uncertain.getMessage().startsWith("UNCERTAIN")); }
+        catch (VirtualWallet.ToCaller uncertain) {
+            assertTrue(uncertain.getMessage().startsWith("UNCERTAIN"));
+            assertTrue("the words DoorHost/engines already treat as outcome-unknown", uncertain.getMessage().contains("may still complete"));
+        }
     }
 
     @Test public void genkeyMatchesTheNodesBlockModeProbe() throws Exception {
@@ -138,5 +141,13 @@ public class VirtualWalletTest {
         assertTrue(r.toString(), r.getBoolean("status"));
         assertEquals("0x3FFDB1A06A2DCA90BEE0D7C0F5BA62B9AF23BF5D73A23D63555492F88D1E3828", r.getJSONObject("response").getString("publickey"));
         assertFalse(r.getJSONObject("response").has("privatekey"));
+    }
+
+    @Test public void keysReportTheNextLeafNotARestoredZero() throws Exception {
+        // a phone restored from the words starts its counter at 0 but never signs below the time floor: PandaPools
+        // recorded the old phone's count (~the floor) as opkuses, and a lower "uses" reads as a counter regression
+        JSONObject k = wallet(new FakeNode()).handle("keys");
+        int uses = k.getJSONObject("response").getJSONArray("keys").getJSONObject(0).getInt("uses");
+        assertTrue(uses >= AccountKeys.timeFloor(System.currentTimeMillis()) - 1);
     }
 }
