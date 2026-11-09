@@ -82,7 +82,7 @@ public final class Account {
             }
             public synchronized boolean isOwnOutput(String id) { return own().contains(id); }
             public String posted() { return sp.getString("posted_" + fp[0], "{}"); }
-            public void savePosted(String json) { sp.edit().putString("posted_" + fp[0], json).commit(); }
+            public boolean savePosted(String json) { return sp.edit().putString("posted_" + fp[0], json).commit(); }
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;

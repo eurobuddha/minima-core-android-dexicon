@@ -159,7 +159,7 @@ public class VirtualWalletTest {
                 .put(old, new JSONObject().put("txnid", txnid).put("outs", new JSONArray().put(out))).toString()};
         Store store = new Store() {
             @Override public String posted() { return posted[0]; }
-            @Override public void savePosted(String j) { posted[0] = j; }
+            @Override public boolean savePosted(String j) { posted[0] = j; return true; }
         };
         String[] coinAddress = {"0x" + "99".repeat(32)};   // first: same coin id, DIFFERENT address (another spend of the input)
         long[] tip = {106};
@@ -209,5 +209,88 @@ public class VirtualWalletTest {
         int uses = w.handle("keys").getJSONObject("response").getJSONArray("keys").getJSONObject(0).getInt("uses");
         assertEquals("an unchecked clock reports the stored count and writes nothing", 0, uses);
         assertEquals(0, mem.currentUses(0));
+    }
+
+    /** Stands in for the process dying mid-call: an Error no catch (Exception) intercepts. */
+    static final class Died extends Error { }
+
+    /** A store + node pair for resolver tests: outputs/blocks are scripted per test. */
+    static final class ChainSim {
+        final String[] posted = {"{}"};
+        final java.util.Map<String, JSONObject> coins = new java.util.HashMap<>();
+        final java.util.Map<Long, String> blockIds = new java.util.HashMap<>();
+        long tip = 100; int blockFetches; boolean failFetch, kill;
+        final Store store = new Store() {
+            @Override public String posted() { return posted[0]; }
+            @Override public boolean savePosted(String j) { posted[0] = j; return true; }
+        };
+        final FakeNode node = new FakeNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                calls.add(cmd);
+                if (cmd.startsWith("coins coinid:")) { JSONObject c = coins.get(cmd.substring(13)); return new JSONObject().put("status", true).put("response", c == null ? new JSONArray() : new JSONArray().put(c)); }
+                if (cmd.startsWith("txpow inblock:")) return new JSONObject().put("status", true).put("response", new JSONObject().put("txns", new JSONArray()));
+                if (cmd.startsWith("txpow block:")) {
+                    blockFetches++;
+                    if (kill) throw new Died();
+                    if (failFetch) throw new IllegalStateException("The node did not answer txpow");
+                    long b = Long.parseLong(cmd.substring(12));
+                    return new JSONObject().put("status", true).put("response", new JSONObject().put("txpowid", blockIds.get(b)).put("header", new JSONObject().put("block", String.valueOf(b))));
+                }
+                if (cmd.equals("block")) return new JSONObject().put("status", true).put("response", new JSONObject().put("block", String.valueOf(tip)).put("timemilli", String.valueOf(System.currentTimeMillis())));
+                return super.call(cmd);
+            }
+        };
+        VirtualWallet wallet() { return new VirtualWallet(node, AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null), store, Collections.emptySet()); }
+        static JSONObject out(String id, String addr) throws Exception { return new JSONObject().put("coinid", id).put("address", addr).put("amount", "1").put("tokenid", "0x00"); }
+        void post(String pre, JSONArray outs, JSONArray ins) throws Exception {
+            JSONObject all = new JSONObject(posted[0]);
+            all.put(pre, new JSONObject().put("txnid", "0x" + "CC".repeat(32)).put("outs", outs).put("ins", ins));
+            posted[0] = all.toString();
+        }
+    }
+
+    @Test public void aFailedBlockFetchRetriesLaterAndAKillingOneIsGivenUpNotLooped() throws Exception {
+        ChainSim c = new ChainSim();
+        String pre = "0x" + "A1".repeat(32), out = "0x" + "D1".repeat(32), me = "0x" + "12".repeat(32), bid = "0x0000" + "B1".repeat(30);
+        c.post(pre, new JSONArray().put(ChainSim.out(out, me)), new JSONArray());
+        c.coins.put(out, ChainSim.out(out, me).put("created", "100"));
+        c.blockIds.put(100L, bid);
+        VirtualWallet w = c.wallet();
+        c.tip = 103; c.failFetch = true;
+        assertFalse(w.handle("txpow onchain:" + pre).getJSONObject("response").getBoolean("found"));
+        assertFalse("backoff: not refetched on the very next call", w.handle("txpow onchain:" + pre).getJSONObject("response").getBoolean("found"));
+        assertEquals(1, c.blockFetches);
+        c.tip = 110; c.failFetch = false;
+        assertTrue("a later retry succeeds: never stuck forever", w.handle("txpow onchain:" + pre).getJSONObject("response").getBoolean("found"));
+
+        // a fetch that never returns (the process dies mid-call): its committed mark is found on the next entry
+        ChainSim d = new ChainSim();
+        String pre2 = "0x" + "A2".repeat(32), out2 = "0x" + "D2".repeat(32);
+        d.post(pre2, new JSONArray().put(ChainSim.out(out2, me)), new JSONArray());
+        d.coins.put(out2, ChainSim.out(out2, me).put("created", "100"));
+        d.blockIds.put(100L, bid);
+        d.kill = true;
+        for (int k = 0; k < VirtualWallet.MAX_DEATHS + 2; k++) {
+            d.tip = 103 + 100L * k;                        // past any backoff
+            try { d.wallet().handle("txpow onchain:" + pre2); } catch (Died died) { }
+        }
+        int before = d.blockFetches;
+        d.kill = false; d.tip += 100;
+        assertEquals("given up after repeated deaths: no further fetch", before, d.blockFetches);
+    }
+
+    @Test public void anOutputSpentOnwardByOurOwnProvenPostIsProven() throws Exception {
+        ChainSim c = new ChainSim();
+        String claim = "0x" + "A3".repeat(32), spend = "0x" + "A4".repeat(32), cOut = "0x" + "D3".repeat(32), sOut = "0x" + "D4".repeat(32), me = "0x" + "12".repeat(32);
+        c.post(claim, new JSONArray().put(ChainSim.out(cOut, me)), new JSONArray());
+        c.post(spend, new JSONArray().put(ChainSim.out(sOut, me)), new JSONArray().put(cOut));   // our consolidate spent the claim's output
+        c.coins.put(sOut, ChainSim.out(sOut, me).put("created", "102"));                       // the claim's own output is gone (never seen)
+        c.blockIds.put(102L, "0x0000" + "B2".repeat(30));
+        c.tip = 110;
+        VirtualWallet w = c.wallet();
+        assertTrue("the spender is proven", w.handle("txpow onchain:" + spend).getJSONObject("response").getBoolean("found"));
+        JSONObject r = w.handle("txpow onchain:" + claim).getJSONObject("response");
+        assertTrue("so the claim it spent landed", r.getBoolean("found"));
+        assertEquals("reported at the spender's block (never more confirmations than proven)", "102", r.getString("block"));
     }
 }

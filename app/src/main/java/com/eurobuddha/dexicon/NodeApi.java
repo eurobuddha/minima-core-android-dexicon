@@ -155,6 +155,7 @@ public class NodeApi {
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         // Trading Account: wallet + txn verbs are answered in-app (VirtualWallet); only signed postfrom reaches the node.
         String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
+        if ("txpow".equals(verb)) com.eurobuddha.dexicon.account.Account.get(mContext, this);   // loads the account's known ids before routing
         if (com.eurobuddha.dexicon.account.VirtualWallet.answersTxpow(command)) {
             // the account proves its own (pre-mining) txpowids; any other id passes through it to the node
             com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);

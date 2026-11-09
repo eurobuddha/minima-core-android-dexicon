@@ -63,7 +63,8 @@ public final class VirtualWallet {
         default boolean isOwnOutput(String coinId) { return false; }
         /** Our posts by their PRE-MINING txpowid (JSON object; see {@link #txpowOnchain}). */
         default String posted() { return "{}"; }
-        default void savePosted(String json) {}
+        /** Durable (synchronous) save; false = not written. */
+        default boolean savePosted(String json) { return true; }
     }
 
     /** Wall clock (tests inject one). */
@@ -933,38 +934,51 @@ public final class VirtualWallet {
      *  or removes it); once proven the answer is final. The block id: that block's txpow, fetched once (marked first, so
      *  an oversized block can cost one failed fetch, never a loop), or {@code txpow inblock:} once past the cascade.
      *  Nothing else of unknown size is fetched. */
-    static final int PROVEN_DEPTH = 3, CASCADE_DEPTH = 1024, OPEN_CAP = 200, FINAL_CAP = 2000;
+    static final int PROVEN_DEPTH = 3, CASCADE_DEPTH = 1024, OPEN_CAP = 200, FINAL_CAP = 3000, BLOCK_MARKS = 500, MAX_TRIES = 6, MAX_DEATHS = 3;
+    private static final String BLOCKS = "_blocks";
     /** Ids this account can answer (open + final), for NodeApi's routing on the caller's thread. */
     private static final Set<String> KNOWN = java.util.Collections.synchronizedSet(new HashSet<>());
 
     private JSONObject loadPosted() {
         JSONObject all;
         try { all = new JSONObject(store.posted()); } catch (Exception bad) { all = new JSONObject(); }
-        synchronized (KNOWN) { KNOWN.clear(); for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) KNOWN.add(it.next()); }
+        refreshKnown(all);
         return all;
     }
 
-    private void savePosted(JSONObject all) {
+    private static void refreshKnown(JSONObject all) {
+        synchronized (KNOWN) { KNOWN.clear(); for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) { String k = it.next(); if (!BLOCKS.equals(k)) KNOWN.add(k); } }
+    }
+
+    private boolean savePosted(JSONObject all) {
         int open = 0, fin = 0;
-        for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) { JSONObject r = all.optJSONObject(it.next()); if (r != null && r.optBoolean("final")) fin++; else open++; }
+        for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) {
+            String k = it.next(); if (BLOCKS.equals(k)) continue;
+            JSONObject r = all.optJSONObject(k); if (r != null && r.optBoolean("final")) fin++; else open++;
+        }
         for (java.util.Iterator<String> it = all.keys(); it.hasNext() && (open > OPEN_CAP || fin > FINAL_CAP); ) {   // oldest first, per kind
-            JSONObject r = all.optJSONObject(it.next());
+            String k = it.next(); if (BLOCKS.equals(k)) continue;
+            JSONObject r = all.optJSONObject(k);
             boolean f = r != null && r.optBoolean("final");
             if (f && fin > FINAL_CAP) { it.remove(); fin--; } else if (!f && open > OPEN_CAP) { it.remove(); open--; }
         }
-        store.savePosted(all.toString());
-        synchronized (KNOWN) { KNOWN.clear(); for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) KNOWN.add(it.next()); }
+        JSONObject blocks = all.optJSONObject(BLOCKS);
+        if (blocks != null) for (java.util.Iterator<String> it = blocks.keys(); it.hasNext() && blocks.length() > BLOCK_MARKS; ) { it.next(); it.remove(); }
+        boolean ok = store.savePosted(all.toString());
+        refreshKnown(all);
+        return ok;
     }
 
     private void rememberPost(String id, Transaction t) {
         try {
             if (id == null || !id.matches("(?i)0x[0-9a-f]{64}")) return;
             JSONObject all = loadPosted();
-            JSONArray outs = new JSONArray();
+            JSONArray outs = new JSONArray(), ins = new JSONArray();
             for (Coin c : t.getAllOutputs())
                 outs.put(new JSONObject().put("coinid", c.getCoinID().to0xString()).put("address", c.getAddress().to0xString())
                         .put("amount", c.getAmount().toString()).put("tokenid", c.getTokenID().to0xString()));
-            all.put(idKey(id), new JSONObject().put("txnid", t.getTransactionID().to0xString()).put("outs", outs));
+            for (Coin c : t.getAllInputs()) ins.put(c.getCoinID().to0xString());
+            all.put(idKey(id), new JSONObject().put("txnid", t.getTransactionID().to0xString()).put("outs", outs).put("ins", ins));
             savePosted(all);
         } catch (Exception ignored) { }
     }
@@ -980,22 +994,30 @@ public final class VirtualWallet {
         return m.find() && KNOWN.contains(idKey(m.group(1)));
     }
 
+    /** Record that {@code rec}'s output was seen at block {@code b}: true when it changed (saved only then). */
+    private static boolean see(JSONObject rec, long b, long tip) throws Exception {
+        long old = rec.optLong("seenBlock", 0), oldDepth = rec.optLong("seenDepth", 0), depth = Math.max(0, tip - b);
+        if (b == old && !(oldDepth < PROVEN_DEPTH && depth >= PROVEN_DEPTH)) return false;
+        rec.put("seenBlock", b).put("seenDepth", depth);
+        return true;
+    }
+
     /** The account scan's coin rows: an output of an open post seen here (all fields matching) is recorded with its
-     *  depth, so the proof survives the coin being spent onward. */
+     *  depth, so the proof survives the coin being spent onward. Saved only when something changed. */
     public synchronized void noteCoins(JSONArray rows) {
         try {
             JSONObject all = loadPosted();
             long tip = -1;
             boolean changed = false;
             for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) {
-                JSONObject rec = all.optJSONObject(it.next());
+                String k = it.next(); if (BLOCKS.equals(k)) continue;
+                JSONObject rec = all.optJSONObject(k);
                 if (rec == null || rec.optBoolean("final")) continue;
                 long b = 0;
                 for (int i = 0; i < rows.length() && b <= 0; i++) b = matchOut(rec, rows.getJSONObject(i));
                 if (b <= 0) continue;
                 if (tip < 0) tip = node.call("block").getJSONObject("response").optLong("block", 0);
-                rec.put("seenBlock", b).put("seenDepth", Math.max(0, tip - b));
-                changed = true;
+                changed |= see(rec, b, tip);
             }
             if (changed) savePosted(all);
         } catch (Exception ignored) { }
@@ -1015,6 +1037,28 @@ public final class VirtualWallet {
         return 0;
     }
 
+    /** The block of a PROVEN later post of ours that spends one of {@code rec}'s outputs (so {@code rec} landed at or
+     *  before it), else 0. Covers an output spent onward before any scan saw it 3 deep. */
+    private static long provenSpender(JSONObject all, JSONObject rec, long tip) {
+        JSONArray outs = rec.optJSONArray("outs");
+        for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) {
+            String k = it.next(); if (BLOCKS.equals(k)) continue;
+            JSONObject b = all.optJSONObject(k);
+            JSONArray ins = b == null ? null : b.optJSONArray("ins");
+            if (ins == null || b == rec) continue;
+            for (int i = 0; outs != null && i < outs.length(); i++) {
+                JSONObject o = outs.optJSONObject(i);
+                if (o == null) continue;
+                for (int j = 0; j < ins.length(); j++) {
+                    if (!o.optString("coinid").equalsIgnoreCase(ins.optString(j))) continue;
+                    long at = b.optBoolean("final") ? b.optLong("block", 0) : b.optLong("seenBlock", 0);
+                    if (at > 0 && tip - at >= PROVEN_DEPTH && (b.optBoolean("final") || b.optLong("seenDepth", 0) >= PROVEN_DEPTH)) return at;
+                }
+            }
+        }
+        return 0;
+    }
+
     private JSONObject txpowOnchain(String command) throws Exception {
         P p = new P(CommandRunner.getRunner().getCommand(command));
         String pre = p.s("onchain", "");
@@ -1022,10 +1066,11 @@ public final class VirtualWallet {
         pre = idKey(pre);
         JSONObject all = loadPosted();
         JSONObject rec = all.optJSONObject(pre);
-        if (rec == null) return null;                                   // not one of ours: the node answers as ever
+        if (rec == null || BLOCKS.equals(pre)) return null;            // not one of ours: the node answers as ever
         long tip = node.call("block").getJSONObject("response").optLong("block", 0);
         JSONObject notFound = new JSONObject().put("command", "txpow").put("status", true).put("response", new JSONObject().put("found", false));
         if (rec.optBoolean("final")) return proof(rec.optLong("block"), rec.optString("blockid"), tip);
+        boolean dirty = false;
         long b = 0;
         JSONArray outs = rec.optJSONArray("outs");
         for (int i = 0; b <= 0 && outs != null && i < outs.length(); i++) {
@@ -1034,25 +1079,53 @@ public final class VirtualWallet {
             Object resp = node.call("coins coinid:" + o.optString("coinid")).opt("response");
             if (resp instanceof JSONArray && ((JSONArray) resp).length() > 0) b = matchOut(rec, ((JSONArray) resp).getJSONObject(0));
         }
-        if (b > 0) rec.put("seenBlock", b).put("seenDepth", Math.max(0, tip - b));
+        if (b > 0) dirty = see(rec, b, tip);                               // visible: re-read every call (a reorg moves it)
         else if (rec.optLong("seenBlock", 0) > 0 && rec.optLong("seenDepth", 0) >= PROVEN_DEPTH) b = rec.optLong("seenBlock");   // proven, then spent onward
-        if (b <= 0 || tip - b < PROVEN_DEPTH) { all.put(pre, rec); savePosted(all); return notFound; }
-        String blockid = rec.optString("blockid", "");
-        if (!blockid.matches("(?i)0x[0-9a-f]{64}") && tip - b > CASCADE_DEPTH) {
-            JSONObject r = node.call("txpow inblock:" + b).optJSONObject("response");
-            JSONArray txns = r == null ? null : r.optJSONArray("txns");
-            if (txns != null && txns.length() > 0) blockid = txns.getJSONObject(0).optString("blockid", "");
+        else {
+            long spender = provenSpender(all, rec, tip);                   // spent onward by our own proven post
+            // ponytail: never seen = only "at or before" the spender is known; its block is reported (fewer confirmations, never more)
+            if (spender > 0) b = rec.optLong("seenBlock", 0) > 0 ? Math.min(rec.optLong("seenBlock"), spender) : spender;
         }
-        if (!blockid.matches("(?i)0x[0-9a-f]{64}") && !rec.optBoolean("triedBlock")) {
-            rec.put("triedBlock", true); all.put(pre, rec); savePosted(all);   // marked FIRST: a reply that kills us is never retried
-            JSONObject r = node.call("txpow block:" + b).optJSONObject("response");
-            JSONObject h = r == null ? null : r.optJSONObject("header");
-            if (h != null && String.valueOf(b).equals(h.optString("block"))) blockid = r.optString("txpowid", "");
-        }
-        if (!blockid.matches("(?i)0x[0-9a-f]{64}")) { all.put(pre, rec); savePosted(all); return notFound; }
-        all.put(pre, new JSONObject().put("final", true).put("block", b).put("blockid", blockid));
+        if (b <= 0 || tip - b < PROVEN_DEPTH) { if (dirty) savePosted(all); return notFound; }
+        String blockid = blockIdAt(all, b, tip);
+        if (blockid == null) { if (dirty) savePosted(all); return notFound; }
+        all.put(pre, new JSONObject().put("final", true).put("block", b).put("blockid", blockid)
+                .put("ins", rec.optJSONArray("ins") == null ? new JSONArray() : rec.optJSONArray("ins")));   // still proves what it spent
         savePosted(all);
         return proof(b, blockid, tip);
+    }
+
+    /** Block {@code b}'s id: cached per block; past the cascade from {@code txpow inblock:} (small rows); otherwise its
+     *  block txpow (one small object, header.block verified), with a mark committed BEFORE the call. A mark still set
+     *  on entry means that call never came back (the process died): counted, and the block given up after
+     *  {@link #MAX_DEATHS}; ordinary failures retry with backoff, at most {@link #MAX_TRIES}. Never a crash loop. */
+    private String blockIdAt(JSONObject all, long b, long tip) throws Exception {
+        JSONObject blocks = all.optJSONObject(BLOCKS);
+        if (blocks == null) { blocks = new JSONObject(); all.put(BLOCKS, blocks); }
+        JSONObject m = blocks.optJSONObject(String.valueOf(b));
+        if (m == null) { m = new JSONObject(); blocks.put(String.valueOf(b), m); }
+        String id = m.optString("id", "");
+        if (id.matches("(?i)0x[0-9a-f]{64}")) return id;
+        if (tip - b > CASCADE_DEPTH) {
+            JSONObject r = node.call("txpow inblock:" + b).optJSONObject("response");
+            JSONArray txns = r == null ? null : r.optJSONArray("txns");
+            id = txns != null && txns.length() > 0 ? txns.getJSONObject(0).optString("blockid", "") : "";
+            if (id.matches("(?i)0x[0-9a-f]{64}")) { m.put("id", id); return id; }
+        }
+        if (m.optBoolean("inflight")) { m.put("inflight", false).put("deaths", m.optInt("deaths") + 1); savePosted(all); }
+        if (m.optInt("deaths") >= MAX_DEATHS || m.optInt("tries") >= MAX_TRIES || tip < m.optLong("next", 0)) return null;
+        m.put("inflight", true).put("tries", m.optInt("tries") + 1);
+        if (!savePosted(all)) return null;                                 // the mark must be durable before the call
+        id = null;
+        try {
+            JSONObject r = node.call("txpow block:" + b).optJSONObject("response");
+            JSONObject h = r == null ? null : r.optJSONObject("header");
+            if (h != null && String.valueOf(b).equals(h.optString("block"))) id = r.optString("txpowid", "");
+        } catch (Exception failed) { id = null; }
+        m.put("inflight", false).put("next", tip + Math.min(1L << m.optInt("tries"), 64L));
+        if (id != null && id.matches("(?i)0x[0-9a-f]{64}")) m.put("id", id); else id = null;
+        savePosted(all);
+        return id;
     }
 
     private static JSONObject proof(long b, String blockid, long tip) throws Exception {
