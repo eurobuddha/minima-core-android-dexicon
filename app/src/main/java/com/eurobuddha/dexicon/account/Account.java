@@ -82,7 +82,7 @@ public final class Account {
             }
             public synchronized boolean isOwnOutput(String id) { return own().contains(id); }
             public String posted() { return sp.getString("posted_" + fp[0], "{}"); }
-            public void savePosted(String json) { sp.edit().putString("posted_" + fp[0], json).apply(); }
+            public void savePosted(String json) { sp.edit().putString("posted_" + fp[0], json).commit(); }
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
@@ -223,6 +223,7 @@ public final class Account {
             if (r == null || !r.optBoolean("status")) return;
             org.json.JSONArray rows = r.optJSONArray("response");
             if (rows == null) return;
+            wallet.noteCoins(rows);   // our posts' outputs, seen with their blocks (txpow onchain: evidence)
             if (seen == null) {
                 String prev = sp.getString(seenKey, null);
                 seen = new java.util.LinkedHashSet<>();

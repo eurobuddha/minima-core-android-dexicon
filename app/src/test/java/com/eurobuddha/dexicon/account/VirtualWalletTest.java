@@ -151,30 +151,38 @@ public class VirtualWalletTest {
         assertTrue(uses >= AccountKeys.timeFloor(System.currentTimeMillis()) - 1);
     }
 
-    @Test public void txpowOnchainOfAPreMiningIdAnswersWithTheMinedTxpow() throws Exception {
-        String pre = "0x" + "AA".repeat(32), mined = "0x0000" + "BB".repeat(30), txnid = "0x" + "CC".repeat(32), out = "0x" + "DD".repeat(32);
-        String[] posted = {new JSONObject().put(pre, new JSONObject().put("txnid", txnid).put("outs", new JSONArray().put(out)).put("from", 100).put("next", 100)).toString()};
+    @Test public void txpowOnchainOfAPreMiningIdIsProvenByItsExactOutput() throws Exception {
+        String pre = "0x" + "AA".repeat(32), txnid = "0x" + "CC".repeat(32), out = "0x" + "DD".repeat(32), mine = "0x" + "12".repeat(32), blockid = "0x0000" + "BB".repeat(30);
+        JSONObject o = new JSONObject().put("coinid", out).put("address", mine).put("amount", "3.08667").put("tokenid", "0x00");
+        String[] posted = {new JSONObject().put(pre, new JSONObject().put("txnid", txnid).put("outs", new JSONArray().put(o))).toString()};
         Store store = new Store() {
             @Override public String posted() { return posted[0]; }
             @Override public void savePosted(String j) { posted[0] = j; }
         };
+        String[] coinAddress = {"0x" + "99".repeat(32)};   // first: same coin id, DIFFERENT address (another spend of the input)
         FakeNode n = new FakeNode() {
             @Override public JSONObject call(String cmd) throws Exception {
                 calls.add(cmd);
-                if (cmd.equals("coins coinid:" + out)) return new JSONObject().put("status", true).put("response", new JSONArray().put(new JSONObject().put("coinid", out).put("created", "105")));
-                if (cmd.equals("txpow block:105")) return new JSONObject().put("status", true).put("response", new JSONObject().put("txpowid", "0x" + "EE".repeat(32))
-                        .put("body", new JSONObject().put("txn", new JSONObject().put("transactionid", "0x" + "11".repeat(32))).put("txnlist", new JSONArray().put(mined))));
-                if (cmd.equals("txpow txpowid:" + mined)) return new JSONObject().put("status", true).put("response", new JSONObject().put("body", new JSONObject().put("txn", new JSONObject().put("transactionid", txnid))));
-                if (cmd.equals("txpow onchain:" + mined)) return new JSONObject().put("status", true).put("response", new JSONObject().put("found", true).put("block", "105").put("tip", "110").put("confirmations", "5"));
+                if (cmd.equals("coins coinid:" + out)) return new JSONObject().put("status", true).put("response", new JSONArray().put(new JSONObject()
+                        .put("coinid", out).put("address", coinAddress[0]).put("amount", "3.08667").put("tokenid", "0x00").put("created", "105")));
+                if (cmd.equals("txpow inblock:105")) return new JSONObject().put("status", true).put("response", new JSONObject().put("txns", new JSONArray()
+                        .put(new JSONObject().put("txpowid", "0x01").put("blockid", blockid).put("block", 105))));
+                if (cmd.equals("block")) return new JSONObject().put("status", true).put("response", new JSONObject().put("block", "110").put("timemilli", String.valueOf(System.currentTimeMillis())));
                 return super.call(cmd);
             }
         };
         VirtualWallet w = new VirtualWallet(n, AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null), store, Collections.emptySet());
-        JSONObject r = w.handle("txpow onchain:" + pre);
-        assertTrue(r.getJSONObject("response").getBoolean("found"));
-        assertEquals("5", r.getJSONObject("response").getString("confirmations"));
-        assertTrue("remembered", new JSONObject(posted[0]).getJSONObject(pre).getString("mined").equalsIgnoreCase(mined));
-        assertNull("a txpow that is not one of our posts goes to the node untouched", w.handle("txpow onchain:0x" + "99".repeat(32)));
+        assertFalse("a coin with our id but another address proves nothing", w.handle("txpow onchain:" + pre).getJSONObject("response").getBoolean("found"));
+        coinAddress[0] = mine;
+        JSONObject r = w.handle("txpow onchain:" + pre).getJSONObject("response");
+        assertTrue(r.getBoolean("found"));
+        assertEquals("105", r.getString("block"));
+        assertEquals(blockid, r.getString("blockid"));
+        assertEquals("5", r.getString("confirmations"));
+        for (String c : n.calls) assertFalse("never fetches a txpow body", c.startsWith("txpow txpowid:") || c.startsWith("txpow block:"));
+        assertNull("not one of our posts: to the node untouched", w.handle("txpow onchain:0x" + "99".repeat(32)));
+        assertTrue(VirtualWallet.answersTxpow("txpow onchain:" + pre));
+        assertFalse(VirtualWallet.answersTxpow("txpow txpowid:" + pre));
     }
 
     @Test public void keysNeverWriteTheCounterFromAnUncheckedClock() throws Exception {

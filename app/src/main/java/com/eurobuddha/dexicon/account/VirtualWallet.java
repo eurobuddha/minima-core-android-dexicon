@@ -923,28 +923,73 @@ public final class VirtualWallet {
     // ---------------------------------------------------------------------------------- txpow onchain: (mine:false)
 
     /** Posts are mine:false (stock mines mine:true on its UI thread), so the txpowid an engine records is the PRE-mining
-     *  id: mining changes it, and {@code txpow onchain:<that id>} never finds it (AtomiX left a landed claim at
-     *  CLAIMING). The transaction id survives mining, so each post is remembered by its pre-mining id — transaction id,
-     *  output coins, the tip at posting — and a {@code txpow onchain:} for it is answered with the node's own evidence
-     *  for the MINED txpow, once found. Any other txpow command passes through untouched. */
+     *  id: mining changes it and {@code txpow onchain:<that id>} never finds it (AtomiX left a landed claim at CLAIMING).
+     *  Each post is remembered by that id with its OUTPUTS (coin id, address, amount, token). Inclusion is proven by an
+     *  output coin seen on chain with exactly those fields — a coin id alone is not enough: it derives from the FIRST
+     *  INPUT and the index, so another spend of that input (an HTLC refund) makes the same id at a different address.
+     *  The answer is built from node facts only: the coin's created block, that block's id ({@code txpow inblock:},
+     *  small rows) and the tip. No foreign txpow is ever fetched (a 64 KiB stranger could exceed the IPC reply limit). */
     private void rememberPost(String preId, Transaction t) {
         try {
             if (preId == null || !preId.matches("(?i)0x[0-9a-f]{64}")) return;
             JSONObject all = new JSONObject(store.posted());
             JSONArray outs = new JSONArray();
-            for (Coin c : t.getAllOutputs()) outs.put(c.getCoinID().to0xString());
-            long tip = 0;
-            try { tip = node.call("block").getJSONObject("response").optLong("block", 0); } catch (Exception ignored) { }
-            all.put(idKey(preId), new JSONObject().put("txnid", t.getTransactionID().to0xString()).put("outs", outs).put("from", tip).put("next", tip));
-            while (all.length() > 200) all.remove(all.keys().next());   // oldest first (insertion order)
+            for (Coin c : t.getAllOutputs())
+                outs.put(new JSONObject().put("coinid", c.getCoinID().to0xString()).put("address", c.getAddress().to0xString())
+                        .put("amount", c.getAmount().toString()).put("tokenid", c.getTokenID().to0xString()));
+            all.put(idKey(preId), new JSONObject().put("txnid", t.getTransactionID().to0xString()).put("outs", outs));
+            evict(all);
             store.savePosted(all.toString());
         } catch (Exception ignored) { }
+    }
+
+    /** Keep 200 records: resolved ones (block known) go first, oldest first. */
+    private static void evict(JSONObject all) {
+        while (all.length() > 200) {
+            String drop = null;
+            for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) {
+                String k = it.next();
+                if (drop == null) drop = k;
+                JSONObject r = all.optJSONObject(k);
+                if (r != null && r.optLong("block", 0) > 0) { drop = k; break; }
+            }
+            all.remove(drop);
+        }
     }
 
     /** One spelling for a stored txpowid key: 0x + upper-case hex. */
     static String idKey(String id) { return "0x" + id.substring(2).toUpperCase(); }
 
-    static final int TXPOW_SCAN_BLOCKS = 120, TXPOW_SCAN_PER_CALL = 12;
+    /** The account scan's coin rows: an output of a remembered post seen here (all fields matching) fixes that post's
+     *  block — kept even after the coin is spent onward. */
+    public synchronized void noteCoins(JSONArray rows) {
+        try {
+            JSONObject all = new JSONObject(store.posted());
+            boolean changed = false;
+            for (java.util.Iterator<String> it = all.keys(); it.hasNext(); ) {
+                JSONObject rec = all.optJSONObject(it.next());
+                if (rec == null || rec.optLong("block", 0) > 0) continue;
+                long b = 0;
+                for (int i = 0; i < rows.length() && b <= 0; i++) b = matchOut(rec, rows.getJSONObject(i));
+                if (b > 0) { rec.put("block", b); changed = true; }
+            }
+            if (changed) store.savePosted(all.toString());
+        } catch (Exception ignored) { }
+    }
+
+    /** {@code coin} (node JSON) is one of {@code rec}'s outputs, exactly: its created block, else 0. */
+    private static long matchOut(JSONObject rec, JSONObject coin) {
+        JSONArray outs = rec.optJSONArray("outs");
+        for (int i = 0; outs != null && i < outs.length(); i++) {
+            JSONObject o = outs.optJSONObject(i);
+            if (o == null || !o.optString("coinid").equalsIgnoreCase(coin.optString("coinid"))) continue;
+            boolean same = o.optString("address").equalsIgnoreCase(coin.optString("address"))
+                    && o.optString("tokenid").equalsIgnoreCase(coin.optString("tokenid"))
+                    && new MiniNumber(o.optString("amount", "0")).isEqual(new MiniNumber(coin.optString("amount", "-1")));
+            return same ? coin.optLong("created", 0) : 0;
+        }
+        return 0;
+    }
 
     private JSONObject txpowOnchain(String command) throws Exception {
         P p = new P(CommandRunner.getRunner().getCommand(command));
@@ -954,60 +999,31 @@ public final class VirtualWallet {
         JSONObject all = new JSONObject(store.posted());
         JSONObject rec = all.optJSONObject(pre);
         if (rec == null) return null;                                   // not one of ours: the node answers as ever
-        String mined = rec.optString("mined", "");
-        if (mined.isEmpty()) {
-            mined = findMined(rec);
-            if (mined == null) {                                        // not on chain yet (or still scanning): not found
-                all.put(pre, rec); store.savePosted(all.toString());
-                return new JSONObject().put("command", "txpow").put("status", true).put("response", new JSONObject().put("found", false));
-            }
-            rec.put("mined", mined); all.put(pre, rec); store.savePosted(all.toString());
-        }
-        return node.call("txpow onchain:" + mined);
-    }
-
-    /** The mined txpowid of {@code rec}'s transaction: via an unspent output's block, else a bounded forward scan from
-     *  the tip at posting ({@link #TXPOW_SCAN_PER_CALL} blocks per call, cursor kept in {@code rec}). */
-    private String findMined(JSONObject rec) throws Exception {
-        String txnid = rec.getString("txnid");
+        long b = rec.optLong("block", 0);
         JSONArray outs = rec.optJSONArray("outs");
-        for (int i = 0; outs != null && i < outs.length(); i++) {
-            Object resp = node.call("coins coinid:" + outs.getString(i)).opt("response");
-            if (resp instanceof JSONArray && ((JSONArray) resp).length() > 0) {
-                String id = inBlock(((JSONArray) resp).getJSONObject(0).optLong("created", 0), txnid);
-                if (id != null) return id;
-            }
+        for (int i = 0; b <= 0 && outs != null && i < outs.length(); i++) {
+            Object resp = node.call("coins coinid:" + outs.getJSONObject(i).optString("coinid")).opt("response");
+            if (resp instanceof JSONArray && ((JSONArray) resp).length() > 0) b = matchOut(rec, ((JSONArray) resp).getJSONObject(0));
         }
-        long tip = node.call("block").getJSONObject("response").optLong("block", 0), from = rec.optLong("from", 0);
-        if (from <= 0) return null;
-        long n = Math.max(rec.optLong("next", from), from), end = Math.min(tip, from + TXPOW_SCAN_BLOCKS);
-        for (int k = 0; k < TXPOW_SCAN_PER_CALL && n <= end; k++, n++) {
-            String id = inBlock(n, txnid);
-            if (id != null) return id;
+        JSONObject notFound = new JSONObject().put("command", "txpow").put("status", true).put("response", new JSONObject().put("found", false));
+        if (b <= 0) return notFound;
+        String blockid = rec.optString("blockid", "");
+        if (blockid.isEmpty()) {
+            JSONObject r = node.call("txpow inblock:" + b).optJSONObject("response");
+            JSONArray txns = r == null ? null : r.optJSONArray("txns");
+            if (txns != null && txns.length() > 0) blockid = txns.getJSONObject(0).optString("blockid", "");
+            // ponytail: a block whose only txn is its own (our txpow mined as the block) lists nothing here; left
+            // unresolved rather than fetching a txpow of unknown size. Rare on a phone node.
+            if (!blockid.matches("(?i)0x[0-9a-f]{64}")) return notFound;
         }
-        rec.put("next", n);
-        return null;
-    }
-
-    /** The txpowid in block {@code block} carrying transaction {@code txnid} (the block's own txn or its txnlist). */
-    private String inBlock(long block, String txnid) throws Exception {
-        if (block <= 0) return null;
-        JSONObject b = node.call("txpow block:" + block).optJSONObject("response");
-        if (b == null) return null;
-        if (txnid.equalsIgnoreCase(txnIdOf(b))) return b.optString("txpowid", null);
-        JSONObject body = b.optJSONObject("body");
-        JSONArray list = body == null ? null : body.optJSONArray("txnlist");
-        for (int i = 0; list != null && i < list.length(); i++) {
-            JSONObject t = node.call("txpow txpowid:" + list.getString(i)).optJSONObject("response");
-            if (t != null && txnid.equalsIgnoreCase(txnIdOf(t))) return list.getString(i);
-        }
-        return null;
-    }
-
-    private static String txnIdOf(JSONObject txpow) {
-        JSONObject body = txpow.optJSONObject("body");
-        JSONObject txn = body == null ? null : body.optJSONObject("txn");
-        return txn == null ? "" : txn.optString("transactionid", "");
+        rec.put("block", b).put("blockid", blockid);
+        all.put(pre, rec);
+        store.savePosted(all.toString());
+        long tip = node.call("block").getJSONObject("response").optLong("block", 0);
+        if (tip < b) return notFound;
+        return new JSONObject().put("command", "txpow").put("status", true).put("response", new JSONObject()
+                .put("found", true).put("block", String.valueOf(b)).put("blockid", blockid)
+                .put("tip", String.valueOf(tip)).put("confirmations", String.valueOf(tip - b)));
     }
 
     private static String postedTxnId(JSONObject txpow) {
@@ -1131,6 +1147,12 @@ public final class VirtualWallet {
         for (String id : add) if (id != null && !id.isEmpty()) { set.remove(id); set.add(id); }
         java.util.List<String> l = new java.util.ArrayList<>(set);
         return new org.json.JSONArray(l.subList(Math.max(0, l.size() - 2000), l.size())).toString();
+    }
+
+    /** {@code txpow … onchain:…} — the one txpow form the account answers (its own posts); routed to it by NodeApi. */
+    public static boolean answersTxpow(String command) {
+        String c = command.trim().toLowerCase(java.util.Locale.ROOT);
+        return c.startsWith("txpow ") && c.contains("onchain:");
     }
 
     /** True when {@code coinId} is an output of a transaction this account signed. */

@@ -40,14 +40,22 @@ public class WalletActivityTest {
         assertFalse(json.contains("\"C0\""));
     }
 
-    @Test public void aWalletRowIsNeverLandedByGuessFromSpentInputs() throws Exception {
+    @Test public void aWalletRowIsNeverLandedOrDroppedByGuessFromSpentInputs() throws Exception {
         JSONObject a = new JSONObject().put("id", "wal_x").put("kind", "withdraw").put("stage", ActivityLog.POSTED).put("ts", 1L).put("postBlock", 100L);
-        ActivityLog.observe(a, 105L, true, 0L, 2L);          // inputs gone (maybe a later post of ours), no output seen
+        ActivityLog.observe(a, 105L, true, 0L, 2L);          // inputs gone (it landed and moved on, or a later post reused them)
         assertEquals(0L, a.optLong("block", 0));
         assertEquals(ActivityLog.POSTED, a.optString("stage"));
-        ActivityLog.observe(a, 100L + ActivityLog.DROP_BLOCKS + 1, true, 0L, 3L);
-        assertEquals("no chain evidence by the deadline: dropped, never 'confirmed'", ActivityLog.DROPPED, a.optString("stage"));
-        ActivityLog.observe(a, 170L, false, 160L, 4L);       // a late sighting of its output still revives it
-        assertEquals(160L, a.optLong("block"));
+        assertTrue(a.optBoolean("inputsGone"));
+        ActivityLog.observe(a, 100L + ActivityLog.DROP_BLOCKS + 1, false, 0L, 3L);
+        assertEquals("never 'dropped / not mined' once its coins are spent", ActivityLog.POSTED, a.optString("stage"));
+        ActivityLog.observe(a, 170L, false, 0L, 2L + ActivityLog.REVIVE_MS);
+        assertEquals(ActivityLog.LOST, a.optString("stage"));
+        assertTrue(a.optString("reason").contains("check the recipient"));
+
+        JSONObject b = new JSONObject().put("id", "wal_y").put("kind", "withdraw").put("stage", ActivityLog.POSTED).put("ts", 1L).put("postBlock", 100L);
+        ActivityLog.observe(b, 100L + ActivityLog.DROP_BLOCKS + 1, false, 0L, 3L);   // inputs still unspent, nothing on chain
+        assertEquals(ActivityLog.DROPPED, b.optString("stage"));
+        ActivityLog.observe(b, 170L, false, 160L, 4L);       // a late sighting of its output revives it
+        assertEquals(160L, b.optLong("block"));
     }
 }

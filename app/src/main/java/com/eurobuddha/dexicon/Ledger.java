@@ -233,9 +233,11 @@ public final class Ledger {
         if (in) it.step(Mark.OK, hms(ts, tz), "Arrived in your Trading Account" + (block > 0 ? " (block " + block + ")" : "")
                 + (a.optBoolean("maybeFill") ? " — a deposit, or the proceeds of one of your resting orders filling (see HISTORY)" : " — a deposit"));
         else {
-            if (a.optBoolean("uncertain")) it.step(Mark.WARN, hms(ts, tz), "Signed and sent, but the node never confirmed it — outcome unknown until it shows on chain");
+            if (a.optBoolean("uncertain") && a.optLong("block", 0) <= 0) it.step(Mark.WARN, hms(ts, tz), "Signed and sent, but the node never confirmed it — outcome unknown until it shows on chain");
+            else if (a.optBoolean("uncertain")) it.step(Mark.OK, hms(ts, tz), "Signed and sent (the node's reply was lost; the chain shows it landed)");
             else it.step(Mark.OK, hms(ts, tz), "Signed by your Trading Account and posted");
-            if (block > 0) it.step(Mark.OK, "", a.optBoolean("blockEstimated") ? "Landed (its output was already spent onward; seen by block " + block + ")" : "In block " + block);
+            if (block > 0) it.step(Mark.OK, "", "In block " + block);
+            else if (!failed && a.optBoolean("inputsGone")) it.step(Mark.WAIT, "", "Its coins are spent — outcome not yet proven on chain");
             else if (!failed) { String w = ActivityLog.waiting(a, chainBlock); it.step(Mark.WAIT, "", Character.toUpperCase(w.charAt(0)) + w.substring(1)); }
         }
         if (block > 0 && !failed) {

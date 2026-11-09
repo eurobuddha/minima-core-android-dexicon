@@ -155,6 +155,18 @@ public class NodeApi {
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         // Trading Account: wallet + txn verbs are answered in-app (VirtualWallet); only signed postfrom reaches the node.
         String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
+        if (com.eurobuddha.dexicon.account.VirtualWallet.answersTxpow(command)) {
+            // the account proves its own (pre-mining) txpowids; any other id passes through it to the node
+            com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);
+            if (acct != null) {
+                queuedCommands++;
+                acct.submit(this, command, guard, timeoutMs, new Cb() {
+                    public void onResult(JSONObject j) { queuedCommands--; try { if (cb != null) cb.onResult(j); } finally { finishDestroy(); } }
+                    public void onError(String m) { queuedCommands--; try { if (cb != null) cb.onError(m); } finally { finishDestroy(); } }
+                });
+                return;
+            }
+        }
         if (com.eurobuddha.dexicon.account.VirtualWallet.handles(verb)) {
             com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);
             if (com.eurobuddha.dexicon.account.Account.chainRead(command)

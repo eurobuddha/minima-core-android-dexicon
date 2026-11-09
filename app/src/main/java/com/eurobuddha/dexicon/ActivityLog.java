@@ -148,9 +148,15 @@ public final class ActivityLog {
             }
             if (DROPPED.equals(s)) return changed;
             String why = null;
-            // a wallet row is never judged by its spent inputs: another post of ours may have reused them. It lands only on
-            // chain evidence (its output, or its txpow proven by txpow onchain:), else it drops after DROP_BLOCKS.
-            if (inputGone && a.optString("kind").isEmpty()) why = "an input was spent by another transaction";
+            // a wallet row is never judged by its spent inputs (another post of ours may have reused them, or it landed
+            // and its outputs moved on): it lands only on chain evidence. Inputs gone without it = a neutral state, never
+            // "dropped"/"not mined" (the user might send again); after REVIVE_MS it is LOST with that same wording.
+            if (!a.optString("kind").isEmpty() && (inputGone || a.optBoolean("inputsGone"))) {
+                if (nowMs - a.optLong("ts", nowMs) > REVIVE_MS) { a.put("stage", LOST).put("reason", "its coins were spent, but this transaction was never proven on chain — check the recipient before sending again"); return true; }
+                if (a.optBoolean("inputsGone")) return changed;
+                a.put("inputsGone", true).put("reason", "its coins are spent — outcome not yet proven on chain"); return true;
+            }
+            if (inputGone) why = "an input was spent by another transaction";
             else if (a.optLong("postBlock", 0) > 0 && tip - a.optLong("postBlock") > DROP_BLOCKS) why = "not mined after " + DROP_BLOCKS + " blocks";
             if (why != null) { a.put("was", s).put("stage", DROPPED).put("reason", why); return true; }
             return changed;
@@ -270,16 +276,22 @@ public final class ActivityLog {
     }
     private static void probeOutput(NodeApi node, DexDb db, JSONObject a, JSONArray outs, JSONArray ins, String id, long tip, boolean[] any, Runnable after) {
         if (outs == null || outs.length() == 0) { apply(db, id, tip, false, 0, any); after.run(); return; }
-        inputsGone(node, ins, 0, gone -> node.cmd("coins coinid:" + outs.optString(0), new NodeApi.Cb() {
+        inputsGone(node, ins, 0, gone -> firstCreated(node, outs, 0, created -> { apply(db, id, tip, gone, created, any); after.run(); }));
+    }
+    private interface Created { void at(long block); }
+    /** The created block of the first of {@code outs} still unspent on chain (0 = none found). */
+    private static void firstCreated(NodeApi node, JSONArray outs, int k, Created cb) {
+        if (outs == null || k >= outs.length()) { cb.at(0); return; }
+        node.cmd("coins coinid:" + outs.optString(k), new NodeApi.Cb() {
             public void onResult(JSONObject j) {
                 List<JSONObject> c = NodeApi.rows(j);
                 long created = 0;
                 if (j.optBoolean("status", false) && !c.isEmpty() && !c.get(0).optString("coinid", "").isEmpty())
                     try { created = Long.parseLong(c.get(0).optString("created", "0")); } catch (Exception ignored) {}
-                apply(db, id, tip, gone, created, any); after.run();
+                if (created > 0) cb.at(created); else firstCreated(node, outs, k + 1, cb);
             }
-            public void onError(String m) { after.run(); }
-        }));
+            public void onError(String m) { firstCreated(node, outs, k + 1, cb); }
+        });
     }
     private static void apply(DexDb db, String id, long tip, boolean gone, long created, boolean[] any) {
         final boolean[] ch = {false};
