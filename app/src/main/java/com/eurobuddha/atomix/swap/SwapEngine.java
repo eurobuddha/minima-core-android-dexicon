@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.30 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.31 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -1907,7 +1907,10 @@ public final class SwapEngine {
         if (s.myLegIsMinima || s.hash == null || s.myTimelock <= 0) return;
         SwapLog.skip("lockWatch " + s.hash, s.status + " timelock " + s.myTimelock);
         cancelExpiredEthLock(eth, s);
-        if (halted() || com.eurobuddha.atomix.eth.EthTx.stuckLockTest() || !lockWorthRepricing(s.role, s.myTimelock, ethNowSoft())) return;
+        // Re-signing the journal's saved bytes adds no liability, so only the identity / hand-over halts stop it — not a
+        // host's new-liability gate (AtomiX before its Trading Account exists still drains node-key locks this way).
+        boolean stop = com.eurobuddha.atomix.IdentityWatch.halted() || com.eurobuddha.atomix.Handover.active();
+        if (stop || com.eurobuddha.atomix.eth.EthTx.stuckLockTest() || !lockWorthRepricing(s.role, s.myTimelock, ethNowSoft())) return;
         if (!tryEthAttempt("repriceE:" + s.hash)) return;
         if (!ethGasAffordable(s.hash, EthHtlc.GAS_LOCK)) return;
         try {
