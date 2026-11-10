@@ -434,8 +434,9 @@ public final class VirtualWallet {
                 String d = v == null ? "" : v.optString("data", "");
                 ours = indexOfKey(d) >= 0 || indexOfAddress(d) >= 0;
             }
-            if (!ours) continue;
+            if (!ours || row.optBoolean("spent", false)) continue;   // a spent lock imported is a phantom balance on the node
             try {
+                if (!unspentNow(row.optString("coinid"))) continue;
                 JSONObject ex = node.call("coinexport coinid:" + row.optString("coinid"));
                 JSONObject resp = ex.optJSONObject("response");
                 if (!ex.optBoolean("status") || resp == null) continue;                 // retried on the next scan
@@ -724,8 +725,21 @@ public final class VirtualWallet {
             }
             if (!ours) return;
             Cached cached = proofs.get(norm(c.getCoinID().to0xString()));
-            if (cached != null && cached.data != null) node.call("coinimport track:true data:" + cached.data);
+            // never from a cached proof without checking the coin is still unspent NOW: a retried claim after the lock was
+            // spent re-imported it, and the node then listed the spent coin as unspent for good (10 Nov, on the Fold:
+            // 3.08677 MxUSD of lock 0x698A7B79A4C4D86F02D41BCDF010B4BDDA7A2EC9B882375FFDFCDD45C478269D in Minima Core's balance)
+            if (cached != null && cached.data != null && unspentNow(c.getCoinID().to0xString()))
+                node.call("coinimport track:true data:" + cached.data);
         } catch (Exception ignored) { /* best effort: the spend still works while the coin is inside the window */ }
+    }
+
+    /** True only when the node's chain lists {@code coinid} and it is unspent right now. */
+    private boolean unspentNow(String coinid) throws Exception {
+        JSONObject r = node.call("coins coinid:" + coinid);
+        JSONArray rows = r.optBoolean("status") ? r.optJSONArray("response") : null;
+        if (rows == null || rows.length() == 0) return false;
+        JSONObject c = rows.optJSONObject(0);
+        return c != null && !c.optBoolean("spent", false);
     }
 
     private JSONObject txnOutput(P p) throws Exception {
