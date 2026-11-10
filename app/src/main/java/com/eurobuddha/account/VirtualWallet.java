@@ -65,6 +65,10 @@ public final class VirtualWallet {
         default String posted() { return "{}"; }
         /** Durable (synchronous) save; false = not written. */
         default boolean savePosted(String json) { return true; }
+        /** How many account addresses (key count) the last clean MegaMMR archive pass covered on this node
+         *  ({@link #archiveWanted}); 0 = never. */
+        default int archivedKeys(String nodeId) { return Integer.MAX_VALUE; }
+        default void setArchivedKeys(String nodeId, int keyCount) {}
     }
 
     /** Wall clock (tests inject one). */
@@ -160,7 +164,7 @@ public final class VirtualWallet {
      * same coinexport/coinimport the lock scan uses. Once per address per process; true only after a clean pass (a
      * failure is retried on the next ensureTracked). Bounded: an address holding more than MAX_COIN_ROWS coins (a dust
      * flood) is refused before the row read — the reply must never reach the IPC limit, nor stall the signing worker.
-     * ponytail: unpruned window only — a coin older than the node's window needs the MegaMMR (as PandaPools' recovery does).
+     * Older coins (beyond the node's window) come from the MegaMMR archive: {@link #importArchived}.
      */
     private boolean recoverExisting(String addr) {
         try {
@@ -189,6 +193,52 @@ public final class VirtualWallet {
             return clean;
         } catch (Exception later) { return false; }
     }
+
+    /**
+     * The node's identity for the archive pass: its lowest own simple address (stable per node seed). Null = the archive
+     * pass already covered every account address on this node, or no identity. A coin the node saw arrive is tracked;
+     * only coins OLDER than its tracking (it took the account over from another node, or after a restore) are missing.
+     * Re-run when the key count grows past what the last clean pass covered (newaddress after a restore).
+     * ponytail: a resync of the SAME node keeps its id, and an archive that withholds coins is believed; add a manual
+     * "search the archive again" if either is ever seen.
+     */
+    public synchronized String archiveWanted() throws Exception {
+        Set<String> own = nodeSimpleAddresses();
+        if (own.isEmpty()) return null;
+        String id = java.util.Collections.min(own);
+        return store.archivedKeys(id) >= store.keyCount() ? null : id;
+    }
+
+    /** Record a clean pass over the first {@code keyCount} account addresses on this node. */
+    public synchronized void markArchived(String nodeId, int keyCount) { store.setArchivedKeys(nodeId, keyCount); }
+
+    /**
+     * Import coins this node is missing from part of the archive's reply ({@link ArchiveProofs#fetch}, downloaded OFF the
+     * signing worker; the caller hands it over in small batches so signing interleaves). Each proof must be at an account
+     * address and verified by THIS node: {@code coincheck} needs the proof's MMR on the node's own chain and refuses a coin
+     * spent at any block from the proof up to the node's tip (MMR.checkProofTimeValid) — the archive's proofs are taken
+     * 256 blocks below its tip (coinexport), so that is what keeps a spent coin out, not the proof's age. A spend still
+     * only in a mempool is not seen; the tracked spend clears it when mined. True when every proof was handled.
+     */
+    public synchronized boolean importArchived(List<CoinProof> archive) throws Exception {
+        boolean clean = true;
+        for (CoinProof cp : archive) {
+            String id = cp.getCoin().getCoinID().to0xString();
+            if (indexOfAddress(cp.getCoin().getAddress().to0xString()) < 0) continue;
+            JSONObject mine = node.call("coins relevant:true coinid:" + id);
+            JSONArray held = mine.optBoolean("status") ? mine.optJSONArray("response") : null;
+            if (held == null) { clean = false; continue; }
+            if (held.length() > 0) continue;                                       // already tracked
+            String data = MiniData.getMiniDataVersion(cp).to0xString();
+            JSONObject chk = node.call("coincheck data:" + data);
+            JSONObject r = chk.optJSONObject("response");
+            if (!chk.optBoolean("status") || r == null || !r.optBoolean("valid")) { clean = false; continue; }   // spent, or not synced yet
+            if (!node.call("coinimport track:true data:" + data).optBoolean("status")) clean = false;
+        }
+        return clean;
+    }
+    /** Proofs handed to {@link #importArchived} per worker task (each costs three node calls). */
+    public static final int ARCHIVE_BATCH = 16;
 
     public List<String> accountAddresses() {
         List<String> out = new ArrayList<>();

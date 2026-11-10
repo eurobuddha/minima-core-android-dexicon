@@ -87,6 +87,14 @@ public final class Account {
 
     private static final String PREFS = "dexicon_account_state";
     private static volatile Account instance;
+    /** The MegaMMR download (~5.6 MB, up to 90 s) runs here, never on the signing worker. */
+    private static final ExecutorService ARCHIVE = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "account-archive"); t.setDaemon(true); return t; });
+    private static final long ARCHIVE_RETRY_MS = 30 * 60_000L;
+    private volatile long archiveTriedAt;
+    private volatile int archiveAttempts;   // per process: a download that keeps failing, or a refused proof, waits for the next start
+    // ponytail: a reply that fails every time still costs up to 2 × 5.6 MB per app start; persist the count if seen.
+    private static final int ARCHIVE_MAX_ATTEMPTS = 2;
+    private final java.util.concurrent.atomic.AtomicBoolean archiveBusy = new java.util.concurrent.atomic.AtomicBoolean();
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "trading-account"); t.setDaemon(true); return t; });
     private static volatile Handler main;
     /** Created on first use, so loading this class never needs Android's main Looper (JVM unit tests load it). */
@@ -143,6 +151,8 @@ public final class Account {
             public synchronized boolean isOwnOutput(String id) { return own().contains(id); }
             public String posted() { return sp.getString("posted_" + fp[0], "{}"); }
             public boolean savePosted(String json) { return sp.edit().putString("posted_" + fp[0], json).commit(); }
+            public int archivedKeys(String nodeId) { return sp.getInt("archived_" + fp[0] + "_" + nodeId.toLowerCase(java.util.Locale.ROOT), 0); }
+            public void setArchivedKeys(String nodeId, int n) { sp.edit().putInt("archived_" + fp[0] + "_" + nodeId.toLowerCase(java.util.Locale.ROOT), n).apply(); }
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
@@ -258,6 +268,7 @@ public final class Account {
                             java.util.Set<String> k = new java.util.HashSet<>();
                             for (String a : wallet.accountAddresses()) k.add(VirtualWallet.norm(a));
                             knownAddresses = k;
+                            archivePass();
                         }
                         catch (Exception later) { android.util.Log.w(config.appName, "account re-track deferred: " + later); }   // never fails a claim
                     }
@@ -286,6 +297,42 @@ public final class Account {
      *  exactly, every coin listed) — a dust flood can never bury the trade rows (wallet rows have their own cap). The
      *  rows are written BEFORE the seen set is saved, so a failure retries instead of losing a deposit. The first scan
      *  is a baseline only (no backfill). Best effort: never fails the caller. */
+    /** On the worker: coins older than this node's tracking of the account are fetched from the MegaMMR archive once
+     *  per node and key count (VirtualWallet.archiveWanted / importArchived). The ~5.6 MB download runs on ARCHIVE; the
+     *  proofs come back to the worker in batches of ARCHIVE_BATCH so signing interleaves. At most ARCHIVE_MAX_ATTEMPTS per
+     *  process, ARCHIVE_RETRY_MS apart — never a download loop. Any Throwable (a hostile reply can force an OOM) ends the
+     *  attempt; it never reaches the thread's uncaught handler. */
+    private void archivePass() {
+        long now = System.currentTimeMillis();
+        if (archiveAttempts >= ARCHIVE_MAX_ATTEMPTS || now - archiveTriedAt < ARCHIVE_RETRY_MS || !archiveBusy.compareAndSet(false, true)) return;
+        try {
+            String nodeId = wallet.archiveWanted();
+            if (nodeId == null) { archiveBusy.set(false); return; }
+            archiveTriedAt = now; archiveAttempts++;
+            java.util.List<String> addresses = wallet.accountAddresses();
+            ARCHIVE.execute(() -> {
+                try {
+                    java.util.List<org.minima.objects.CoinProof> proofs = ArchiveProofs.fetch(addresses);
+                    importBatch(nodeId, addresses.size(), proofs, 0, true);
+                } catch (Throwable e) { android.util.Log.w(config.appName, "archive fetch deferred: " + e); archiveBusy.set(false); }
+            });
+        } catch (Throwable e) { archiveBusy.set(false); android.util.Log.w(config.appName, "archive check deferred: " + e); }
+    }
+
+    private void importBatch(String nodeId, int keyCount, java.util.List<org.minima.objects.CoinProof> proofs, int from, boolean clean) {
+        WORKER.execute(() -> {
+            boolean ok = clean;
+            try {
+                int to = Math.min(proofs.size(), from + VirtualWallet.ARCHIVE_BATCH);
+                ok &= wallet.importArchived(proofs.subList(from, to));
+                if (to < proofs.size()) { importBatch(nodeId, keyCount, proofs, to, ok); return; }
+                if (ok) wallet.markArchived(nodeId, keyCount);
+                android.util.Log.i(config.appName, "archive pass over " + proofs.size() + " coin(s) " + (ok ? "complete" : "incomplete, retried later"));
+            } catch (Throwable e) { android.util.Log.w(config.appName, "archive import deferred: " + e); }
+            archiveBusy.set(false);
+        });
+    }
+
     private void scanIncoming() {
         long now = System.currentTimeMillis();
         if (now - scannedAt < 30_000L || app == null) return;

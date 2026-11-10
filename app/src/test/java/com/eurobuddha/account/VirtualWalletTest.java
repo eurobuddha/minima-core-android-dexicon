@@ -386,4 +386,71 @@ public class VirtualWalletTest {
         assertTrue(w.handle("txpow onchain:" + d).getJSONObject("response").getBoolean("found"));
         assertFalse(w.handle("txpow onchain:" + a).getJSONObject("response").getBoolean("found"));
     }
+
+    // ---------------------------------------------------------------- MegaMMR archive pass (coins older than the node)
+
+    static org.minima.objects.CoinProof archived(String coinid, String address, long proofBlock) {
+        org.minima.objects.Coin c = new org.minima.objects.Coin(new org.minima.objects.base.MiniData(coinid),
+                new org.minima.objects.base.MiniData(address), new org.minima.objects.base.MiniNumber("5"), new org.minima.objects.base.MiniData("0x00"));
+        return new org.minima.objects.CoinProof(c, new org.minima.objects.mmr.MMRProof(new org.minima.objects.base.MiniNumber(proofBlock)));
+    }
+
+    /** Verifies proofs unless the coin is in {@code spentSince} (coincheck refuses a coin spent after the proof block);
+     *  tracks 0x11 already. */
+    static class ArchiveNode extends FakeNode {
+        final java.util.Set<String> spentSince = new java.util.HashSet<>();
+        boolean synced = true;
+        @Override public JSONObject call(String cmd) throws Exception {
+            if (cmd.equals("scripts")) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONArray()
+                    .put(new JSONObject().put("address", "0xB0").put("simple", true))
+                    .put(new JSONObject().put("address", "0xA0").put("simple", true))); }
+            if (cmd.startsWith("coins relevant:true coinid:0x11")) { calls.add(cmd);
+                return new JSONObject().put("status", true).put("response", new JSONArray().put(new JSONObject().put("coinid", "0x11"))); }
+            if (cmd.startsWith("coincheck data:")) { calls.add(cmd);
+                String id = org.minima.objects.CoinProof.convertMiniDataVersion(new org.minima.objects.base.MiniData(cmd.substring(15)))
+                        .getCoin().getCoinID().to0xString();
+                return new JSONObject().put("status", true).put("response", new JSONObject().put("valid", synced && !spentSince.contains(id))); }
+            if (cmd.startsWith("coinimport")) { calls.add(cmd); return new JSONObject().put("status", true); }
+            return super.call(cmd);
+        }
+        long imports() { return calls.stream().filter(c -> c.startsWith("coinimport track:true data:")).count(); }
+    }
+
+    static class ArchiveStore extends Store {
+        final java.util.Map<String, Integer> done = new java.util.HashMap<>();
+        public int archivedKeys(String id) { return done.getOrDefault(id, 0); }
+        public void setArchivedKeys(String id, int n) { done.put(id, n); }
+    }
+
+    /** The archive's proofs sit 256 blocks below its tip (coinexport), so they are never "fresh" — the node's coincheck
+     *  is the gate. Tracked, foreign-address and spent-since coins are not imported. */
+    @Test public void archivePassImportsOnlyVerifiedUnheldCoinsAtAccountAddresses() throws Exception {
+        ArchiveNode n = new ArchiveNode(); ArchiveStore st = new ArchiveStore(); st.n = 1;
+        AccountKeys k = AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null);
+        VirtualWallet w = new VirtualWallet(n, k, st, Collections.emptySet());
+        String a = k.address(0);
+        String id = w.archiveWanted();
+        assertEquals("node id = its lowest own simple address", VirtualWallet.norm("0xA0"), id);
+        n.spentSince.add("0x22");
+        assertTrue(w.importArchived(java.util.Arrays.asList(
+                archived("0x11", a, 100 - 256),        // already tracked: skipped
+                archived("0x33", "0x" + "12".repeat(32), 100 - 256),   // not an account address: skipped
+                archived("0x44", a, 100 - 256))));     // imported
+        assertEquals(1, n.imports());
+        assertFalse("spent since the proof: coincheck refuses it, not imported",
+                w.importArchived(Collections.singletonList(archived("0x22", a, 100 - 256))));
+        assertEquals(1, n.imports());
+        w.markArchived(id, 1);
+        assertNull("covered", w.archiveWanted());
+        st.n = 2;
+        assertEquals("a new address after the pass re-opens it", id, w.archiveWanted());
+    }
+
+    @Test public void unverifiableProofLeavesThePassIncomplete() throws Exception {
+        ArchiveNode n = new ArchiveNode(); n.synced = false;
+        AccountKeys k = AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null);
+        VirtualWallet w = new VirtualWallet(n, k, new ArchiveStore(), Collections.emptySet());
+        assertFalse(w.importArchived(Collections.singletonList(archived("0x44", k.address(0), 100 - 256))));
+        assertEquals("the node could not verify it (behind the archive)", 0, n.imports());
+    }
 }
