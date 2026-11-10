@@ -422,6 +422,8 @@ public final class VirtualWallet {
     public synchronized void noticeLocksToUs(JSONObject reply) {
         JSONArray rows = reply == null ? null : reply.optJSONArray("response");
         if (rows == null) return;
+        long tip;
+        try { tip = Long.parseLong(blockInfo().optString("block", "0")); } catch (Exception later) { return; }   // next scan
         for (int k = 0; k < rows.length(); k++) {
             JSONObject row = rows.optJSONObject(k);
             if (row == null) continue;
@@ -435,6 +437,11 @@ public final class VirtualWallet {
                 ours = indexOfKey(d) >= 0 || indexOfAddress(d) >= 0;
             }
             if (!ours || row.optBoolean("spent", false)) continue;   // a spent lock imported is a phantom balance on the node
+            // Track only a lock old enough to need it (its proof must outlive the node's ~2048-block tree). A lock imported
+            // and then spent stays in the node's balance as unspent FOREVER — the spend of a coin the node does not
+            // otherwise watch is never marked (proven on the 4446 dev node, 10 Nov; cointrack cannot remove it). A swap
+            // that settles within a day is therefore never tracked; an older one is re-checked on every scan until then.
+            if (tip - row.optLong("created", tip) < TRACK_AFTER_BLOCKS) continue;
             try {
                 if (!unspentNow(row.optString("coinid"))) continue;
                 JSONObject ex = node.call("coinexport coinid:" + row.optString("coinid"));
@@ -703,7 +710,6 @@ public final class VirtualWallet {
         if (p.has("coinid")) cp = proof(p.s("coinid", ""));
         else if (p.has("coindata")) { Coin c = Coin.convertMiniDataVersion(new MiniData(p.s("coindata", ""))); if (c == null) throw new IllegalArgumentException("ERROR importing coin data"); cp = proof(c.getCoinID().to0xString()); }
         else return fail("txninput", "txninput needs coinid: (floating inputs are not available on the Trading Account)");
-        trackIfAddressedToUs(cp);
         Transaction t = r.getTransaction();
         t.addInput(cp.getCoin());
         TxPoWGenerator.precomputeTransactionCoinID(t);
@@ -712,30 +718,14 @@ public final class VirtualWallet {
         return rowJson("txninput", r);
     }
 
-    /** A contract coin whose state names one of our keys (a counterparty's lock to us) is not relevant on our node
-     *  (the node's key table never holds account keys): import it with tracking so the node keeps its proof. */
-    private void trackIfAddressedToUs(CoinProof cp) {
-        try {
-            Coin c = cp.getCoin();
-            if (indexOfAddress(c.getAddress().to0xString()) >= 0) return;
-            boolean ours = false;
-            for (StateVariable sv : c.getState()) {
-                String v = sv.toString();
-                if (indexOfKey(v) >= 0 || indexOfAddress(v) >= 0) { ours = true; break; }
-            }
-            if (!ours) return;
-            Cached cached = proofs.get(norm(c.getCoinID().to0xString()));
-            // never from a cached proof without checking the coin is still unspent NOW: a retried claim after the lock was
-            // spent re-imported it, and the node then listed the spent coin as unspent for good (10 Nov, on the Fold:
-            // 3.08677 MxUSD of lock 0x698A7B79A4C4D86F02D41BCDF010B4BDDA7A2EC9B882375FFDFCDD45C478269D in Minima Core's balance)
-            if (cached != null && cached.data != null && unspentNow(c.getCoinID().to0xString()))
-                node.call("coinimport track:true data:" + cached.data);
-        } catch (Exception ignored) { /* best effort: the spend still works while the coin is inside the window */ }
-    }
+    /** Locks addressed to us are tracked only from this age (blocks) on: well inside the node's ~2048-block tree, so the
+     *  proof can still be refreshed, and long after a normal swap has settled (see noticeLocksToUs). Building a spend
+     *  never tracks the coin it spends — that is exactly the import that becomes a phantom once the spend lands. */
+    static final long TRACK_AFTER_BLOCKS = 1200;
 
     /** True only when the node's chain lists {@code coinid} and it is unspent right now. */
     private boolean unspentNow(String coinid) throws Exception {
-        JSONObject r = node.call("coins coinid:" + coinid);
+        JSONObject r = node.call("coins coinid:" + coinid + " checkmempool:true");   // a pending spend counts as spent
         JSONArray rows = r.optBoolean("status") ? r.optJSONArray("response") : null;
         if (rows == null || rows.length() == 0) return false;
         JSONObject c = rows.optJSONObject(0);

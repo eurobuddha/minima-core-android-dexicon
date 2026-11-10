@@ -61,7 +61,9 @@ final class WalletTools {
         // Minima Core's wallet total counts the Trading Account's coins too (it watches them for this app), but its Send can
         // only spend coins at its OWN addresses — and above that it fails with an empty error (10 Nov, on the Fold). Show
         // what it can really send: the node's own `sendable` for this token, straight from the node.
-        act.nodeApi().cmdDirect("balance tokenid:" + tokenid, null, 0, new NodeApi.Cb() {
+        // the node matches tokenid case-sensitively against its own upper-case 0x form
+        String tid = tokenid.startsWith("0x") || tokenid.startsWith("0X") ? "0x" + tokenid.substring(2).toUpperCase(java.util.Locale.ROOT) : tokenid;
+        act.nodeApi().cmdDirect("balance tokenid:" + tid, null, 0, new NodeApi.Cb() {
             public void onResult(JSONObject j) { show(nodeSendable(j, tokenid)); }
             public void onError(String m) { show(null); }
             private void show(String own) {

@@ -89,12 +89,17 @@ public class VirtualWalletTest {
                 if (cmd.startsWith("coins coinid:")) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONArray().put(new JSONObject().put("spent", spentOnNode[0]))); }
                 if (cmd.startsWith("coinexport")) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONObject().put("data", "0xDA7A")); }
                 if (cmd.startsWith("coinimport")) { calls.add(cmd); return new JSONObject().put("status", true); }
+                if (cmd.equals("block")) return new JSONObject().put("status", true).put("response", new JSONObject().put("block", "5000"));
                 return super.call(cmd);
             }
         };
         VirtualWallet w = wallet(n);
         String myKey = w.handle("getaddress").getJSONObject("response").getString("publickey");
-        JSONObject lock = new JSONObject().put("coinid", "0x698A").put("state", new JSONArray().put(new JSONObject().put("port", 4).put("data", myKey)));
+        JSONObject young = new JSONObject().put("coinid", "0x698A").put("created", "4900").put("state", new JSONArray().put(new JSONObject().put("port", 4).put("data", myKey)));
+        w.noticeLocksToUs(new JSONObject().put("response", new JSONArray().put(new JSONObject(young.toString()).put("spent", false))));
+        assertFalse("a young lock settles within the tree window: never tracked (its later spend would leave a phantom)",
+                n.calls.stream().anyMatch(c -> c.startsWith("coinimport")));
+        JSONObject lock = new JSONObject().put("coinid", "0x698A").put("created", "3000").put("state", new JSONArray().put(new JSONObject().put("port", 4).put("data", myKey)));
         w.noticeLocksToUs(new JSONObject().put("response", new JSONArray().put(new JSONObject(lock.toString()).put("spent", true))));
         assertFalse("a row already marked spent", n.calls.stream().anyMatch(c -> c.startsWith("coinimport")));
         spentOnNode[0] = true;
@@ -102,7 +107,7 @@ public class VirtualWalletTest {
         assertFalse("the node says it is spent now", n.calls.stream().anyMatch(c -> c.startsWith("coinimport")));
         spentOnNode[0] = false;
         w.noticeLocksToUs(new JSONObject().put("response", new JSONArray().put(new JSONObject(lock.toString()).put("spent", false))));
-        assertTrue("an unspent lock to us is tracked", n.calls.stream().anyMatch(c -> c.startsWith("coinimport")));
+        assertTrue("an old unspent lock to us is tracked before it leaves the tree", n.calls.stream().anyMatch(c -> c.startsWith("coinimport")));
     }
 
     @Test public void chainReadsPassThroughUntouched() throws Exception {
