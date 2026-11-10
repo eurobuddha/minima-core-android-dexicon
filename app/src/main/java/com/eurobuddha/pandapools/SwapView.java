@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.10.0 app/src/main/java/com/eurobuddha/pandapools/SwapView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.9 app/src/main/java/com/eurobuddha/pandapools/SwapView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.app.AlertDialog;
@@ -228,7 +228,7 @@ public class SwapView extends BaseView {
 
     /** True only when the current pair token is USDT (the MEXC feed is MINIMA/USDT — nothing else compares). */
     private boolean isUsdtPair() {
-        return !pairPools.isEmpty() && pairLabel != null && pairLabel.equalsIgnoreCase("USDT");
+        return !pairPools.isEmpty() && pairLabel != null && (pairLabel.equalsIgnoreCase("MxUSD") || pairLabel.equalsIgnoreCase("USDT"));
     }
 
     /** Round DOWN to ≤ 6 dp and strip trailing zeros for tidy display (locale-independent). */

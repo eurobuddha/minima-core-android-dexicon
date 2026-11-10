@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.10.0 app/src/test/java/com/eurobuddha/pandapools/StrandingWatchTest.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.9 app/src/test/java/com/eurobuddha/pandapools/StrandingWatchTest.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.junit.Test;

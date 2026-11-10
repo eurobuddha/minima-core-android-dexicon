@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.10.0 app/src/main/java/com/eurobuddha/pandapools/Util.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.9 app/src/main/java/com/eurobuddha/pandapools/Util.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONObject;
@@ -19,8 +19,13 @@ public final class Util {
     private Util() {}
 
     /** The cached display name for a tokenid, or null if we've never resolved one. Minima → "Minima". */
+    /** The Minima dollar token. Its on-chain name is "USDT"; it is ALWAYS shown as MxUSD (owner rule). */
+    public static final String MXUSD_TOKENID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
+    public static boolean isMxUsd(String tokenid) { return tokenid != null && MXUSD_TOKENID.equalsIgnoreCase(tokenid); }
+
     public static String tokenNameCached(String tokenid) {
         if (isMinima(tokenid)) return "Minima";
+        if (isMxUsd(tokenid)) return "MxUSD";
         return tokenid == null ? null : TOKEN_NAMES.get(tokenid);
     }
 
@@ -45,6 +50,7 @@ public final class Util {
      */
     public static String tokenName(Object token, String tokenid) {
         if (isMinima(tokenid)) return "Minima";
+        if (isMxUsd(tokenid)) return "MxUSD";
         String n = resolveTokenName(token);
         // cache any REAL name we resolve so the history renderer can name this token later
         if (n != null && !n.isEmpty() && !n.equals("Token") && tokenid != null) TOKEN_NAMES.put(tokenid, n);

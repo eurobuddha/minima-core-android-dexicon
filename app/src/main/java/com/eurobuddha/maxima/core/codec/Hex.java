@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.10.0 app/src/main/java/com/eurobuddha/maxima/core/codec/Hex.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.9 app/src/main/java/com/eurobuddha/maxima/core/codec/Hex.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.maxima.core.codec;
 
 /**
