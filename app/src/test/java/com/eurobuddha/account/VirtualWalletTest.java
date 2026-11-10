@@ -401,18 +401,25 @@ public class VirtualWalletTest {
         final java.util.Set<String> spentSince = new java.util.HashSet<>();
         boolean synced = true;
         @Override public JSONObject call(String cmd) throws Exception {
-            if (cmd.equals("scripts")) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONArray()
-                    .put(new JSONObject().put("address", "0xB0").put("simple", true))
-                    .put(new JSONObject().put("address", "0xA0").put("simple", true))); }
-            if (cmd.startsWith("coins relevant:true coinid:0x11")) { calls.add(cmd);
-                return new JSONObject().put("status", true).put("response", new JSONArray().put(new JSONObject().put("coinid", "0x11"))); }
+            if (cmd.equals("status")) { calls.add(cmd); return new JSONObject().put("status", true).put("response",
+                    new JSONObject().put("data", "/data/user/0/com.eurobuddha.minimablock/files/minima")); }
+            if (cmd.startsWith("coins relevant:true coinid:")) { calls.add(cmd);
+                String id = cmd.substring("coins relevant:true coinid:".length()).trim();
+                JSONArray rows = new JSONArray();
+                if (id.equals("0x11") || (imported.contains(id) && !importHides)) rows.put(new JSONObject().put("coinid", id));
+                return new JSONObject().put("status", true).put("response", rows); }
             if (cmd.startsWith("coincheck data:")) { calls.add(cmd);
                 String id = org.minima.objects.CoinProof.convertMiniDataVersion(new org.minima.objects.base.MiniData(cmd.substring(15)))
                         .getCoin().getCoinID().to0xString();
                 return new JSONObject().put("status", true).put("response", new JSONObject().put("valid", synced && !spentSince.contains(id))); }
-            if (cmd.startsWith("coinimport")) { calls.add(cmd); return new JSONObject().put("status", true); }
+            if (cmd.startsWith("coinimport")) { calls.add(cmd);
+                imported.add(org.minima.objects.CoinProof.convertMiniDataVersion(new org.minima.objects.base.MiniData(cmd.substring(cmd.indexOf("data:") + 5)))
+                        .getCoin().getCoinID().to0xString());
+                return new JSONObject().put("status", true); }
             return super.call(cmd);
         }
+        final java.util.Set<String> imported = new java.util.HashSet<>();
+        boolean importHides;
         long imports() { return calls.stream().filter(c -> c.startsWith("coinimport track:true data:")).count(); }
     }
 
@@ -430,7 +437,7 @@ public class VirtualWalletTest {
         VirtualWallet w = new VirtualWallet(n, k, st, Collections.emptySet());
         String a = k.address(0);
         String id = w.archiveWanted();
-        assertEquals("node id = its lowest own simple address", VirtualWallet.norm("0xA0"), id);
+        assertEquals("node id = its data folder", "/data/user/0/com.eurobuddha.minimablock/files/minima", id);
         n.spentSince.add("0x22");
         assertTrue(w.importArchived(java.util.Arrays.asList(
                 archived("0x11", a, 100 - 256),        // already tracked: skipped
@@ -444,6 +451,22 @@ public class VirtualWalletTest {
         assertNull("covered", w.archiveWanted());
         st.n = 2;
         assertEquals("a new address after the pass re-opens it", id, w.archiveWanted());
+    }
+
+    @Test(expected = IllegalStateException.class) public void nodeWithoutIdentityIsAnErrorNotASilentSkip() throws Exception {
+        VirtualWallet w = new VirtualWallet(new FakeNode(), AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null),
+                new ArchiveStore(), Collections.emptySet());
+        w.archiveWanted();
+    }
+
+    /** 10 Nov on BlackBear: an import that reports success but leaves the coin invisible must not mark the node done. */
+    @Test public void importThatStaysInvisibleIsNotClean() throws Exception {
+        ArchiveNode n = new ArchiveNode(); n.importHides = true;
+        AccountKeys k = AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null);
+        VirtualWallet w = new VirtualWallet(n, k, new ArchiveStore(), Collections.emptySet());
+        List<String> lines = new ArrayList<>();
+        assertFalse(w.importArchived(Collections.singletonList(archived("0x44", k.address(0), 100 - 256)), lines::add));
+        assertEquals(Collections.singletonList("0x44 imported but not visible as relevant"), lines);
     }
 
     @Test public void unverifiableProofLeavesThePassIncomplete() throws Exception {

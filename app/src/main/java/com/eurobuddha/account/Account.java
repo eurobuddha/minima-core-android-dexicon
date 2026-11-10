@@ -324,7 +324,7 @@ public final class Account {
             boolean ok = clean;
             try {
                 int to = Math.min(proofs.size(), from + VirtualWallet.ARCHIVE_BATCH);
-                ok &= wallet.importArchived(proofs.subList(from, to));
+                ok &= wallet.importArchived(proofs.subList(from, to), line -> android.util.Log.i(config.appName, "archive: " + line));
                 if (to < proofs.size()) { importBatch(nodeId, keyCount, proofs, to, ok); return; }
                 if (ok) wallet.markArchived(nodeId, keyCount);
                 android.util.Log.i(config.appName, "archive pass over " + proofs.size() + " coin(s) " + (ok ? "complete" : "incomplete, retried later"));

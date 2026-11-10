@@ -25,6 +25,8 @@ import java.util.*;
 public final class ArchiveProofs {
     public static final String HOST = "eurobuddha.com";
     public static final int PORT = 9001;
+    // ponytail: the 512 cap counts coins that only NAME our addresses too (HTLC locks); a very active AtomiX trader
+    // could pass it and the whole reply is refused — query per address if that is ever seen.
     static final int MAX_FRAME = 16 * 1024 * 1024, MAX_PROOFS = 512;
 
     private ArchiveProofs() {}
@@ -74,10 +76,12 @@ public final class ArchiveProofs {
             Set<String> ids = new HashSet<>();
             for (int i = 0; i < total; i++) {
                 CoinProof proof = CoinProof.ReadFromStream(in);
+                // The server also returns coins that only NAME an address in their state (megammrsync.searchMegaCoins),
+                // e.g. HTLC locks with the account as owner or counterparty: they sit at another address — skipped, as
+                // are spent and repeated rows (10 Nov: a lock naming address 1 made the whole reply throw).
                 if (!wanted.contains(proof.getCoin().getAddress().to0xString().toLowerCase(Locale.ROOT))
                         || proof.getCoin().getSpent()
-                        || !ids.add(proof.getCoin().getCoinID().to0xString().toLowerCase(Locale.ROOT)))
-                    throw new IOException("ARCHIVE_PROOF_IDENTITY: unexpected, spent or duplicate coin.");
+                        || !ids.add(proof.getCoin().getCoinID().to0xString().toLowerCase(Locale.ROOT))) continue;
                 if (MiniData.getMiniDataVersion(proof).getLength() > 15999)
                     throw new IOException("ARCHIVE_PROOF_LIMIT: coin proof is too large.");
                 proofs.add(proof);

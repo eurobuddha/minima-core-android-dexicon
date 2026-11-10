@@ -195,17 +195,19 @@ public final class VirtualWallet {
     }
 
     /**
-     * The node's identity for the archive pass: its lowest own simple address (stable per node seed). Null = the archive
-     * pass already covered every account address on this node, or no identity. A coin the node saw arrive is tracked;
-     * only coins OLDER than its tracking (it took the account over from another node, or after a restore) are missing.
-     * Re-run when the key count grows past what the last clean pass covered (newaddress after a restore).
-     * ponytail: a resync of the SAME node keeps its id, and an archive that withholds coins is believed; add a manual
-     * "search the archive again" if either is ever seen.
+     * The node's identity for the archive pass: its data folder ({@code status} → {@code data}), which differs per node
+     * app (Minima Core, BlackBear …). Not {@code scripts}: that reply grows with every tracked script and came back
+     * without a usable row on BlackBear (10 Nov, the pass silently never ran). Null = the archive pass already covered
+     * every account address on this node. A coin the node saw arrive is tracked; only coins OLDER than its tracking (it
+     * took the account over from another node, or after a restore) are missing. Re-run when the key count grows.
+     * ponytail: a resync or reseed of the SAME node keeps its folder, and an archive that withholds coins is believed;
+     * add a manual "search the archive again" if either is ever seen.
      */
     public synchronized String archiveWanted() throws Exception {
-        Set<String> own = nodeSimpleAddresses();
-        if (own.isEmpty()) return null;
-        String id = java.util.Collections.min(own);
+        JSONObject st = node.call("status");
+        JSONObject r = st.optBoolean("status") ? st.optJSONObject("response") : null;
+        String id = r == null ? "" : r.optString("data", "").trim();
+        if (id.isEmpty()) throw new IllegalStateException("the node's status gave no data folder: " + err(st));
         return store.archivedKeys(id) >= store.keyCount() ? null : id;
     }
 
@@ -220,22 +222,40 @@ public final class VirtualWallet {
      * 256 blocks below its tip (coinexport), so that is what keeps a spent coin out, not the proof's age. A spend still
      * only in a mempool is not seen; the tracked spend clears it when mined. True when every proof was handled.
      */
-    public synchronized boolean importArchived(List<CoinProof> archive) throws Exception {
+    public synchronized boolean importArchived(List<CoinProof> archive) throws Exception { return importArchived(archive, null); }
+
+    /** As above; {@code log} (may be null) gets one line per coin: its id and what happened to it. */
+    public synchronized boolean importArchived(List<CoinProof> archive, java.util.function.Consumer<String> log) throws Exception {
         boolean clean = true;
         for (CoinProof cp : archive) {
             String id = cp.getCoin().getCoinID().to0xString();
             if (indexOfAddress(cp.getCoin().getAddress().to0xString()) < 0) continue;
-            JSONObject mine = node.call("coins relevant:true coinid:" + id);
-            JSONArray held = mine.optBoolean("status") ? mine.optJSONArray("response") : null;
-            if (held == null) { clean = false; continue; }
-            if (held.length() > 0) continue;                                       // already tracked
-            String data = MiniData.getMiniDataVersion(cp).to0xString();
-            JSONObject chk = node.call("coincheck data:" + data);
-            JSONObject r = chk.optJSONObject("response");
-            if (!chk.optBoolean("status") || r == null || !r.optBoolean("valid")) { clean = false; continue; }   // spent, or not synced yet
-            if (!node.call("coinimport track:true data:" + data).optBoolean("status")) clean = false;
+            String outcome;
+            Boolean held = relevantNow(id);
+            if (held == null) { clean = false; outcome = "lookup failed"; }
+            else if (held) outcome = "already held";
+            else {
+                String data = MiniData.getMiniDataVersion(cp).to0xString();
+                JSONObject chk = node.call("coincheck data:" + data);
+                JSONObject r = chk.optJSONObject("response");
+                if (!chk.optBoolean("status") || r == null || !r.optBoolean("valid")) { clean = false; outcome = "refused by coincheck: " + err(chk); }   // spent, or not synced yet
+                else {
+                    JSONObject im = node.call("coinimport track:true data:" + data);
+                    if (!im.optBoolean("status")) { clean = false; outcome = "coinimport failed: " + err(im); }
+                    else if (!Boolean.TRUE.equals(relevantNow(id))) { clean = false; outcome = "imported but not visible as relevant"; }
+                    else outcome = "imported";
+                }
+            }
+            if (log != null) log.accept(id + " " + outcome);
         }
         return clean;
+    }
+
+    /** Is the coin one this node tracks as unspent? null = the lookup failed. */
+    private Boolean relevantNow(String coinid) throws Exception {
+        JSONObject mine = node.call("coins relevant:true coinid:" + coinid);
+        JSONArray held = mine.optBoolean("status") ? mine.optJSONArray("response") : null;
+        return held == null ? null : held.length() > 0;
     }
     /** Proofs handed to {@link #importArchived} per worker task (each costs three node calls). */
     public static final int ARCHIVE_BATCH = 16;
