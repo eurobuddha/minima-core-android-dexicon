@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.10.9 app/src/main/java/com/eurobuddha/pandapools/MyLpView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.12 app/src/main/java/com/eurobuddha/pandapools/MyLpView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.app.AlertDialog;
@@ -35,7 +35,7 @@ public class MyLpView extends BaseView {
 
     private static final MathContext MC = new MathContext(30, RoundingMode.DOWN);
     private static final BigDecimal TWO = new BigDecimal("2");
-    /** mxUSDT — the one pair with a live MEXC market feed, so its create price is forced to the market. */
+    /** MxUSD — the one pair with a live MEXC market feed, so its create price is forced to the market. */
     private static final String USDT_TOKENID = "0x7D39745FBD29049BE29850B55A18BF550E4D442F930F86266E34193D89042A90";
 
     private final PoolManager mgr;
@@ -722,7 +722,7 @@ public class MyLpView extends BaseView {
 
     // ---- create pool ----
 
-    /** Tokens with a live external market feed (currently only mxUSDT). Only these can be pooled, so a pool
+    /** Tokens with a live external market feed (currently only MxUSD). Only these can be pooled, so a pool
      *  can never be opened at a mispriceable ratio while any reference price exists. */
     private static boolean isMarketFed(String tokenid) {
         return tokenid != null && tokenid.equalsIgnoreCase(USDT_TOKENID);
@@ -883,13 +883,13 @@ public class MyLpView extends BaseView {
                     BigDecimal sendable = Util.decOr(t.optString("sendable", "0"), BigDecimal.ZERO);
                     if (Util.isMinima(tid)) { minimaAvail[0] = sendable; continue; }   // MINIMA is the other leg
                     if (tid.isEmpty() || sendable.signum() <= 0) continue;
-                    if (!isMarketFed(tid)) continue;   // ONLY market-fed pairs (mxUSDT) — no mispriceable pools
+                    if (!isMarketFed(tid)) continue;   // ONLY market-fed pairs (MxUSD) — no mispriceable pools
                     String name = Util.tokenName(t.opt("token"), tid);
                     int dec = Util.tokenDecimals(t.opt("token"));
                     toks.add(new String[]{tid, name + "  ·  " + trim(sendable) + " avail", String.valueOf(dec),
                             name, sendable.toPlainString()});
                 }
-                if (toks.isEmpty()) { info("Get mxUSDT first", "PandaPools creates MINIMA / USDT pools — the pair with a live market price, so a pool always opens at the true rate. Your wallet holds no mxUSDT; receive some first, then create a pool."); return; }
+                if (toks.isEmpty()) { info("Get MxUSD first", "PandaPools creates MINIMA / MxUSD pools — the pair with a live market price, so a pool always opens at the true rate. Your wallet holds no MxUSD; receive some first, then create a pool."); return; }
                 String[] labels = new String[toks.size()];
                 for (int i = 0; i < toks.size(); i++) labels[i] = toks.get(i)[1];
                 final BigDecimal mAvail = minimaAvail[0];
@@ -941,13 +941,13 @@ public class MyLpView extends BaseView {
             sb.append("You have: ").append(trim(minimaAvail)).append(" MINIMA · ").append(trim(tokAvail)).append(" ").append(tokenName).append("\n");
             BigDecimal u = parse(usdtAmt.getText().toString());
             if (u == null || u.signum() <= 0) {
-                sb.append("Enter the USDT amount to provide (max ≈ ").append(trim(usdtCap)).append(").");
+                sb.append("Enter the MxUSD amount to provide (max ≈ ").append(trim(usdtCap)).append(").");
             } else {
                 BigDecimal minima = u.divide(p, 6, RoundingMode.UP);
                 sb.append("MINIMA required:  ").append(trim(minima)).append("\n");
                 sb.append("Total pool value:  ≈ US$ ").append(trim2(u.multiply(TWO)));
                 if (minima.compareTo(minimaAvail) > 0)
-                    sb.append("\n⚠ Not enough MINIMA — reduce USDT to ≤ ").append(trim(usdtCap)).append(".");
+                    sb.append("\n⚠ Not enough MINIMA — reduce MxUSD to ≤ ").append(trim(usdtCap)).append(".");
                 if (u.compareTo(tokAvail) > 0)
                     sb.append("\n⚠ You only have ").append(trim(tokAvail)).append(" ").append(tokenName).append(".");
             }
@@ -981,7 +981,7 @@ public class MyLpView extends BaseView {
                 BigDecimal p = price[0];
                 if (p == null || p.signum() <= 0) { toast("No price yet — tap ↻ and retry."); return; }
                 BigDecimal u = parse(usdtAmt.getText().toString());
-                if (u == null || u.signum() <= 0) { toast("Enter the USDT amount."); return; }
+                if (u == null || u.signum() <= 0) { toast("Enter the MxUSD amount."); return; }
                 BigDecimal minima = u.divide(p, 6, RoundingMode.UP);
                 if (minima.compareTo(minimaAvail) > 0 || u.compareTo(tokAvail) > 0) { toast("Not enough balance for that amount."); return; }
                 dlg.dismiss();

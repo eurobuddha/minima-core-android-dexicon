@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.10.9 app/src/main/java/com/eurobuddha/pandapools/PoolCalcDialog.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.12 app/src/main/java/com/eurobuddha/pandapools/PoolCalcDialog.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.app.AlertDialog;
@@ -37,7 +37,7 @@ public final class PoolCalcDialog {
     private TextView derived, outMinima, outToken, outRatio, outValue, outHold, outMove, outFees, outK, outBreakEven, note;
     private CurveView curve;
     private boolean syncing = false;   // guards the price-field ↔ slider echo loop
-    private String tok = "mxUSDT";
+    private String tok = "MxUSD";
 
     private PoolCalcDialog(Context c) { ctx = c; }
 

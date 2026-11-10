@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.10.9 app/src/main/java/com/eurobuddha/pandapools/ActivityView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.12 app/src/main/java/com/eurobuddha/pandapools/ActivityView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.ClipData;
@@ -285,7 +285,7 @@ public class ActivityView extends BaseView {
         top.addView(statusChip(e.statusText(cb), e.failed ? Design.red() : e.confirmed(cb) ? Design.success() : Design.amber()));
         card.addView(top);
 
-        card.addView(line(e.summary, Design.text(), 13f, false));
+        card.addView(line(e.display(), Design.text(), 13f, false));
         String meta = (history != null && history.timemilli > 0 ? "Transaction " : "Submitted ") + absolute(eventTime);
         if (e.failed && e.failMsg != null && !e.failMsg.isEmpty()) meta += " · " + e.failMsg;
         else if (e.txpowid != null && !e.txpowid.isEmpty()) meta = e.txpowid + "  ·  " + meta;
@@ -332,7 +332,7 @@ public class ActivityView extends BaseView {
         TextView line1 = new TextView(act);
         line1.setText(swapLegs != null ? swapLegs
                 : reshuffle ? n.grossDisplay()
-                : (sign + Util.tidyAmount(n.amount) + "  " + n.tokenName));
+                : (sign + Util.tidyAmount(n.amount) + "  " + n.tokenLabel()));
         line1.setTextColor(color); line1.setTextSize(15f); line1.setTypeface(Design.typefaceBold());
         TextView line2 = new TextView(act);
         String cp = (n.counterparty == null || n.counterparty.isEmpty()) ? "" : n.counterparty + "  ·  ";
@@ -413,7 +413,7 @@ public class ActivityView extends BaseView {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(12), dp(20), dp(12));
         kv(box, "Direction", n.direction);
-        kv(box, "Amount", (n.incoming ? "+" : "sent".equals(n.direction) ? "−" : "") + Util.tidyAmount(n.amount) + " " + n.tokenName);
+        kv(box, "Amount", (n.incoming ? "+" : "sent".equals(n.direction) ? "−" : "") + Util.tidyAmount(n.amount) + " " + n.tokenLabel());
         kv(box, "Block", String.valueOf(n.block));
         kv(box, "Time", new SimpleDateFormat("dd MMM yyyy  HH:mm:ss", Locale.ENGLISH).format(new Date(n.timemilli)));
         copyRow(box, "Txpow id", n.txpowid);

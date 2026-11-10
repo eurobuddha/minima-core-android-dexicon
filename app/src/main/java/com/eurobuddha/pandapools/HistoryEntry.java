@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.10.9 app/src/main/java/com/eurobuddha/pandapools/HistoryEntry.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.12 app/src/main/java/com/eurobuddha/pandapools/HistoryEntry.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONArray;
@@ -225,8 +225,12 @@ public class HistoryEntry {
         } catch (Exception e) { return null; }
     }
 
+    /** The primary token's display name (MxUSD by its token id, never the stored on-chain "USDT"). */
+    public String tokenLabel() { return tokenid == null ? tokenName : legName(tokenid); }
+
     private String legName(String tid) {
         if (Util.isMinima(tid)) return "Minima";
+        if (Util.isMxUsd(tid)) return "MxUSD";   // its on-chain name says "USDT"; rows stored that name
         if (tid.equals(tokenid) && tokenName != null && !tokenName.isEmpty() && !tokenName.equals("Token")) return tokenName;
         // secondary leg (e.g. USDT on a MINIMA→USDT swap): use the name learned from coin/pool scans
         String cached = Util.tokenNameCached(tid);
@@ -248,8 +252,8 @@ public class HistoryEntry {
             String domTid = "0x00"; BigDecimal domSum = BigDecimal.ZERO;
             for (java.util.Map.Entry<String, BigDecimal> en : sums.entrySet())
                 if (en.getValue().compareTo(domSum) > 0) { domSum = en.getValue(); domTid = en.getKey(); }
-            String name = Util.isMinima(domTid) ? "Minima" : domTid.equals(tokenid) ? tokenName : domTid;
+            String name = legName(domTid);
             return Util.tidyAmount(domSum.stripTrailingZeros().toPlainString()) + "  " + name;
-        } catch (Exception e) { return Util.tidyAmount(amount) + "  " + tokenName; }
+        } catch (Exception e) { return Util.tidyAmount(amount) + "  " + (tokenid == null ? tokenName : legName(tokenid)); }
     }
 }
