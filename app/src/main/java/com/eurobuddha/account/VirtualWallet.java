@@ -422,8 +422,6 @@ public final class VirtualWallet {
     public synchronized void noticeLocksToUs(JSONObject reply) {
         JSONArray rows = reply == null ? null : reply.optJSONArray("response");
         if (rows == null) return;
-        long tip;
-        try { tip = Long.parseLong(blockInfo().optString("block", "0")); } catch (Exception later) { return; }   // next scan
         for (int k = 0; k < rows.length(); k++) {
             JSONObject row = rows.optJSONObject(k);
             if (row == null) continue;
@@ -437,11 +435,11 @@ public final class VirtualWallet {
                 ours = indexOfKey(d) >= 0 || indexOfAddress(d) >= 0;
             }
             if (!ours || row.optBoolean("spent", false)) continue;   // a spent lock imported is a phantom balance on the node
-            // Track only a lock old enough to need it (its proof must outlive the node's ~2048-block tree). A lock imported
-            // and then spent stays in the node's balance as unspent FOREVER — the spend of a coin the node does not
-            // otherwise watch is never marked (proven on the 4446 dev node, 10 Nov; cointrack cannot remove it). A swap
-            // that settles within a day is therefore never tracked; an older one is re-checked on every scan until then.
-            if (tip - row.optLong("created", tip) < TRACK_AFTER_BLOCKS) continue;
+            // Tracked at first sight, so a late claim can still prove it after the node's ~1024-block tree (14 h) prunes
+            // it — no scan ever sees a lock older than that, so tracking cannot wait (review of 0.3.27). Known cost: once
+            // spent, a lock imported this way stays in the NODE's balance as unspent (the spend of a coin the node does not
+            // otherwise watch is never marked; cointrack cannot remove it; a resync clears it) — display only, never the
+            // account's funds. The real fix needs the lock to carry the receiver's tracked address (protocol change).
             try {
                 if (!unspentNow(row.optString("coinid"))) continue;
                 JSONObject ex = node.call("coinexport coinid:" + row.optString("coinid"));
@@ -718,10 +716,8 @@ public final class VirtualWallet {
         return rowJson("txninput", r);
     }
 
-    /** Locks addressed to us are tracked only from this age (blocks) on: well inside the node's ~2048-block tree, so the
-     *  proof can still be refreshed, and long after a normal swap has settled (see noticeLocksToUs). Building a spend
-     *  never tracks the coin it spends — that is exactly the import that becomes a phantom once the spend lands. */
-    static final long TRACK_AFTER_BLOCKS = 1200;
+    /** Building a spend (txninput) never tracks the coin it spends: that import is exactly the one that becomes a phantom
+     *  once the spend lands, and the coin is already tracked from first sight if it is a lock to us (noticeLocksToUs). */
 
     /** True only when the node's chain lists {@code coinid} and it is unspent right now. */
     private boolean unspentNow(String coinid) throws Exception {
