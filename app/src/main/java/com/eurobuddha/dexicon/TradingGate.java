@@ -26,7 +26,12 @@ import java.util.Locale;
 public final class TradingGate {
     private TradingGate() {}
 
-    public static final String ATOMIX = "com.eurobuddha.atomix", PANDAPOOLS = "com.eurobuddha.pandapools";
+    /** A test build (applicationId ending ".stock", built with -PstockTest) gates on the test builds of AtomiX and
+     *  PandaPools, so a device test of the exclusivity sees the same behaviour as the released apps. Their hand-over
+     *  only answers the released Dexicon, so between test builds the way out is removing the app (fails closed).
+     *  Account setup is refused across every combination by com.eurobuddha.account.Family. */
+    private static final String SUFFIX = BuildConfig.APPLICATION_ID.endsWith(".stock") ? ".stock" : "";
+    public static final String ATOMIX = "com.eurobuddha.atomix" + SUFFIX, PANDAPOOLS = "com.eurobuddha.pandapools" + SUFFIX;
     public static final String ACTION_HANDOVER = "com.eurobuddha.dexicon.action.HANDOVER";
     /** The MiniDapp names (dapp.conf "name") that count as the same apps. */
     static final String[] MINIDAPPS = {"AtomiX", "PandaPools"};
