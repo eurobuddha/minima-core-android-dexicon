@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.94 app/src/main/java/com/eurobuddha/maxima/core/codec/MiniByte.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.97 app/src/main/java/com/eurobuddha/maxima/core/codec/MiniByte.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.maxima.core.codec;
 
 import java.io.DataInputStream;

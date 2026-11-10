@@ -49,8 +49,13 @@ public final class LegacyPositions {
             if (live > 0) b.append(b.length() > 0 ? ", " : "").append(live).append(live == 1 ? " live order" : " live orders");
         } catch (RuntimeException unreadable) { b.append(b.length() > 0 ? ", " : "").append("orders unreadable"); }
         try {
-            int pools = com.eurobuddha.pandapools.OwnPoolStore.active(c).size();
-            if (pools > 0) b.append(b.length() > 0 ? ", " : "").append(pools).append(pools == 1 ? " pool you own" : " pools you own");
+            // every node-key recipe not proven empty: live pools AND closed ones whose close may never have landed
+            // (a retired recipe is released only once ClosedPoolCheck reads it empty on the node and the MegaMMR)
+            int live = 0, closed = 0;
+            for (com.eurobuddha.pandapools.Pool p : com.eurobuddha.pandapools.OwnPoolStore.undrained(com.eurobuddha.pandapools.OwnPoolStore.all(c)))
+                if (p.retired) closed++; else live++;
+            if (live > 0) b.append(b.length() > 0 ? ", " : "").append(live).append(live == 1 ? " pool you own" : " pools you own");
+            if (closed > 0) b.append(b.length() > 0 ? ", " : "").append(closed).append(closed == 1 ? " closed pool not yet proven empty" : " closed pools not yet proven empty");
         } catch (RuntimeException unreadable) { b.append(b.length() > 0 ? ", " : "").append("pools unreadable"); }
         try {
             String work = com.eurobuddha.pandapools.DexiconPools.poolWorkOpen(c);   // a close posted but not yet confirmed, …

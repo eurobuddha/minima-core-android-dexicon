@@ -132,17 +132,43 @@ public final class VirtualWallet {
     /** Register every account script with the node (trackall:true) unless already tracked. Re-run periodically: any
      *  companion can downgrade a script row with its own newscript (newscript REPLACES the row). */
     public synchronized void ensureTracked() throws Exception {
-        for (int i = 0; i < store.keyCount(); i++) track(i);
+        for (int i = 0; i < store.keyCount(); i++) if (track(i)) recoverExisting(keys.address(i));
     }
 
-    private void track(int i) throws Exception {
+    /** True when the node was NOT tracking this address yet (it was just registered). */
+    private boolean track(int i) throws Exception {
         String addr = keys.address(i);
         scripts.put(norm(addr), keys.script(i));
         JSONObject s = node.call("scripts address:" + addr);
         JSONObject r = s.optJSONObject("response");
-        if (s.optBoolean("status") && r != null && addr.equalsIgnoreCase(r.optString("address")) && r.optBoolean("track")) return;
+        if (s.optBoolean("status") && r != null && addr.equalsIgnoreCase(r.optString("address")) && r.optBoolean("track")) return false;
         JSONObject n = node.call("newscript trackall:true script:\"" + keys.script(i) + "\"");
         if (!n.optBoolean("status")) throw new IllegalStateException("could not register account address " + addr + ": " + err(n));
+        return true;
+    }
+
+    /**
+     * A node that has never tracked this address does not know the coins already sent to it: tracking only follows NEW
+     * coins (10 Nov, on the Fold: the account on BlackBear read 0 while Minima Core showed its funds). Find them in the
+     * node's unpruned chain and import each with its proof and tracking — the same coinexport/coinimport the lock scan uses.
+     * Runs once, when the address is first registered on this node. Best effort: a failure leaves it as before.
+     * ponytail: unpruned window only — a coin older than the node's window needs the MegaMMR (as PandaPools' recovery does).
+     */
+    private void recoverExisting(String addr) {
+        try {
+            JSONObject r = node.call("coins address:" + addr);   // no relevant: = the unpruned chain
+            JSONArray rows = r.optBoolean("status") ? r.optJSONArray("response") : null;
+            if (rows == null) return;
+            for (int k = 0; k < rows.length(); k++) {
+                JSONObject row = rows.optJSONObject(k);
+                if (row == null || row.optBoolean("spent", false) || !norm(addr).equals(norm(row.optString("address")))) continue;
+                try {
+                    JSONObject ex = node.call("coinexport coinid:" + row.optString("coinid"));
+                    JSONObject resp = ex.optJSONObject("response");
+                    if (ex.optBoolean("status") && resp != null) node.call("coinimport track:true data:" + resp.getString("data"));
+                } catch (Exception oneCoin) { /* the rest still imports */ }
+            }
+        } catch (Exception later) { /* best effort */ }
     }
 
     public List<String> accountAddresses() {

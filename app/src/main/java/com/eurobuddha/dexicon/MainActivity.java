@@ -87,9 +87,16 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             R.drawable.ic_tab_otc, R.drawable.ic_tab_swap, R.drawable.ic_tab_mypools, R.drawable.ic_tab_wallet, R.drawable.ic_tab_activity};
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final ExecutorService net = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-ui-net"); t.setDaemon(true); return t; });
+    // A late node reply (the account outlives this screen) may arrive after onDestroy shut these down: drop it, never crash
+    // (10 Nov: RejectedExecutionException from an identity reply right after the node app came to the front).
+    private final ExecutorService net = screenExecutor("dexicon-ui-net");
     /** PandaDEX TradeView quoteExec: composite routing is CPU work, never on the UI thread. */
-    private final ExecutorService quoteExec = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-quote"); t.setDaemon(true); return t; });
+    private final ExecutorService quoteExec = screenExecutor("dexicon-quote");
+    private static ExecutorService screenExecutor(String name) {
+        return new java.util.concurrent.ThreadPoolExecutor(1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                new java.util.concurrent.LinkedBlockingQueue<>(), r -> { Thread t = new Thread(r, name); t.setDaemon(true); return t; },
+                new java.util.concurrent.ThreadPoolExecutor.DiscardPolicy());
+    }
 
     // RESTING layer (vendored PandaDEX 0.4.23): V5 covenant book + PandaPools, taken through DexTxn.fillComposite.
     private BookRepository restingRepo;
@@ -287,6 +294,11 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);
         if (legacy == null) { com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, false, null); return; }
         offering = false;
+        // closed node-key pools may be all that is left: prove them empty, then look again
+        com.eurobuddha.pandapools.DexiconPools.proveClosedPools(this, node(), () -> {
+            com.eurobuddha.dexicon.account.LegacyPositions.invalidate();
+            if (!isFinishing() && !isDestroyed() && com.eurobuddha.dexicon.account.LegacyPositions.describe(this) == null) offerAccount();
+        });
         if (legacyNoticeShown) return;
         legacyNoticeShown = true;
         track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Finish these first")

@@ -237,6 +237,11 @@ public class NodeApi {
     /** Straight to the node (no Trading Account interception): the vendored Wallet's withdraw reads the NODE's own
      *  getaddress through this (PandaPools' NodeApi has the same method). */
     public void cmdDirect(String command, java.util.function.BooleanSupplier guard, long timeoutMs, com.eurobuddha.account.Transport.Reply reply) {
+        // reads only: a wallet verb sent this way would be signed with the NODE's keys, past the account and the journal
+        if (command == null || !command.trim().matches("getaddress")) {
+            if (reply != null) reply.onError("cmdDirect is for the node's own getaddress only");
+            return;
+        }
         node.cmdDirect(command, guard, timeoutMs, reply);
     }
 

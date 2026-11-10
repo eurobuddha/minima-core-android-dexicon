@@ -27,7 +27,7 @@ SRC=$ROOT/main/java
 DST=app/src/main/java
 P=com/eurobuddha/pandapools
 FILES=""
-for c in ActivityLog ActivityTimeline ActivityView ArchiveNode BackupCheck BackupState BackupVault BaseView BlockOwnerRecovery Cmd \
+for c in ActivityLog ActivityTimeline ActivityView ArchiveNode BackupCheck BackupState BackupVault BaseView BlockOwnerRecovery ClosedPoolCheck Cmd \
   CmdChain Coin CoinLock CollectConfirmation CollectionEvidence CollectSweeper ExitAuthority ExitStore ExitTicket \
   ExportWriter FundingCoins GlobalFeed HistoryDb HistoryEntry HistorySync IconResolver ImageLoader KeyUses LpStore MarketPrice \
   MegaArchive MegaArchiveProofs MyLpView NetFetch NodeBackupCapture OwnerKeyRecovery OwnPoolStore PandaAddrBook PendingCollect Pool \

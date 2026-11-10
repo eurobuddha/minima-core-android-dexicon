@@ -602,12 +602,31 @@ public final class DexiconPools {
     /** For tests: make the cached custody read {@code ms} older. */
     public static synchronized void ageCustody(long ms) { Custody k = custody; if (k != null) custody = new Custody(k.installed, k.keptHere, k.at - ms); }
 
+    private static volatile long provedAt;
+
+    /** Closed node-key pools holding the account offer back: prove them empty (PandaPools' ClosedPoolCheck: the node AND
+     *  the unpruned MegaMMR), at most every 10 minutes; {@code done} runs on the main thread when a check finished. Only
+     *  when every undrained recipe is a CLOSED one (a live pool must be closed first). */
+    public static void proveClosedPools(Context c, NodeApi pools, Runnable done) {
+        long now = System.currentTimeMillis();
+        if (pools == null || now - provedAt < 10 * 60_000L) return;
+        List<Pool> closed = new ArrayList<>();
+        for (Pool p : OwnPoolStore.undrained(OwnPoolStore.all(c))) { if (!p.retired) return; closed.add(p); }
+        if (closed.isEmpty()) return;
+        provedAt = now;
+        android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
+        ClosedPoolCheck.run(c, pools, closed, (l, r, d) -> { }, () -> main.post(done));
+    }
+
     /** Pool work still tied to keys that are not yet settled, as PandaPools' hand-over judges it: a close / migrate not
      *  yet confirmed on chain, a payout still to collect, a withdrawal not settled (Dexicon's LegacyPositions). */
     public static String poolWorkOpen(android.content.Context c) {
         StringBuilder b = new StringBuilder();
         if (ActivityLog.hasPending(c, 0, ActivityLog.CLOSE) || ActivityLog.hasPending(c, 0, ActivityLog.MIGRATE)) b.append("a pool close not yet confirmed");
-        if (!PendingCollect.all(c).isEmpty()) b.append(b.length() > 0 ? ", " : "").append("a pool payout to collect");
+        // a STRANDED payout (no wallet here can sign its address) is left out: the node cannot settle it either
+        boolean payouts = false;
+        for (PendingCollect.Entry e : PendingCollect.all(c)) if (e.statusOf() != PendingCollect.Status.STRANDED) payouts = true;
+        if (payouts) b.append(b.length() > 0 ? ", " : "").append("a pool payout to collect");
         for (ExitStore.Record r : ExitStore.all(c)) {   // terminal = DONE / SKIPPED / FAILED as stored (PandaPools Handover.exitSettled)
             boolean settled = ExitStore.State.DONE.name().equals(r.state) || ExitStore.State.SKIPPED.name().equals(r.state)
                     || ExitStore.State.FAILED.name().equals(r.state);
