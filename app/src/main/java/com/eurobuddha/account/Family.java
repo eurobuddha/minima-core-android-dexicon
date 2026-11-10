@@ -28,7 +28,9 @@ public final class Family {
         PackageManager pm = c.getPackageManager();
         for (String[] a : APPS) {
             if (a[0].equals(me)) continue;
-            try { pm.getPackageInfo(a[0], 0); return a[1]; } catch (PackageManager.NameNotFoundException absent) { }
+            // MATCH_UNINSTALLED_PACKAGES: an app removed with its data KEPT (`uninstall -k`, archiving) still holds its
+            // vault and would hold the account again on reinstall — it counts as installed.
+            try { pm.getPackageInfo(a[0], PackageManager.MATCH_UNINSTALLED_PACKAGES); return a[1]; } catch (PackageManager.NameNotFoundException absent) { }
         }
         return null;
     }

@@ -64,11 +64,16 @@ public final class RelaysTab extends LinearLayout {
      *  handed over by IPC: the user finishes here, checks the words, uninstalls Dexicon, and restores them there. */
     private void moveAway() {
         String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(act);
-        String steps = "1. Finish what is open here: let swaps settle, cancel your orders, close or keep your pools (a pool "
-                + "you keep needs its backup file in PandaPools).\n2. Check you have your 24 words (SHOW 24 WORDS).\n"
-                + "3. Uninstall Dexicon.\n4. In AtomiX or PandaPools, restore the same 24 words: the same account, address "
-                + "and funds.\n\nNever run two of these apps on one account at the same time.";
-        new android.app.AlertDialog.Builder(act).setTitle("Move your Trading Account")
+        boolean nodeMode = com.eurobuddha.account.AccountVault.MODE_NODE.equals(new com.eurobuddha.account.AccountVault(act).mode());
+        String steps = "1. Finish what is open here: let swaps settle, withdraw your AtomiX market and any OTC offer, cancel "
+                + "your orders, and close your pools — or export each pool's backup file first (a pool you keep needs it in "
+                + "PandaPools).\n"
+                + (nodeMode ? "2. This account comes from your node's seed: no words to write down.\n"
+                            : "2. Check you have your 24 words (SHOW 24 WORDS).\n")
+                + "3. Uninstall Dexicon fully.\n4. Only then install AtomiX or PandaPools, and "
+                + (nodeMode ? "choose Use node seed (ADMIN once): " : "restore the same 24 words: ")
+                + "the same account, address and funds.\n\nNever run two of these apps on one account at the same time.";
+        new android.app.AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Move your Trading Account")
                 .setMessage((open == null ? "Nothing is open in Dexicon.\n\n" : "Still open in Dexicon: " + open + ". Finish these first.\n\n") + steps)
                 .setPositiveButton("OK", null).show();
     }

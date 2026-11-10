@@ -256,6 +256,9 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private int lockedTries;
     private final Runnable retryOffer = this::offerAccount;
     private void offerAccount() {
+        // AtomiX / PandaPools on this phone: the hand-over GateView owns that (its guarded Hand over / Remove, the pool
+        // backup move) — never cover it with the account's "one app at a time" dialog. Re-offered when the gate lifts.
+        if (TradingGate.conflict(this)) return;
         if (offering || com.eurobuddha.account.Account.get(this, node) != null) { lockedTries = 0; return; }
         if (com.eurobuddha.account.Account.exists(this)) {   // vault present but the keystore is busy: retry, delete nothing
             ui.removeCallbacks(retryOffer);
@@ -1774,10 +1777,12 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             if (!Boolean.TRUE.equals(gateShown)) { haltTrading(); gate = new GateView(this); setContentView(gate); gateShown = true; }
             gate.render();
         } else if (!Boolean.FALSE.equals(gateShown)) {
+            boolean lifted = Boolean.TRUE.equals(gateShown);
             gate = null; gateShown = false;
             setContentView(chromeRoot);
             startCcyGlow();
             repaint();
+            if (lifted) offerAccount();   // the other app is gone: the Trading Account can be set up now
         }
     }
 

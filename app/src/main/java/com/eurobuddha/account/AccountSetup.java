@@ -90,7 +90,8 @@ public final class AccountSetup {
         dialog(a).setTitle("One Trading Account app at a time").setCancelable(false)
                 .setView(pad(a, text(a, other + " is installed on this phone. Dexicon, AtomiX and PandaPools share ONE Trading "
                         + "Account, and only one of them may hold it.\n\nIn " + other + ": finish or hand over anything open, "
-                        + "then uninstall it. Then come back here and " + (ro ? "restore your account." : "create or restore your account."), false)))
+                        + "then uninstall it fully (an app removed with its data kept still counts). Then come back here and "
+                        + (ro ? "restore your account." : "create or restore your account.") + " One phone, one profile.", false)))
                 .setPositiveButton("Check again", (d, w) -> show(a, node, done, ro, open))
                 .setNegativeButton("Close", (d, w) -> a.finish()).show();
     }
@@ -147,7 +148,8 @@ public final class AccountSetup {
         { Look l = Account.config().look; if (l != null) in.setTextColor(l.text()); } in.setMinLines(3);
         in.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
         LinearLayout box = new LinearLayout(a); box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(text(a, "Restore a Trading Account. Only use it on ONE phone: stop using it everywhere else first.", false));
+        box.addView(text(a, "Restore a Trading Account. Only use it on ONE phone and ONE profile, in ONE app: stop using it "
+                + "everywhere else first.", false));
         box.addView(in);
         AlertDialog d = dialog(a).setTitle("Restore Trading Account").setView(pad(a, box))
                 .setCancelable(false).setPositiveButton("Restore", null).setNegativeButton("Back", (x, w) -> back(a, done)).create();

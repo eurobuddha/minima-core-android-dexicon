@@ -83,7 +83,9 @@ public final class Account {
     private static final String PREFS = "dexicon_account_state";
     private static volatile Account instance;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "trading-account"); t.setDaemon(true); return t; });
-    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static volatile Handler main;
+    /** Created on first use, so loading this class never needs Android's main Looper (JVM unit tests load it). */
+    private static Handler main() { Handler h = main; if (h == null) main = h = new Handler(Looper.getMainLooper()); return h; }
 
     private final VirtualWallet wallet;
     private Context app;
@@ -252,13 +254,13 @@ public final class Account {
             final JSONObject r = reply; final String err = error;
             if (passThrough) {
                 // the wallet already evaluated the guard (exactly once) before passing the command through
-                MAIN.post(() -> node.cmdDirect(command, null, timeoutMs, new Transport.Reply() {
+                main().post(() -> node.cmdDirect(command, null, timeoutMs, new Transport.Reply() {
                     public void onResult(JSONObject j) { noticeLocks(command, j); if (cb != null) cb.onResult(j); }
                     public void onError(String m) { if (cb != null) cb.onError(m); }
                 }));
                 return;
             }
-            MAIN.post(() -> { if (cb == null) return; if (err != null) cb.onError(err); else cb.onResult(r); });
+            main().post(() -> { if (cb == null) return; if (err != null) cb.onError(err); else cb.onResult(r); });
         });
     }
 
@@ -321,7 +323,7 @@ public final class Account {
 
     /** The account's receive address (index 0), full 0x and Mx forms: [0x, Mx]. Computed on the worker. */
     public void receiveAddress(java.util.function.Consumer<String[]> got) {
-        WORKER.execute(() -> { String[] a = {keys.address(0), keys.miniAddress(0)}; MAIN.post(() -> got.accept(a)); });
+        WORKER.execute(() -> { String[] a = {keys.address(0), keys.miniAddress(0)}; main().post(() -> got.accept(a)); });
     }
 
     private void refreshKnown() {
@@ -347,7 +349,7 @@ public final class Account {
         // 0 = waiting, 1 = the main thread took it, 2 = we gave up. A guard with side effects (PandaPools Write.admit)
         // runs only if it claims the slot first, so it can never run AFTER we reported a refusal.
         java.util.concurrent.atomic.AtomicInteger slot = new java.util.concurrent.atomic.AtomicInteger(0);
-        MAIN.post(() -> { try { if (slot.compareAndSet(0, 1)) out.set(guard.getAsBoolean()); } catch (RuntimeException e) { out.set(false); } finally { done.countDown(); } });
+        main().post(() -> { try { if (slot.compareAndSet(0, 1)) out.set(guard.getAsBoolean()); } catch (RuntimeException e) { out.set(false); } finally { done.countDown(); } });
         try {
             if (done.await(30, TimeUnit.SECONDS) || !slot.compareAndSet(0, 2)) { done.await(); return out.get(); }
             return false;
@@ -362,7 +364,7 @@ public final class Account {
         AtomicReference<String> err = new AtomicReference<>();
         java.util.concurrent.atomic.AtomicBoolean abandoned = new java.util.concurrent.atomic.AtomicBoolean(false);
         // a command still queued when we stop waiting is never sent: the caller has already been told it failed
-        MAIN.post(() -> node.cmdDirect(cmd, () -> !abandoned.get(), 0, new Transport.Reply() {
+        main().post(() -> node.cmdDirect(cmd, () -> !abandoned.get(), 0, new Transport.Reply() {
             public void onResult(JSONObject j) { out.set(j); done.countDown(); }
             public void onError(String m) { err.set(m == null ? "node error" : m); done.countDown(); }
         }));
