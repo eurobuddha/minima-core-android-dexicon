@@ -1,4 +1,5 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.90 app/src/main/java/com/eurobuddha/pandapools/CombinedBackupUi.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// DEXICON-OWNED fork of apks/pandapools 0.9.90 CombinedBackupUi.java: the stock Trading Account branch (recipesOnly / accountOwnsAll /
+// saveRecipes). Not re-vendored (scripts/vendor-pandapools.sh lists it as owned); port PandaPools changes here by hand.
 package com.eurobuddha.pandapools;
 
 import android.net.Uri;

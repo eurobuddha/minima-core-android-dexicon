@@ -13,6 +13,8 @@
 #   Design.java  BuildConfig.java  R.java   PandaPools' tokens / build constants / resource ids, mapped onto Dexicon's
 #   DexiconPools.java          the one public door Dexicon's own code (com.eurobuddha.dexicon.*) uses into this engine
 #   tests DexiconPoolsKeepAliveTest / DexiconNodeApiShimTest / OwnerCoinGuardTest  Dexicon's own tests of those shims
+#   CombinedBackupUi.java      forked at 0.9.90 for the stock Trading Account (recipes-only backup when the pool owner keys
+#                              come from the account's 24 words); never re-vendored over. Test AccountRestoreRecoveryTest.
 # --check also FAILS on any other file in that package (main or test) that carries no vendored header.
 # NOT vendored at all: BootReceiver, HeartbeatReceiver, PoolWatchWorker (MakerService already keeps the process alive),
 # MainPager, NodeTransport(+Service), HandoverActivity (PandaPools' own app shell). WalletView + Identicon ARE vendored
@@ -25,7 +27,7 @@ DST=app/src/main/java
 P=com/eurobuddha/pandapools
 FILES=""
 for c in ActivityLog ActivityTimeline ActivityView ArchiveNode BackupCheck BackupState BackupVault BaseView BlockOwnerRecovery Cmd \
-  CmdChain Coin CoinLock CollectConfirmation CollectionEvidence CollectSweeper CombinedBackupUi ExitAuthority ExitStore ExitTicket \
+  CmdChain Coin CoinLock CollectConfirmation CollectionEvidence CollectSweeper ExitAuthority ExitStore ExitTicket \
   ExportWriter FundingCoins GlobalFeed HistoryDb HistoryEntry HistorySync IconResolver ImageLoader KeyUses LpStore MarketPrice \
   MegaArchive MegaArchiveProofs MyLpView NetFetch NodeBackupCapture OwnerKeyRecovery OwnPoolStore PandaAddrBook PendingCollect Pool \
   PoolActivity PoolBackupBundle PoolBook PoolCalc PoolCalcDialog PoolCovenant PoolHistorySync PoolManager PoolRefresher PoolRepository \
@@ -86,7 +88,7 @@ if [ "$MODE" = "--check" ]; then
   [ -z "$pruned" ] || { echo "PRUNED MEGAMMR named in: $pruned"; fail=1; }
   grep -q 'HOST = "eurobuddha.com"' "$DST/$P/MegaArchiveProofs.java" || { echo "MegaMMR host is not eurobuddha.com"; fail=1; }
   # Every other file in the PandaPools package is vendored (header) or one of the Dexicon-owned shims / tests named here.
-  OWNED=" NodeApi MainActivity PoolKeepAliveService Handover Design BuildConfig R DexiconPools DexiconPoolsKeepAliveTest DexiconNodeApiShimTest OwnerCoinGuardTest "
+  OWNED=" NodeApi MainActivity PoolKeepAliveService Handover Design BuildConfig R DexiconPools DexiconPoolsKeepAliveTest DexiconNodeApiShimTest OwnerCoinGuardTest CombinedBackupUi AccountRestoreRecoveryTest "
   for f in "$DST/$P"/*.java app/src/test/java/$P/*.java; do
     [ -f "$f" ] || continue
     head -1 "$f" | grep -q '^// VENDORED VERBATIM from apks/pandapools ' && continue

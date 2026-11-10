@@ -6,7 +6,7 @@ set -e
 cd "$(dirname "$0")/.."
 CORE=../../core/minima-core
 W=$(mktemp -d)
-git -C "$CORE" cat-file -p c2a54a2e46b2c3a4fd541b80e7d7f5e7afe7d4da:jar/minima.jar > "$W/minima-stock.jar"
+if [ -n "$JAR" ]; then cp "$JAR" "$W/minima-stock.jar"; else git -C "$CORE" cat-file -p c2a54a2e46b2c3a4fd541b80e7d7f5e7afe7d4da:jar/minima.jar > "$W/minima-stock.jar"; fi
 echo "stock jar sha256: $(shasum -a 256 "$W/minima-stock.jar" | cut -d' ' -f1)"
 JSON=$(find ~/.gradle/caches -name 'json-20240303.jar' | head -1)
 JH="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
