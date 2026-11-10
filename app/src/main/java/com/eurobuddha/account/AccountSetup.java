@@ -35,6 +35,9 @@ public final class AccountSetup {
     }
 
     public interface Done { void ready(); }
+
+    /** The user chose to move funds out of an old wallet first: no setup offer again until the app restarts. */
+    private static volatile boolean deferred;
     private static Transport lastNode;
 
     private static String app() { return Account.config().appName; }
@@ -62,6 +65,7 @@ public final class AccountSetup {
         final Transport n = node;
         restoreOnly = ro; restoreOpen = open;
         if (ro) { restoreOnlyDialog(a, n, done, open); return; }
+        if (deferred) return;   // "move it first" this session: the app stays usable (its wallet screen) until restarted
         java.util.function.Function<Activity, String> noticeOf = Account.config().setupNotice;
         String notice = noticeOf == null ? null : noticeOf.apply(a);
         boolean tradedBefore = notice != null && !notice.isEmpty();
@@ -80,7 +84,7 @@ public final class AccountSetup {
                     .setMessage("Is there anything in that old wallet you still need to move out first? "
                             + "You can come back to this step any time.")
                     .setPositiveButton("No — continue", null)
-                    .setNegativeButton("Yes — move it first", (d, w) -> { main.dismiss(); a.finish(); }).show();
+                    .setNegativeButton("Yes — move it first", (d, w) -> { main.dismiss(); deferred = true; }).show();
         }
     }
 
