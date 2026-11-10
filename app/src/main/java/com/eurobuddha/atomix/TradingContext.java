@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.14 app/src/main/java/com/eurobuddha/atomix/TradingContext.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.30 app/src/main/java/com/eurobuddha/atomix/TradingContext.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix;
 
 import android.content.SharedPreferences;
@@ -38,7 +38,7 @@ public enum TradingContext {
 
     /** Bridged native-USDT (mxUSDT) ↔ ERC20 USDT (usdtSwap's market). Tether-green identity, parity pricing. */
     MXUSDT(
-            "mxusdt", "mxUSDT",
+            "mxusdt", "MxUSD",   // display label: the Minima token is MxUSD (key stays "mxusdt"; forCoinLabel reads old "mxUSDT" rows)
             MinimaHtlc.USDT_TOKENID,
             /* pricingParity */ true,
             /* orderBook */ "0x5553445453574150",                  // "USDTSWAP"

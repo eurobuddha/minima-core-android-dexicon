@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.14 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.30 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -2364,8 +2364,8 @@ public final class SwapEngine {
                 if (pickIds.isEmpty()) {   // can't cover `need` right now — DON'T hang silently; tell the LP why
                     attempt.release();
                     declineCpNote(hash, freeTotal.compareTo(need) < 0
-                            ? "Can't fill deal — need " + reqMinimaHuman + " mxUSDT, only " + freeTotal.toPlainString() + " free"
-                            : "mxUSDT too fragmented to lock " + reqMinimaHuman + " in one tx — consolidate your coins");
+                            ? "Can't fill deal — need " + reqMinimaHuman + " MxUSD, only " + freeTotal.toPlainString() + " free"
+                            : "MxUSD too fragmented to lock " + reqMinimaHuman + " in one tx — consolidate your coins");
                     return;
                 }
                 final String totalSel = pickSumTmp.toPlainString();

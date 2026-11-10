@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.14 app/src/test/java/com/eurobuddha/atomix/TradingContextTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.30 app/src/test/java/com/eurobuddha/atomix/TradingContextTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix;
 
 import static org.junit.Assert.*;
@@ -47,8 +47,9 @@ public class TradingContextTest {
 
     @Test public void labelForResolvesEachTokenForSettlementNotifications() {
         assertEquals("MINIMA", TradingContext.labelFor("0x00"));
-        assertEquals("mxUSDT", TradingContext.labelFor(MinimaHtlc.USDT_TOKENID));
-        assertEquals("mxUSDT", TradingContext.labelFor(MinimaHtlc.USDT_TOKENID.toLowerCase()));
+        assertEquals("the Minima dollar token is MxUSD", "MxUSD", TradingContext.labelFor(MinimaHtlc.USDT_TOKENID));
+        assertEquals("MxUSD", TradingContext.labelFor(MinimaHtlc.USDT_TOKENID.toLowerCase()));
+        assertEquals("rows stored under the old label still resolve", TradingContext.MXUSDT, TradingContext.forCoinLabel("mxUSDT"));
     }
 
     @Test public void otherFlipsBetweenTheTwo() {

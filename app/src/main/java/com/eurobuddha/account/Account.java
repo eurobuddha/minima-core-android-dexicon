@@ -76,6 +76,11 @@ public final class Account {
         }
         if (!VirtualWallet.handles(verb)) return Route.NODE;
         Account a = get(c, t);
+        // No account here yet: a coins read that names an address or a coin can only be about a contract or someone
+        // else's coin (there are no account addresses) — a plain chain read. Before 0.3.30 it was refused, so AtomiX /
+        // PandaPools opened before account setup showed an empty market (on the Fold, 10 Nov: every pool's reserve read
+        // `coins relevant:true address:<pool>` refused -> "No live pools"). A bare wallet read stays refused.
+        if (a == null && namesCoinOrAddress(command)) return Route.NODE;
         if (chainRead(command) || (a == null && plainRead(command))) return a == null ? Route.NODE : Route.NODE_THEN_NOTICE;
         return a != null ? Route.ACCOUNT : Route.NO_ACCOUNT;
     }
@@ -198,6 +203,15 @@ public final class Account {
 
     /** A plain {@code coins} read (no relevant / sendable): with no account loaded there are no account addresses, so
      *  it can only be a chain read (the book, pools, the HTLC market feed) — the market screens work before setup. */
+    /** A coins read that names an address or a coin id (any relevant:/sendable: flags aside). */
+    static boolean namesCoinOrAddress(String command) {
+        if (!command.trim().toLowerCase(java.util.Locale.ROOT).startsWith("coins")) return false;
+        try {
+            org.minima.utils.json.JSONObject p = org.minima.system.commands.CommandRunner.getRunner().getCommand(command).getParams();
+            return p.containsKey("address") || p.containsKey("coinid");
+        } catch (RuntimeException unparsable) { return false; }
+    }
+
     public static boolean plainRead(String command) {
         if (!command.trim().toLowerCase(java.util.Locale.ROOT).startsWith("coins")) return false;
         try {
