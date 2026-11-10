@@ -259,7 +259,7 @@ public final class AssetsTab extends LinearLayout {
         LinearLayout move = new LinearLayout(getContext());
         TextView dep = Ui.button(act, "DEPOSIT"), wd = Ui.button(act, "WITHDRAW");
         dep.setTextColor(Design.ACCENT()); wd.setTextColor(Design.ACCENT());
-        dep.setOnClickListener(v -> WalletTools.deposit(act, name));
+        dep.setOnClickListener(v -> WalletTools.deposit(act, tokenid, name));
         wd.setOnClickListener(v -> WalletTools.withdraw(act, tokenid, name, sendable));
         LayoutParams l2 = new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f); l2.rightMargin = Design.dp(getContext(), 6);
         move.addView(dep, l2); move.addView(wd, new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));

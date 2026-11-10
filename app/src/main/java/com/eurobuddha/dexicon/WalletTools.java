@@ -55,12 +55,40 @@ final class WalletTools {
     }
 
     /** DEPOSIT: the Trading Account's address, in full, copyable — fund it from any Minima wallet (Minima Core › Send). */
-    static void deposit(MainActivity act, String name) {
+    static void deposit(MainActivity act, String tokenid, String name) {
         String addr = act.receiveAddress();
         if (addr.isEmpty()) { act.toast("Reading your address — try again in a moment"); return; }
+        // Minima Core's wallet total counts the Trading Account's coins too (it watches them for this app), but its Send can
+        // only spend coins at its OWN addresses — and above that it fails with an empty error (10 Nov, on the Fold). Show
+        // what it can really send: the node's own `sendable` for this token, straight from the node.
+        act.nodeApi().cmdDirect("balance tokenid:" + tokenid, null, 0, new NodeApi.Cb() {
+            public void onResult(JSONObject j) { show(nodeSendable(j, tokenid)); }
+            public void onError(String m) { show(null); }
+            private void show(String own) {
+                if (act.isFinishing() || act.isDestroyed()) return;
+                depositDialog(act, name, addr, own);
+            }
+        });
+    }
+
+    /** The node's OWN sendable amount of {@code tokenid} from a `balance` reply (plain digits, as the node wrote it); null if absent. */
+    static String nodeSendable(JSONObject reply, String tokenid) {
+        org.json.JSONArray rows = reply == null ? null : reply.optJSONArray("response");
+        if (rows == null) return null;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONObject r = rows.optJSONObject(i);
+            if (r != null && tokenid.equalsIgnoreCase(r.optString("tokenid"))) { String s = r.optString("sendable", ""); return s.isEmpty() ? null : s; }
+        }
+        return "0";
+    }
+
+    private static void depositDialog(MainActivity act, String name, String addr, String own) {
+        String limit = own == null ? ""
+                : "\n\nYour Minima Core wallet itself can send up to " + own + " " + name + ". Its total also counts this Trading "
+                + "Account's coins (it watches them for Dexicon), but it can only send its own — ask for more and its Send fails.";
         AlertDialog d = new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Deposit " + name)
                 .setMessage("Send " + name + " to your Trading Account from any Minima wallet (Minima Core › Send):\n\n" + addr
-                        + "\n\nIt is available to trade after 3 confirmations.")
+                        + "\n\nIt is available to trade after 3 confirmations." + limit)
                 .setPositiveButton("Copy address", (x, w) -> act.copy("Trading Account address", addr))
                 .setNegativeButton("Close", null).create();
         d.show();
