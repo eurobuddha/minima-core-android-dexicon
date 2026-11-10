@@ -203,12 +203,15 @@ public final class Account {
 
     /** A plain {@code coins} read (no relevant / sendable): with no account loaded there are no account addresses, so
      *  it can only be a chain read (the book, pools, the HTLC market feed) — the market screens work before setup. */
-    /** A coins read that names an address or a coin id (any relevant:/sendable: flags aside). */
+    /** A coins read that names an address or a coin id, or a balance read that names an address (any relevant: /
+     *  sendable: flags aside): with no account these can only be about a contract or someone else's coins. PandaPools
+     *  counts a pool's coins with `balance address:<pool>` before reading them (ReserveRecovery.readCoins). */
     static boolean namesCoinOrAddress(String command) {
-        if (!command.trim().toLowerCase(java.util.Locale.ROOT).startsWith("coins")) return false;
+        String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
+        if (!verb.equals("coins") && !verb.equals("balance")) return false;
         try {
             org.minima.utils.json.JSONObject p = org.minima.system.commands.CommandRunner.getRunner().getCommand(command).getParams();
-            return p.containsKey("address") || p.containsKey("coinid");
+            return p.containsKey("address") || (verb.equals("coins") && p.containsKey("coinid"));
         } catch (RuntimeException unparsable) { return false; }
     }
 
