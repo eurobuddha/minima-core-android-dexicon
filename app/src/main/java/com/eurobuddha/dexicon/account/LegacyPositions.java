@@ -19,7 +19,7 @@ public final class LegacyPositions {
         if (new com.eurobuddha.account.AccountVault(c).everCreated()) return null;   // the account owns everything from here on (never the node)
         long now = System.currentTimeMillis();
         if (now - cachedAt < 30_000L) return cached;
-        String d = scan(c.getApplicationContext());
+        String d = scan(c.getApplicationContext(), true);
         cached = d; cachedAt = now;
         return d;
     }
@@ -27,11 +27,22 @@ public final class LegacyPositions {
     public static boolean exist(Context c) { return describe(c) != null; }
 
     /** Open positions whoever signed them (for a LOST account: only its own words may settle them). */
-    public static String describeAny(Context c) { return scan(c.getApplicationContext()); }
+    public static String describeAny(Context c) { return scan(c.getApplicationContext(), false); }
+
+    /** Pools recorded under a Trading Account while none is loaded here (a device transfer, a lost account): only the
+     *  SAME words may settle them, so setup must be restore-only (never "Create new"). */
+    public static int accountPools(Context c) {
+        int n = 0;
+        try { for (com.eurobuddha.pandapools.Pool p : com.eurobuddha.pandapools.OwnPoolStore.all(c)) if (p.accountOwned && (!p.retired || !p.drained)) n++; }
+        catch (RuntimeException unreadable) { return 0; }
+        return n;
+    }
 
     public static void invalidate() { cachedAt = 0; }
 
-    private static String scan(Context c) {
+    /** {@code nodeKeyOnly}: the node-key gate ("finish before upgrading") skips account-owned recipes; everything else
+     *  (a lost account's restore, "Move your Trading Account") must see every pool not proven empty, whoever owns it. */
+    private static String scan(Context c, boolean nodeKeyOnly) {
         StringBuilder b = new StringBuilder();
         try {
             com.eurobuddha.atomix.swap.SwapDb db = new com.eurobuddha.atomix.swap.SwapDb(c);
@@ -52,8 +63,10 @@ public final class LegacyPositions {
             // every node-key recipe not proven empty: live pools AND closed ones whose close may never have landed
             // (a retired recipe is released only once ClosedPoolCheck reads it empty on the node and the MegaMMR)
             int live = 0, closed = 0;
-            for (com.eurobuddha.pandapools.Pool p : com.eurobuddha.pandapools.OwnPoolStore.undrained(com.eurobuddha.pandapools.OwnPoolStore.all(c)))
-                if (p.retired) closed++; else live++;
+            for (com.eurobuddha.pandapools.Pool p : com.eurobuddha.pandapools.OwnPoolStore.all(c)) {
+                if (nodeKeyOnly && p.accountOwned) continue;
+                if (!p.retired) live++; else if (!p.drained) closed++;
+            }
             if (live > 0) b.append(b.length() > 0 ? ", " : "").append(live).append(live == 1 ? " pool you own" : " pools you own");
             if (closed > 0) b.append(b.length() > 0 ? ", " : "").append(closed).append(closed == 1 ? " closed pool not yet proven empty" : " closed pools not yet proven empty");
         } catch (RuntimeException unreadable) { b.append(b.length() > 0 ? ", " : "").append("pools unreadable"); }

@@ -291,13 +291,25 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
             return;
         }
+        int acctPools = com.eurobuddha.dexicon.account.LegacyPositions.accountPools(this);
+        if (acctPools > 0) {   // pools made under a Trading Account (e.g. carried by a device transfer): only its words settle them
+            com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, true, acctPools + (acctPools == 1 ? " pool" : " pools"));
+            return;
+        }
         String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);
         if (legacy == null) { com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, false, null); return; }
         offering = false;
-        // closed node-key pools may be all that is left: prove them empty, then look again
-        com.eurobuddha.pandapools.DexiconPools.proveClosedPools(this, node(), () -> {
+        // closed node-key pools may be all that is left: prove them empty, then look again — and say why if they are not
+        com.eurobuddha.pandapools.DexiconPools.proveClosedPools(this, node(), failed -> {
+            if (isFinishing() || isDestroyed()) return;
             com.eurobuddha.dexicon.account.LegacyPositions.invalidate();
-            if (!isFinishing() && !isDestroyed() && com.eurobuddha.dexicon.account.LegacyPositions.describe(this) == null) offerAccount();
+            if (com.eurobuddha.dexicon.account.LegacyPositions.describe(this) == null) { offerAccount(); return; }
+            if (!failed.isEmpty()) {
+                TextView t = new TextView(this); t.setText(String.join("\n\n", failed)); t.setTextIsSelectable(true);   // full pool addresses, copyable
+                int pp = Design.dp(this, 20); t.setPadding(pp, pp / 2, pp, 0);
+                track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Closed pools not proven empty").setView(t)
+                        .setPositiveButton("OK", null).show());
+            }
         });
         if (legacyNoticeShown) return;
         legacyNoticeShown = true;

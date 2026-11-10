@@ -32,47 +32,51 @@ public class VirtualWalletTest {
         return new VirtualWallet(n, AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null), new Store(), Collections.emptySet());
     }
 
-    /** 10 Nov, on the Fold: the account moved to a node that had never tracked it read 0 — tracking only follows NEW
-     *  coins. Registering an address now imports the coins already there (unpruned chain) with their proofs. */
-    @Test public void firstRegistrationOnANodeImportsTheCoinsAlreadyThere() throws Exception {
-        final String[] addr = {null};
-        FakeNode n = new FakeNode() {
-            @Override public JSONObject call(String cmd) throws Exception {
-                if (cmd.startsWith("coins address:")) {
-                    calls.add(cmd);
-                    String a = cmd.substring("coins address:".length()).trim();
-                    addr[0] = a;
-                    return new JSONObject().put("status", true).put("response", new JSONArray()
-                            .put(new JSONObject().put("coinid", "0xAA").put("address", a).put("spent", false))
-                            .put(new JSONObject().put("coinid", "0xBB").put("address", a).put("spent", true))
-                            .put(new JSONObject().put("coinid", "0xCC").put("address", "0x1234").put("spent", false)));
-                }
-                if (cmd.startsWith("coinexport")) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONObject().put("data", "0xDA7A")); }
-                if (cmd.startsWith("coinimport")) { calls.add(cmd); return new JSONObject().put("status", true); }
-                return super.call(cmd);
+    /** A node with coins already at the account's addresses, of which it holds none (tracking only follows NEW coins). */
+    static class NodeWithOldCoins extends FakeNode {
+        int coinsAt = 3; boolean alreadyTracked;
+        @Override public JSONObject call(String cmd) throws Exception {
+            if (cmd.startsWith("scripts address:") && alreadyTracked) {
+                calls.add(cmd);
+                return new JSONObject().put("status", true).put("response", new JSONObject().put("address", cmd.substring(16).trim()).put("track", true));
             }
-        };
+            if (cmd.startsWith("balance address:")) {
+                calls.add(cmd);
+                return new JSONObject().put("status", true).put("response", new JSONArray().put(new JSONObject().put("coins", String.valueOf(coinsAt))));
+            }
+            if (cmd.startsWith("coins address:")) {
+                calls.add(cmd);
+                String a = cmd.substring("coins address:".length()).trim();
+                return new JSONObject().put("status", true).put("response", new JSONArray()
+                        .put(new JSONObject().put("coinid", "0xAA").put("address", a).put("spent", false))
+                        .put(new JSONObject().put("coinid", "0xBB").put("address", a).put("spent", true))
+                        .put(new JSONObject().put("coinid", "0xCC").put("address", "0x1234").put("spent", false)));
+            }
+            if (cmd.startsWith("coinexport")) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONObject().put("data", "0xDA7A")); }
+            if (cmd.startsWith("coinimport")) { calls.add(cmd); return new JSONObject().put("status", true); }
+            return super.call(cmd);
+        }
+    }
+
+    /** 10 Nov, on the Fold: the account moved to a node that had not tracked it read 0. Its coins already there are imported
+     *  with their proofs — also when the node already tracks the address (it was registered before the coins arrived). */
+    @Test public void coinsAlreadyAtTheAccountAreImportedEvenOnATrackedAddress() throws Exception {
+        NodeWithOldCoins n = new NodeWithOldCoins(); n.alreadyTracked = true;
         VirtualWallet w = wallet(n);
         w.ensureTracked();
         assertTrue(n.calls.contains("coinexport coinid:0xAA"));
         assertTrue(n.calls.contains("coinimport track:true data:0xDA7A"));
         assertFalse("a spent coin is not imported", n.calls.contains("coinexport coinid:0xBB"));
         assertFalse("a coin at another address is not imported", n.calls.contains("coinexport coinid:0xCC"));
+        int reads = (int) n.calls.stream().filter(c -> c.startsWith("coins address:")).count();
+        w.ensureTracked();
+        assertEquals("a clean pass is not repeated in this process", reads, n.calls.stream().filter(c -> c.startsWith("coins address:")).count());
     }
 
-    @Test public void anAddressTheNodeAlreadyTracksIsNotRescanned() throws Exception {
-        FakeNode n = new FakeNode() {
-            @Override public JSONObject call(String cmd) throws Exception {
-                if (cmd.startsWith("scripts address:")) {
-                    calls.add(cmd);
-                    String a = cmd.substring("scripts address:".length()).trim();
-                    return new JSONObject().put("status", true).put("response", new JSONObject().put("address", a).put("track", true));
-                }
-                return super.call(cmd);
-            }
-        };
+    @Test public void aDustFloodedAddressIsNeverReadWhole() throws Exception {
+        NodeWithOldCoins n = new NodeWithOldCoins(); n.coinsAt = VirtualWallet.MAX_COIN_ROWS + 1;
         wallet(n).ensureTracked();
-        assertFalse(n.calls.stream().anyMatch(c -> c.startsWith("coins address:") || c.startsWith("newscript")));
+        assertFalse("the row read is refused before it can reach the IPC limit", n.calls.stream().anyMatch(c -> c.startsWith("coins address:")));
     }
 
     @Test public void chainReadsPassThroughUntouched() throws Exception {

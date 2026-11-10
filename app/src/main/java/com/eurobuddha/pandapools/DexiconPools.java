@@ -606,8 +606,9 @@ public final class DexiconPools {
 
     /** Closed node-key pools holding the account offer back: prove them empty (PandaPools' ClosedPoolCheck: the node AND
      *  the unpruned MegaMMR), at most every 10 minutes; {@code done} runs on the main thread when a check finished. Only
-     *  when every undrained recipe is a CLOSED one (a live pool must be closed first). */
-    public static void proveClosedPools(Context c, NodeApi pools, Runnable done) {
+     *  when every undrained recipe is a CLOSED one (a live pool must be closed first). {@code done} gets, per pool not proven
+     *  empty, the reason and "Pool: <full address>". */
+    public static void proveClosedPools(Context c, NodeApi pools, java.util.function.Consumer<List<String>> done) {
         long now = System.currentTimeMillis();
         if (pools == null || now - provedAt < 10 * 60_000L) return;
         List<Pool> closed = new ArrayList<>();
@@ -615,7 +616,8 @@ public final class DexiconPools {
         if (closed.isEmpty()) return;
         provedAt = now;
         android.os.Handler main = new android.os.Handler(android.os.Looper.getMainLooper());
-        ClosedPoolCheck.run(c, pools, closed, (l, r, d) -> { }, () -> main.post(done));
+        List<String> failed = new ArrayList<>();
+        ClosedPoolCheck.run(c, pools, closed, (l, r, d) -> failed.add(r + (d.isEmpty() ? "" : "\n" + d)), () -> main.post(() -> done.accept(failed)));
     }
 
     /** Pool work still tied to keys that are not yet settled, as PandaPools' hand-over judges it: a close / migrate not

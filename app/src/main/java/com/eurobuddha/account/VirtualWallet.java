@@ -132,8 +132,14 @@ public final class VirtualWallet {
     /** Register every account script with the node (trackall:true) unless already tracked. Re-run periodically: any
      *  companion can downgrade a script row with its own newscript (newscript REPLACES the row). */
     public synchronized void ensureTracked() throws Exception {
-        for (int i = 0; i < store.keyCount(); i++) if (track(i)) recoverExisting(keys.address(i));
+        for (int i = 0; i < store.keyCount(); i++) {
+            track(i);
+            String a = keys.address(i);
+            if (!recovered.contains(norm(a)) && recoverExisting(a)) recovered.add(norm(a));
+        }
     }
+    /** Addresses whose existing coins were looked for on THIS node in this process (a node switch restarts the app). */
+    private final Set<String> recovered = new HashSet<>();
 
     /** True when the node was NOT tracking this address yet (it was just registered). */
     private boolean track(int i) throws Exception {
@@ -148,27 +154,40 @@ public final class VirtualWallet {
     }
 
     /**
-     * A node that has never tracked this address does not know the coins already sent to it: tracking only follows NEW
-     * coins (10 Nov, on the Fold: the account on BlackBear read 0 while Minima Core showed its funds). Find them in the
-     * node's unpruned chain and import each with its proof and tracking — the same coinexport/coinimport the lock scan uses.
-     * Runs once, when the address is first registered on this node. Best effort: a failure leaves it as before.
+     * A node that has not tracked this address since its coins arrived does not know them: tracking only follows NEW coins
+     * (10 Nov, on the Fold: the account moved to BlackBear read 0 while Minima Core showed its funds). Look for them in
+     * the node's unpruned chain and import each one the node does not already hold, with its proof and tracking — the
+     * same coinexport/coinimport the lock scan uses. Once per address per process; true only after a clean pass (a
+     * failure is retried on the next ensureTracked). Bounded: an address holding more than MAX_COIN_ROWS coins (a dust
+     * flood) is refused before the row read — the reply must never reach the IPC limit, nor stall the signing worker.
      * ponytail: unpruned window only — a coin older than the node's window needs the MegaMMR (as PandaPools' recovery does).
      */
-    private void recoverExisting(String addr) {
+    private boolean recoverExisting(String addr) {
         try {
+            int n = coinCount(addr, null);   // `balance address:` counts every coin at the address in the unpruned chain
+            if (n == 0) return true;
+            if (n > MAX_COIN_ROWS) return true;   // refused, not retried: consolidating there needs them imported anyway
+            Set<String> held = new HashSet<>();
+            JSONObject mine = node.call("coins relevant:true address:" + addr);
+            JSONArray mr = mine.optBoolean("status") ? mine.optJSONArray("response") : null;
+            if (mr == null) return false;
+            for (int k = 0; k < mr.length(); k++) held.add(norm(mr.getJSONObject(k).optString("coinid")));
+            if (held.size() >= n) return true;   // the node already holds them all
             JSONObject r = node.call("coins address:" + addr);   // no relevant: = the unpruned chain
             JSONArray rows = r.optBoolean("status") ? r.optJSONArray("response") : null;
-            if (rows == null) return;
+            if (rows == null) return false;
+            boolean clean = true;
             for (int k = 0; k < rows.length(); k++) {
                 JSONObject row = rows.optJSONObject(k);
                 if (row == null || row.optBoolean("spent", false) || !norm(addr).equals(norm(row.optString("address")))) continue;
-                try {
-                    JSONObject ex = node.call("coinexport coinid:" + row.optString("coinid"));
-                    JSONObject resp = ex.optJSONObject("response");
-                    if (ex.optBoolean("status") && resp != null) node.call("coinimport track:true data:" + resp.getString("data"));
-                } catch (Exception oneCoin) { /* the rest still imports */ }
+                if (held.contains(norm(row.optString("coinid")))) continue;
+                JSONObject ex = node.call("coinexport coinid:" + row.optString("coinid"));
+                JSONObject resp = ex.optJSONObject("response");
+                if (!ex.optBoolean("status") || resp == null) { clean = false; continue; }
+                if (!node.call("coinimport track:true data:" + resp.getString("data")).optBoolean("status")) clean = false;
             }
-        } catch (Exception later) { /* best effort */ }
+            return clean;
+        } catch (Exception later) { return false; }
     }
 
     public List<String> accountAddresses() {
