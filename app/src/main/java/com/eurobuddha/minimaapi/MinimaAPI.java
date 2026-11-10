@@ -376,10 +376,8 @@ public class MinimaAPI {
             }
             discovering = false;
             lastReplied = java.util.Collections.unmodifiableSet(new java.util.LinkedHashSet<>(registrations.keySet()));
-            String chosen = readPreferredNode(mContext);
-            boolean useChosen = chosen != null && registrations.containsKey(chosen);
-            ambiguous = registrations.size() > 1 && !useChosen;
-            nodePackage = useChosen ? chosen : registrations.size() == 1 ? registrations.keySet().iterator().next() : null;
+            nodePackage = choose(registrations, readPreferredNode(mContext));
+            ambiguous = nodePackage == null && registrations.size() > 1;
             if (nodePackage != null) pinnedNode = nodePackage;   // what the UI should name (not install order)
             JSONObject result = nodePackage == null ? routingFailure() : registrations.get(nodePackage);
             java.util.List<Runnable> waiting = new java.util.ArrayList<>(awaitingNode);
@@ -389,9 +387,29 @@ public class MinimaAPI {
         }, 1500);
     }
 
+    /**
+     * Which answering node this app talks to (10 Nov 2026: with BlackBear AND the Play Store Minima Core running, every
+     * companion refused every command, and the ETH Wallet showed "Node returned an invalid Ethereum key").
+     * 1. one node answered: that one;  2. the node the user chose (preferred_node), if it answered;
+     * 3. the ONE node on which this app is enabled;  else null (ambiguous: the user must choose or disable one).
+     */
+    static String choose(java.util.Map<String, JSONObject> replies, String preferred) {
+        if (replies.size() == 1) return replies.keySet().iterator().next();
+        if (preferred != null && replies.containsKey(preferred)) return preferred;
+        String enabled = null;
+        for (java.util.Map.Entry<String, JSONObject> e : replies.entrySet()) {
+            if (!e.getValue().optBoolean("enabled", false)) continue;
+            if (enabled != null) return null;   // enabled on two nodes: the user must choose
+            enabled = e.getKey();
+        }
+        return enabled;
+    }
+
     private JSONObject routingFailure() {
         return MinimaAPIResponse.failure(ambiguous
-                ? "Multiple Minima Core builds are running. Keep one running and reopen this companion. No command was sent."
+                ? "More than one Minima node app answered (" + String.join(", ", registrations.keySet()) + ") and Dexicon is "
+                        + "enabled in all or none of them. Pick one in Settings, or enable Dexicon in ONE node's Apps screen. "
+                        + "No command was sent."
                 : "No Minima node replied. Start Minima Core (PandaBear, BlackBear, Pandamonium or the official Minima Core) and try again. No command was sent.");
     }
 
