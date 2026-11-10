@@ -22,12 +22,13 @@ import java.util.List;
  *   with a timeout so a missing/stopped node surfaces an error instead of hanging.
  * - Detects the "app not enabled in Minima Core" reply and routes it to a pairing listener.
  */
-public class NodeApi {
+public class NodeApi implements com.eurobuddha.account.Transport {
 
-    public interface Cb {
-        void onResult(JSONObject json);
-        void onError(String message);
-    }
+    /** The shared Trading Account takes Dexicon's settings the moment the node layer exists (before any Account.get). */
+    static { com.eurobuddha.account.Account.configure(com.eurobuddha.dexicon.account.DexiconAccount.config()); }
+
+    /** A node reply. The same shape as the shared account's {@link com.eurobuddha.account.Transport.Reply}. */
+    public interface Cb extends com.eurobuddha.account.Transport.Reply {}
     public interface PairingListener { void onEnabled(boolean enabled); }
 
     public static final String ERR_NOT_ENABLED = "NOT_ENABLED";
@@ -60,10 +61,10 @@ public class NodeApi {
     private boolean mReleased = false, destroyRequested = false;
     private Boolean enabled, admin;
     /** The node said Dexicon is enabled but NOT admin (or parked a command as pending): nothing runs until it is. */
-    public boolean needsAdmin() { return Boolean.FALSE.equals(admin) && !com.eurobuddha.dexicon.account.Account.exists(mContext)
-            && !com.eurobuddha.dexicon.account.Account.everCreated(mContext) && com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext); }
+    public boolean needsAdmin() { return Boolean.FALSE.equals(admin) && !com.eurobuddha.account.Account.exists(mContext)
+            && !com.eurobuddha.account.Account.everCreated(mContext) && com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext); }
     /** Stock Minima Core edition: once a Trading Account exists Dexicon signs itself and never needs ADMIN. */
-    public boolean hasAccount() { return com.eurobuddha.dexicon.account.Account.exists(mContext); }
+    public boolean hasAccount() { return com.eurobuddha.account.Account.exists(mContext); }
     /** True once a node has REPLIED to a register (even "not enabled"); false while nothing has answered. A reply
      *  timeout and a real "disabled" used to look identical to the screen (live on the Fold 2026-10-22). */
     private boolean answered;
@@ -154,32 +155,9 @@ public class NodeApi {
         String invalid = CommandSafety.failure(command);
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
         // Trading Account: wallet + txn verbs are answered in-app (VirtualWallet); only signed postfrom reaches the node.
-        String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
-        if ("txpow".equals(verb)) com.eurobuddha.dexicon.account.Account.get(mContext, this);   // loads the account's known ids before routing
-        if (com.eurobuddha.dexicon.account.VirtualWallet.answersTxpow(command)) {
-            // the account proves its own (pre-mining) txpowids; any other id passes through it to the node
-            com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);
-            if (acct != null) {
-                queuedCommands++;
-                acct.submit(this, command, guard, timeoutMs, new Cb() {
-                    public void onResult(JSONObject j) { queuedCommands--; try { if (cb != null) cb.onResult(j); } finally { finishDestroy(); } }
-                    public void onError(String m) { queuedCommands--; try { if (cb != null) cb.onError(m); } finally { finishDestroy(); } }
-                });
-                return;
-            }
-        }
-        if (com.eurobuddha.dexicon.account.VirtualWallet.handles(verb)) {
-            com.eurobuddha.dexicon.account.Account acct = com.eurobuddha.dexicon.account.Account.get(mContext, this);
-            if (com.eurobuddha.dexicon.account.Account.chainRead(command)
-                    || (acct == null && com.eurobuddha.dexicon.account.Account.plainRead(command))) {   // a pure chain read: never queued
-                if (acct == null) { cmdDirect(command, guard, timeoutMs, cb); return; }
-                cmdDirect(command, guard, timeoutMs, new Cb() {
-                    public void onResult(JSONObject j) { acct.noticeLocks(command, j); if (cb != null) cb.onResult(j); }
-                    public void onError(String m) { if (cb != null) cb.onError(m); }
-                });
-                return;
-            }
-            if (acct != null) {
+        switch (com.eurobuddha.account.Account.route(mContext, this, command)) {
+            case ACCOUNT: {
+                com.eurobuddha.account.Account acct = com.eurobuddha.account.Account.get(mContext, this);
                 queuedCommands++;   // the account may still be posting: never release the transport underneath it
                 acct.submit(this, command, guard, timeoutMs, new Cb() {
                     public void onResult(JSONObject j) { queuedCommands--; try { if (cb != null) cb.onResult(j); } finally { finishDestroy(); } }
@@ -187,17 +165,28 @@ public class NodeApi {
                 });
                 return;
             }
-            // No account loaded. Positions an earlier Dexicon signed with the NODE's keys settle the old way (ADMIN) until
-            // they are finished; otherwise never fall back to the node's wallet, seed or unbounded relevant set.
-            if (!com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext)) {
-                if (cb != null) mMain.post(() -> cb.onError(ERR_NO_ACCOUNT)); return;
+            case NODE_THEN_NOTICE: {   // a pure chain read: never queued behind the account
+                com.eurobuddha.account.Account acct = com.eurobuddha.account.Account.get(mContext, this);
+                cmdDirect(command, guard, timeoutMs, new Cb() {
+                    public void onResult(JSONObject j) { if (acct != null) acct.noticeLocks(command, j); if (cb != null) cb.onResult(j); }
+                    public void onError(String m) { if (cb != null) cb.onError(m); }
+                });
+                return;
             }
+            case NO_ACCOUNT:
+                // No account loaded. Positions an earlier Dexicon signed with the NODE's keys settle the old way (ADMIN)
+                // until they are finished; otherwise never fall back to the node's wallet, seed or unbounded relevant set.
+                if (!com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext)) {
+                    if (cb != null) mMain.post(() -> cb.onError(ERR_NO_ACCOUNT)); return;
+                }
+                break;
+            default: break;
         }
         cmdDirect(command, guard, timeoutMs, cb);
     }
 
     /** Straight to the node (no Trading Account interception). The account itself reaches the node only through this. */
-    public void cmdDirect(String command, java.util.function.BooleanSupplier guard, long timeoutMs, Cb cb) {
+    @Override public void cmdDirect(String command, java.util.function.BooleanSupplier guard, long timeoutMs, com.eurobuddha.account.Transport.Reply cb) {
         if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmdDirect(command, guard, timeoutMs, cb)); return; }
         String invalid = CommandSafety.failure(command);
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }

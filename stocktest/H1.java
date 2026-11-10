@@ -1,6 +1,6 @@
-import com.eurobuddha.dexicon.account.AccountKeys;
-import com.eurobuddha.dexicon.account.KeyUses;
-import com.eurobuddha.dexicon.account.VirtualWallet;
+import com.eurobuddha.account.AccountKeys;
+import com.eurobuddha.account.KeyUses;
+import com.eurobuddha.account.VirtualWallet;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

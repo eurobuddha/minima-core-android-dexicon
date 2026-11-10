@@ -1,4 +1,4 @@
-package com.eurobuddha.dexicon.account;
+package com.eurobuddha.account;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

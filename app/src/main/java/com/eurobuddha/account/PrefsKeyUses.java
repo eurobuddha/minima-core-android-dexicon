@@ -1,4 +1,4 @@
-package com.eurobuddha.dexicon.account;
+package com.eurobuddha.account;
 
 import android.content.Context;
 import android.content.SharedPreferences;

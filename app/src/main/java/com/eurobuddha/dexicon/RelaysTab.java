@@ -60,22 +60,39 @@ public final class RelaysTab extends LinearLayout {
         addView(body);
     }
 
+    /** Moving the Trading Account to AtomiX or PandaPools (owner, 10 Nov: one app at a time, the same 24 words). Nothing is
+     *  handed over by IPC: the user finishes here, checks the words, uninstalls Dexicon, and restores them there. */
+    private void moveAway() {
+        String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(act);
+        String steps = "1. Finish what is open here: let swaps settle, cancel your orders, close or keep your pools (a pool "
+                + "you keep needs its backup file in PandaPools).\n2. Check you have your 24 words (SHOW 24 WORDS).\n"
+                + "3. Uninstall Dexicon.\n4. In AtomiX or PandaPools, restore the same 24 words: the same account, address "
+                + "and funds.\n\nNever run two of these apps on one account at the same time.";
+        new android.app.AlertDialog.Builder(act).setTitle("Move your Trading Account")
+                .setMessage((open == null ? "Nothing is open in Dexicon.\n\n" : "Still open in Dexicon: " + open + ". Finish these first.\n\n") + steps)
+                .setPositiveButton("OK", null).show();
+    }
+
     /** TRADING ACCOUNT (the keys Dexicon signs with) + NODE (which installed node to use when several answer). */
     private void renderAccount() {
         accountCard.removeAllViews();
         accountCard.addView(t("TRADING ACCOUNT", Design.DIM(), 10f, Design.sansBold()));
-        if (!com.eurobuddha.dexicon.account.Account.exists(act)) {
+        if (!com.eurobuddha.account.Account.exists(act)) {
             accountCard.addView(t("Not set up yet.", Design.DIM2(), 11f, Design.sans()));
         } else {
             accountCard.addView(t("Dexicon signs every trade with this account. Fund it from your Minima wallet; your node never holds its keys.", Design.DIM2(), 9.5f, Design.sans()));
             TextView addr = t("…", Design.TEXT(), 11f, Design.mono());
             accountCard.addView(addr);
-            com.eurobuddha.dexicon.account.Account a = com.eurobuddha.dexicon.account.Account.get(act, act.dexNode());
+            com.eurobuddha.account.Account a = com.eurobuddha.account.Account.get(act, act.dexNode());
             if (a != null) a.receiveAddress(x -> { addr.setText(x[1] + "\n" + x[0]); addr.setOnClickListener(v -> act.copy("Trading Account address", x[1])); });
             TextView words = button("SHOW 24 WORDS");
-            words.setOnClickListener(v -> com.eurobuddha.dexicon.account.AccountSetup.reveal(act));
+            words.setOnClickListener(v -> com.eurobuddha.account.AccountSetup.reveal(act));
             LayoutParams wl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); wl.topMargin = Design.dp(act, 8);
             accountCard.addView(words, wl);
+            TextView move = button("MOVE TO ATOMIX / PANDAPOOLS");
+            move.setOnClickListener(v -> moveAway());
+            LayoutParams ml = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); ml.topMargin = Design.dp(act, 8);
+            accountCard.addView(move, ml);
         }
         nodeCard.removeAllViews();
         nodeCard.addView(t("NODE", Design.DIM(), 10f, Design.sansBold()));

@@ -21,7 +21,7 @@ final class CombinedBackupUi {
         // STOCK (Dexicon Trading Account): the pool owner key comes from the account's 24 words, never the node — so
         // the backup is the pool recipes alone (no node backup: stock Minima Core has no FILE bridge and `backup` is
         // admin-only). Saved as the plain recipe JSON that open() already reads; it holds no secret.
-        if (com.eurobuddha.dexicon.account.Account.everCreated(act)) { recipesOnly(act, recovery, live, status, done); return; }
+        if (com.eurobuddha.account.Account.everCreated(act)) { recipesOnly(act, recovery, live, status, done); return; }
         password(act, true, pass -> {
             status.accept("Preparing encrypted pool + node backup…");
             final List<Pool> owned = OwnPoolStore.all(act);

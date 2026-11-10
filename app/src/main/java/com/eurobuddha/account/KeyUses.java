@@ -1,4 +1,4 @@
-package com.eurobuddha.dexicon.account;
+package com.eurobuddha.account;
 
 /**
  * KeyUses — the durable one-time-signature (WOTS) uses counter.

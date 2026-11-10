@@ -10,6 +10,6 @@ if [ -n "$JAR" ]; then cp "$JAR" "$W/minima-stock.jar"; else git -C "$CORE" cat-
 echo "stock jar sha256: $(shasum -a 256 "$W/minima-stock.jar" | cut -d' ' -f1)"
 JSON=$(find ~/.gradle/caches -name 'json-20240303.jar' | head -1)
 JH="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
-A=app/src/main/java/com/eurobuddha/dexicon/account
+A=app/src/main/java/com/eurobuddha/account
 "$JH/bin/javac" -nowarn -cp "$W/minima-stock.jar:$JSON" -d "$W/cls" $A/KeyUses.java $A/AccountKeys.java $A/VirtualWallet.java stocktest/H1.java
 "$JH/bin/java" -cp "$W/minima-stock.jar:$JSON:$W/cls${EXTRA_CP:+:$EXTRA_CP}" H1 "$W/node" | grep -v '^Minima @'

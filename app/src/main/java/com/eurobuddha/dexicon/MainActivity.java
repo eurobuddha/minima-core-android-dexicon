@@ -256,8 +256,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private int lockedTries;
     private final Runnable retryOffer = this::offerAccount;
     private void offerAccount() {
-        if (offering || com.eurobuddha.dexicon.account.Account.get(this, node) != null) { lockedTries = 0; return; }
-        if (com.eurobuddha.dexicon.account.Account.exists(this)) {   // vault present but the keystore is busy: retry, delete nothing
+        if (offering || com.eurobuddha.account.Account.get(this, node) != null) { lockedTries = 0; return; }
+        if (com.eurobuddha.account.Account.exists(this)) {   // vault present but the keystore is busy: retry, delete nothing
             ui.removeCallbacks(retryOffer);
             if (++lockedTries <= 6) { toast("Your Trading Account is temporarily locked — Dexicon retries in a moment."); ui.postDelayed(retryOffer, 5_000); return; }
             offering = true;
@@ -265,24 +265,24 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                     .setMessage("This phone's keystore will not unlock your Trading Account. You can restore it from its 24 words "
                             + "(the locked copy is kept, never deleted).")
                     .setPositiveButton("Restore", (d, w) -> {
-                        com.eurobuddha.dexicon.account.Account.quarantineForRestore(this);
+                        com.eurobuddha.account.Account.quarantineForRestore(this);
                         // straight to RESTORE of the SAME account (fingerprint-checked) — never "Create new" over it
                         String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(this);
-                        com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
+                        com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
                     })
                     .setNegativeButton("Later", (d, w) -> { offering = false; lockedTries = 0; }).show());
             return;
         }
         offering = true;
-        if (com.eurobuddha.dexicon.account.Account.everCreated(this)) {
+        if (com.eurobuddha.account.Account.everCreated(this)) {
             // The account existed here and was lost: its positions are locked to ITS keys — only the same words can settle
             // them, so a brand-new account is not offered while any remain.
             String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(this);
-            com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
+            com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
             return;
         }
         String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);
-        if (legacy == null) { com.eurobuddha.dexicon.account.AccountSetup.show(this, node, this::onAccountReady, false, null); return; }
+        if (legacy == null) { com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, false, null); return; }
         offering = false;
         if (legacyNoticeShown) return;
         legacyNoticeShown = true;
@@ -342,7 +342,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     private void deriveIdentity() {
         if (deriving) return;
-        if (!com.eurobuddha.dexicon.account.Account.exists(this) && !com.eurobuddha.dexicon.account.LegacyPositions.exist(this)) return;   // AccountSetup first
+        if (!com.eurobuddha.account.Account.exists(this) && !com.eurobuddha.dexicon.account.LegacyPositions.exist(this)) return;   // AccountSetup first
         deriving = true;
         SeedSource.derive(node, SeedSource.DEX, new SeedSource.Cb() {   // one-way: the node's phrase never enters the app
             public void got(String seed) {
@@ -430,7 +430,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     public void toast(String s) { Toast.makeText(this, here(s), Toast.LENGTH_SHORT).show(); }
     /** The vendored PandaDEX layer (verbatim) tells you to consolidate "in MinimaCore"; Dexicon has it on ASSETS. */
     static String here(String s) {
-        return s == null ? null : s.replace("consolidate this token in MinimaCore", "consolidate this token on ASSETS › CONSOLIDATE")
+        return s == null ? null : s.replace("the wallet screen's CONSOLIDATE", "ASSETS › CONSOLIDATE")
+                .replace("consolidate this token in MinimaCore", "consolidate this token on ASSETS › CONSOLIDATE")
                 .replace("Use MinimaCore consolidation", "Use ASSETS › CONSOLIDATE").replace("Consolidate funding", "Consolidate on ASSETS")
                 .replace("consolidate coins and retry", "consolidate on ASSETS and retry");
     }

@@ -1,4 +1,4 @@
-package com.eurobuddha.dexicon.account;
+package com.eurobuddha.account;
 
 import org.minima.objects.Address;
 import org.minima.objects.base.MiniData;

@@ -35,7 +35,7 @@ public class WalletActivityTest {
     @Test public void theSeenSetIsBoundedAndKeepsNewest() {
         java.util.List<String> ids = new java.util.ArrayList<>();
         for (int i = 0; i < 2100; i++) ids.add("C" + i);
-        String json = com.eurobuddha.dexicon.account.AccountTestAccess.boundedAdd("[]", ids);
+        String json = com.eurobuddha.account.AccountTestAccess.boundedAdd("[]", ids);
         assertTrue(json.contains("\"C2099\""));
         assertFalse(json.contains("\"C0\""));
     }

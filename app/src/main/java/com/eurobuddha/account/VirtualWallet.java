@@ -1,4 +1,4 @@
-package com.eurobuddha.dexicon.account;
+package com.eurobuddha.account;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -212,7 +212,7 @@ public final class VirtualWallet {
                 case "send":        return send(p);
                 case "consolidate": return consolidate(p);
                 case "seedrandom":  return ok(verb, new JSONObject().put("modifier", p.s("modifier", "")).put("seedrandom", keys.seedRandom(p.s("modifier", ""))));
-                case "vault":       return fail(verb, "The Trading Account seed never leaves Dexicon.");
+                case "vault":       return fail(verb, "The Trading Account seed never leaves this app.");
                 case "checkmode":   return ok(verb, new JSONObject().put("mode", "WRITE").put("writemode", true));
                 case "txncreate":   return txnCreate(p);
                 case "txninput":    return txnInput(p);
@@ -316,7 +316,7 @@ public final class VirtualWallet {
             int n = coinCount(a, tokenid);
             if (n == 0) continue;
             if (n > MAX_COIN_ROWS)
-                throw new IllegalStateException("The Trading Account holds " + n + " coins at one address — too many to read safely in one reply. Consolidate first (ASSETS › CONSOLIDATE).");
+                throw new IllegalStateException("The Trading Account holds " + n + " coins at one address — too many to read safely in one reply. Consolidate first (the wallet screen's CONSOLIDATE).");
             StringBuilder q = new StringBuilder("coins relevant:true address:").append(a);
             if (tokenid != null && !tokenid.isEmpty()) q.append(" tokenid:").append(tokenid);
             if (checkMempool) q.append(" checkmempool:true");
@@ -545,11 +545,11 @@ public final class VirtualWallet {
         }
         MiniNumber want = token == null ? amount : token.getScaledMinimaAmount(amount);
         List<JSONObject> pickedRows = select(rows, want, MAX_SEND_INPUTS);
-        if (pickedRows == null) return fail("send", "Insufficient funds in " + MAX_SEND_INPUTS + " coins — consolidate first (ASSETS › CONSOLIDATE).");
+        if (pickedRows == null) return fail("send", "Insufficient funds in " + MAX_SEND_INPUTS + " coins — consolidate first (the wallet screen's CONSOLIDATE).");
         Set<String> signers = new HashSet<>();
         for (JSONObject r : pickedRows) signers.add(norm(r.optString("address")));
         if (pickedRows.size() * 3_000 + signers.size() * SIG_HEX_ESTIMATE + 4_000 > MAX_POST_HEX)
-            return fail("send", "Those coins are spread over too many addresses for one transaction — consolidate first (ASSETS › CONSOLIDATE).");
+            return fail("send", "Those coins are spread over too many addresses for one transaction — consolidate first (the wallet screen's CONSOLIDATE).");
 
         Transaction t = new Transaction();
         List<CoinProof> picked = new ArrayList<>();
@@ -1272,7 +1272,7 @@ public final class VirtualWallet {
     /** True when {@code coinId} is an output of a transaction this account signed. */
     public boolean isOwnOutput(String coinId) { return store.isOwnOutput(norm(coinId)); }
 
-    static String norm(String s) {
+    public static String norm(String s) {
         if (s == null) return "";
         s = s.trim().toUpperCase();
         if (s.startsWith("MX")) { try { s = org.minima.objects.Address.convertMinimaAddress(s).to0xString().toUpperCase(); } catch (Exception ignored) { } }

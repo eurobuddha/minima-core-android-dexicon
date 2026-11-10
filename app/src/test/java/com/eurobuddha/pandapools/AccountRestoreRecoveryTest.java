@@ -2,9 +2,9 @@ package com.eurobuddha.pandapools;
 
 import static org.junit.Assert.*;
 
-import com.eurobuddha.dexicon.account.AccountKeys;
-import com.eurobuddha.dexicon.account.AccountTestAccess;
-import com.eurobuddha.dexicon.account.VirtualWallet;
+import com.eurobuddha.account.AccountKeys;
+import com.eurobuddha.account.AccountTestAccess;
+import com.eurobuddha.account.VirtualWallet;
 
 import org.json.JSONObject;
 import org.junit.Test;

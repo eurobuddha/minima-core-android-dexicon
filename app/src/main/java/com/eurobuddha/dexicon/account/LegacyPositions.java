@@ -16,7 +16,7 @@ public final class LegacyPositions {
 
     /** Null when there is nothing to finish; else a one-line description. Cached 30 s (reads three local databases). */
     public static String describe(Context c) {
-        if (new AccountVault(c).everCreated()) return null;   // the account owns everything from here on (never the node)
+        if (new com.eurobuddha.account.AccountVault(c).everCreated()) return null;   // the account owns everything from here on (never the node)
         long now = System.currentTimeMillis();
         if (now - cachedAt < 30_000L) return cached;
         String d = scan(c.getApplicationContext());

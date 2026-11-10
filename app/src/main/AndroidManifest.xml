@@ -29,6 +29,11 @@
         <!-- One trading app per phone: Dexicon contains these two and refuses to trade while either is installed -->
         <package android:name="com.eurobuddha.atomix" />
         <package android:name="com.eurobuddha.pandapools" />
+        <!-- The shared Trading Account family (com.eurobuddha.account.Family): never two holders of one account -->
+        <package android:name="com.eurobuddha.dexicon" />
+        <package android:name="com.eurobuddha.dexicon.stock" />
+        <package android:name="com.eurobuddha.atomix.stock" />
+        <package android:name="com.eurobuddha.pandapools.stock" />
     </queries>
 
     <!-- allowBackup=false is a FUND-SAFETY setting (family-wide scaffold defect): Auto Backup would cloud-copy and

@@ -1,15 +1,12 @@
-package com.eurobuddha.dexicon.account;
+package com.eurobuddha.account;
 
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 
-import com.eurobuddha.dexicon.NodeApi;
-
 import org.json.JSONObject;
 
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -18,17 +15,74 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * The process-wide Trading Account: one {@link VirtualWallet} on one worker thread. {@link NodeApi} hands it every
- * wallet / txn verb; it answers locally and reaches the node only through {@link NodeApi#cmdDirect} (reads, newscript,
- * coinexport, and the single signed {@code postfrom}). Signing happens on this ONE thread in this ONE process, so a
- * one-time key leaf can never be handed out twice (the in-app replacement for fork commit
+ * The process-wide Trading Account: one {@link VirtualWallet} on one worker thread. The app's node layer hands it every
+ * wallet / txn verb ({@link #route}); it answers locally and reaches the node only through {@link Transport#cmdDirect}
+ * (reads, newscript, coinexport, and the single signed {@code postfrom}). Signing happens on this ONE thread in this
+ * ONE process, so a one-time key leaf can never be handed out twice (the in-app replacement for fork commit
  * 26cc3983495acafcb1b99f10c744dc506e254b07).
+ *
+ * <p>Shared by Dexicon, AtomiX and PandaPools (vendored from Dexicon, the single source). The same 24 words give the
+ * same keys in all three (domain {@link AccountKeys#DOMAIN}): the apps are mutually exclusive on a phone, and moving
+ * between them is a RESTORE of the words — never two of them signing with one account. The prefs and Keystore names
+ * keep their original "dexicon_" spelling so existing vaults open unchanged.
  */
 public final class Account {
 
+    /** What each app supplies once, before the first {@link #get}. */
+    public static final class Config {
+        public final String appName;
+        /** Contract addresses whose stateful outputs carry the owner port, and whose reads are watched for locks to us. */
+        public final java.util.Set<String> contracts;
+        /** Where incoming coins are recorded (wallet history); null = not recorded. */
+        public final Incoming incoming;
+        /** Dialog styling for {@link AccountSetup}; null = platform defaults. */
+        public final AccountSetup.Look look;
+        /** Extra warning on the setup screen (e.g. funds left at an old node-derived wallet), or null. */
+        public final java.util.function.Function<android.app.Activity, String> setupNotice;
+        public Config(String appName, java.util.Collection<String> contracts, Incoming incoming, AccountSetup.Look look,
+                      java.util.function.Function<android.app.Activity, String> setupNotice) {
+            this.appName = appName;
+            this.contracts = java.util.Collections.unmodifiableSet(new HashSet<>(contracts == null ? java.util.Collections.<String>emptySet() : contracts));
+            this.incoming = incoming; this.look = look; this.setupNotice = setupNotice;
+        }
+    }
+
+    /** New account coins of one token that no transaction of this account created (a deposit, or an order fill). */
+    public interface Incoming {
+        void received(Context app, String tokenid, java.math.BigDecimal amount, org.json.JSONArray coins, long block,
+                      java.util.List<String> addresses, long nowMs);
+    }
+
+    private static volatile Config config = new Config("Trading Account", null, null, null, null);
+    private static volatile boolean configured;
+    /** Must run before the first {@link #get}: the wallet caches the contract set when it is built (owner port 254 keeps
+     *  locks relevant), so an unconfigured account would silently lose it. {@link #get} refuses until then. */
+    public static void configure(Config c) { if (c != null) { config = c; configured = true; } }
+    public static Config config() { return config; }
+
+    /** Where a command goes when the app may hold a Trading Account — each app's node layer asks this first. */
+    public enum Route {
+        /** Straight to the node, as before. */ NODE,
+        /** Straight to the node, then {@link #noticeLocks} on the reply. */ NODE_THEN_NOTICE,
+        /** {@link #submit} it to the account. */ ACCOUNT,
+        /** A wallet verb with no account loaded: the app refuses it (or, with legacy node-key positions, sends it). */ NO_ACCOUNT
+    }
+
+    public static Route route(Context c, Transport t, String command) {
+        String verb = command.trim().split("\\s+", 2)[0].toLowerCase(java.util.Locale.ROOT);
+        if ("txpow".equals(verb)) {   // loads the account (its known post ids) before deciding
+            Account a = get(c, t);
+            return a != null && VirtualWallet.answersTxpow(command) ? Route.ACCOUNT : Route.NODE;
+        }
+        if (!VirtualWallet.handles(verb)) return Route.NODE;
+        Account a = get(c, t);
+        if (chainRead(command) || (a == null && plainRead(command))) return a == null ? Route.NODE : Route.NODE_THEN_NOTICE;
+        return a != null ? Route.ACCOUNT : Route.NO_ACCOUNT;
+    }
+
     private static final String PREFS = "dexicon_account_state";
     private static volatile Account instance;
-    private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "dexicon-account"); t.setDaemon(true); return t; });
+    private static final ExecutorService WORKER = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "trading-account"); t.setDaemon(true); return t; });
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
     private final VirtualWallet wallet;
@@ -38,14 +92,13 @@ public final class Account {
     private long scannedAt;
     private java.util.LinkedHashSet<String> seen;   // loaded once; null until the first scan
     private boolean baseline;
-    private com.eurobuddha.dexicon.DexDb db;
     private final AccountKeys keys;
     private volatile long trackedAt;
     private static final long RETRACK_MS = 10 * 60_000L;   // a companion can downgrade our script rows (newscript replaces)
-    /** The NodeApi of the call being handled: screens come and go, the account outlives them. Worker-thread only. */
-    private volatile NodeApi current;
+    /** The transport of the call being handled: screens come and go, the account outlives them. Worker-thread only. */
+    private volatile Transport current;
 
-    private Account(Context c, String secret, String mode, int restoreFloor, NodeApi node) {
+    private Account(Context c, String secret, String mode, int restoreFloor, Transport node) {
         Context app = c.getApplicationContext();
         SharedPreferences sp = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         final String[] fp = {""};   // filled once the keys exist: the cache below is keyed by the seed's fingerprint
@@ -86,14 +139,14 @@ public final class Account {
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
-        wallet = new VirtualWallet(cmd -> blocking(current, cmd), keys, store,
-                new HashSet<>(Arrays.asList(com.eurobuddha.atomix.swap.MinimaHtlc.HTLC_ADDRESSES)));
+        wallet = new VirtualWallet(cmd -> blocking(current, cmd), keys, store, config.contracts);
     }
 
     /** The account, once set up on this phone; null until then. */
-    public static Account get(Context c, NodeApi node) {
+    public static Account get(Context c, Transport node) {
         Account a = instance;
         if (a != null) return a;
+        if (!configured) throw new IllegalStateException("Account.configure(...) must run before the Trading Account is opened");
         synchronized (Account.class) {
             if (instance != null) return instance;
             AccountVault v = new AccountVault(c);
@@ -170,7 +223,7 @@ public final class Account {
     public static boolean everCreated(Context c) { return new AccountVault(c).everCreated(); }
 
     /** Run {@code command} on the account worker. Delivers on the main thread. A null local answer = pass through. */
-    public void submit(NodeApi node, String command, java.util.function.BooleanSupplier guard, long timeoutMs, NodeApi.Cb cb) {
+    public void submit(Transport node, String command, java.util.function.BooleanSupplier guard, long timeoutMs, Transport.Reply cb) {
         final long queued = System.currentTimeMillis();
         final long patience = timeoutMs > 0 ? timeoutMs : 180_000L;
         WORKER.execute(() -> {
@@ -187,7 +240,7 @@ public final class Account {
                             for (String a : wallet.accountAddresses()) k.add(VirtualWallet.norm(a));
                             knownAddresses = k;
                         }
-                        catch (Exception later) { android.util.Log.w("Dexicon", "account re-track deferred: " + later); }   // never fails a claim
+                        catch (Exception later) { android.util.Log.w(config.appName, "account re-track deferred: " + later); }   // never fails a claim
                     }
                     if (knownAddresses == null) refreshKnown();
                     reply = wallet.handle(command, guard == null ? null : () -> onMain(guard));
@@ -199,7 +252,7 @@ public final class Account {
             final JSONObject r = reply; final String err = error;
             if (passThrough) {
                 // the wallet already evaluated the guard (exactly once) before passing the command through
-                MAIN.post(() -> node.cmdDirect(command, null, timeoutMs, new NodeApi.Cb() {
+                MAIN.post(() -> node.cmdDirect(command, null, timeoutMs, new Transport.Reply() {
                     public void onResult(JSONObject j) { noticeLocks(command, j); if (cb != null) cb.onResult(j); }
                     public void onError(String m) { if (cb != null) cb.onError(m); }
                 }));
@@ -247,21 +300,11 @@ public final class Account {
                 block.merge(tok, c.optLong("created", 0), Math::max);
                 tos.computeIfAbsent(tok, x -> new java.util.LinkedHashSet<>()).add(c.optString("address"));
             }
-            if (!sum.isEmpty()) {
-                if (db == null) db = new com.eurobuddha.dexicon.DexDb(app);
-                // any order on record (live, just filled or cancelled): its proceeds can arrive without our signature
-                boolean orders = !db.myOrders().isEmpty();
-                for (java.util.Map.Entry<String, java.math.BigDecimal> e : sum.entrySet()) {
-                    String tok = e.getKey();
-                    String name = "0x00".equals(tok) ? "MINIMA" : tok.equalsIgnoreCase(com.eurobuddha.dexicon.fill.Tokens.MXUSD()) ? "MxUSD" : tok;
-                    org.json.JSONArray cs = coins.get(tok);
-                    com.eurobuddha.dexicon.ActivityLog.addWallet(db, new JSONObject().put("id", "recv_" + VirtualWallet.norm(cs.getString(0)))
-                            .put("kind", "received").put("amount", e.getValue().stripTrailingZeros().toPlainString()).put("token", name)
-                            .put("tokenid", tok).put("ts", now).put("stage", com.eurobuddha.dexicon.ActivityLog.POSTED)
-                            .put("block", block.get(tok)).put("outs", cs).put("maybeFill", orders)
-                            .put("tos", new org.json.JSONArray(new java.util.ArrayList<>(tos.get(tok)))));
-                }
-            }
+            Incoming in = config.incoming;
+            if (!sum.isEmpty() && in != null)   // the app records them (rows written BEFORE the seen set is saved)
+                for (java.util.Map.Entry<String, java.math.BigDecimal> e : sum.entrySet())
+                    in.received(app, e.getKey(), e.getValue(), coins.get(e.getKey()), block.get(e.getKey()),
+                            new java.util.ArrayList<>(tos.get(e.getKey())), now);
             seen.addAll(ids);
             baseline = false;
             // spent coins never come back: evict only ids NOT in this scan, so a wallet larger than the cap never rotates
@@ -273,7 +316,7 @@ public final class Account {
                 while (seen.size() > cap && it.hasNext()) if (!current.contains(it.next())) it.remove();
             }
             sp.edit().putString(seenKey, new org.json.JSONArray(new java.util.ArrayList<>(seen)).toString()).apply();
-        } catch (Exception later) { android.util.Log.w("Dexicon", "incoming scan deferred: " + later); }
+        } catch (Exception later) { android.util.Log.w(config.appName, "incoming scan deferred: " + later); }
     }
 
     /** The account's receive address (index 0), full 0x and Mx forms: [0x, Mx]. Computed on the worker. */
@@ -291,7 +334,7 @@ public final class Account {
     public void noticeLocks(String command, JSONObject reply) {
         if (reply == null || !command.contains("address:")) return;
         boolean htlc = false;
-        for (String h : com.eurobuddha.atomix.swap.MinimaHtlc.HTLC_ADDRESSES) if (command.contains(h)) htlc = true;
+        for (String h : config.contracts) if (command.contains(h)) htlc = true;
         if (!htlc) return;
         WORKER.execute(() -> { try { wallet.noticeLocksToUs(reply); } catch (RuntimeException ignored) { } });
     }
@@ -312,14 +355,14 @@ public final class Account {
     }
 
     /** One node call from the worker thread, waiting for the reply (never on the main thread). */
-    private static JSONObject blocking(NodeApi node, String cmd) throws Exception {
+    private static JSONObject blocking(Transport node, String cmd) throws Exception {
         if (Looper.myLooper() == Looper.getMainLooper()) throw new IllegalStateException("account node call on the main thread");
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<JSONObject> out = new AtomicReference<>();
         AtomicReference<String> err = new AtomicReference<>();
         java.util.concurrent.atomic.AtomicBoolean abandoned = new java.util.concurrent.atomic.AtomicBoolean(false);
         // a command still queued when we stop waiting is never sent: the caller has already been told it failed
-        MAIN.post(() -> node.cmdDirect(cmd, () -> !abandoned.get(), 0, new NodeApi.Cb() {
+        MAIN.post(() -> node.cmdDirect(cmd, () -> !abandoned.get(), 0, new Transport.Reply() {
             public void onResult(JSONObject j) { out.set(j); done.countDown(); }
             public void onError(String m) { err.set(m == null ? "node error" : m); done.countDown(); }
         }));

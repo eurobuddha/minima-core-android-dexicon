@@ -1,4 +1,4 @@
-package com.eurobuddha.dexicon.account;
+package com.eurobuddha.account;
 
 import android.app.Activity;
 import android.content.ClipData;
@@ -14,13 +14,11 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 
-import com.eurobuddha.dexicon.Design;
-import com.eurobuddha.dexicon.NodeApi;
-
 import org.json.JSONObject;
 
 /**
- * First run on any node: create the Trading Account Dexicon signs with. Three ways in (owner, 9 Nov: offer both seed
+ * First run on any node: create the Trading Account the app signs with (shared by Dexicon, AtomiX and PandaPools;
+ * texts use {@link Account.Config#appName}). Three ways in (owner, 9 Nov: offer both seed
  * sources): a NEW 24-word phrase (default — never needs ADMIN), RESTORE those 24 words, or derive it from the node's
  * own seed with ONE temporary ADMIN grant. A restored or node-derived account may have signed on another install: the
  * key-use TIME FLOOR (AccountKeys) puts every signature beyond anything an earlier install signed.
@@ -28,11 +26,26 @@ import org.json.JSONObject;
 public final class AccountSetup {
     private AccountSetup() {}
 
+    /** The app's dialog styling (Dexicon: its Design tokens). Null in the config = platform defaults. */
+    public interface Look {
+        int dialogTheme();
+        int text();
+        Typeface mono();
+        Typeface sans();
+    }
 
     public interface Done { void ready(); }
-    private static NodeApi lastNode;
+    private static Transport lastNode;
 
-    public static void show(Activity a, NodeApi node, Done done) { show(a, node, done, false, null); }
+    private static String app() { return Account.config().appName; }
+    private static AlertDialog.Builder dialog(Activity a) {
+        Look l = Account.config().look;
+        return l == null ? new AlertDialog.Builder(a) : new AlertDialog.Builder(a, l.dialogTheme());
+    }
+    private static void color(TextView t) { Look l = Account.config().look; if (l != null) t.setTextColor(l.text()); }
+    private static int dp(Context c, int v) { return Math.round(v * c.getResources().getDisplayMetrics().density); }
+
+    public static void show(Activity a, Transport node, Done done) { show(a, node, done, false, null); }
 
     /** Where Back returns to: the restore-only screen once a lost account is being restored. */
     private static boolean restoreOnly;
@@ -42,46 +55,58 @@ public final class AccountSetup {
     /** {@code restoreOnly}: the account on this phone was lost (keystore) while {@code open} (positions, or "funds")
      *  remain locked to ITS keys — only the SAME account may be restored (checked by fingerprint); a new account is
      *  offered only on an explicit confirmation, and only when no position is open. */
-    public static void show(Activity a, NodeApi node, Done done, boolean ro, String open) {
+    public static void show(Activity a, Transport node, Done done, boolean ro, String open) {
         if (node != null) lastNode = node; else node = lastNode;
-        final NodeApi n = node;
+        String other = Family.otherInstalled(a);
+        if (other != null) { blocked(a, node, done, ro, open, other); return; }
+        final Transport n = node;
         restoreOnly = ro; restoreOpen = open;
         if (ro) { restoreOnlyDialog(a, n, done, open); return; }
-        boolean tradedBefore = !a.getSharedPreferences("dexicon_doors", Context.MODE_PRIVATE).getString("swap_pk", "").isEmpty();
-        TextView body = text(a, "Dexicon keeps its own Trading Account and signs every trade itself. Your Minima node only "
-                + "reads the chain and posts what Dexicon has already signed — so no other app on this phone can touch "
-                + "these funds, and Dexicon needs no ADMIN rights.\n\nMove funds in from your Minima wallet with "
+        java.util.function.Function<Activity, String> noticeOf = Account.config().setupNotice;
+        String notice = noticeOf == null ? null : noticeOf.apply(a);
+        boolean tradedBefore = notice != null && !notice.isEmpty();
+        TextView body = text(a, app() + " keeps its own Trading Account and signs every trade itself. Your Minima node only "
+                + "reads the chain and posts what " + app() + " has already signed — so no other app on this phone can touch "
+                + "these funds, and " + app() + " needs no ADMIN rights.\n\nMove funds in from your Minima wallet with "
                 + "RECEIVE; send them back any time."
-                + (tradedBefore ? "\n\n⚠ You have swapped with AtomiX here before. The Trading Account has its OWN Ethereum "
-                + "wallet: after this step Dexicon shows the new one, and any ETH / USDT left in the old AtomiX Ethereum wallet "
-                + "is reachable only from the standalone AtomiX app or the AtomiX MiniDapp on your node (both derive it from "
-                + "your node's seed)." : ""), false);
-        AlertDialog main = new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Your Trading Account").setView(pad(a, body)).setCancelable(false)
+                + (tradedBefore ? "\n\n⚠ " + notice : ""), false);
+        AlertDialog main = dialog(a).setTitle("Your Trading Account").setView(pad(a, body)).setCancelable(false)
                 .setPositiveButton("Create new", (d, w) -> create(a, done))
                 .setNeutralButton("Restore 24 words", (d, w) -> restore(a, done))
                 .setNegativeButton("Use node seed", (d, w) -> fromNode(a, n, done))
                 .show();
         if (tradedBefore) {
-            new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Before you continue").setCancelable(false)
-                    .setMessage("Is there ETH or USDT in the old AtomiX Ethereum wallet that you still need to move out? "
+            dialog(a).setTitle("Before you continue").setCancelable(false)
+                    .setMessage("Is there anything in that old wallet you still need to move out first? "
                             + "You can come back to this step any time.")
                     .setPositiveButton("No — continue", null)
                     .setNegativeButton("Yes — move it first", (d, w) -> { main.dismiss(); a.finish(); }).show();
         }
     }
 
-    private static void restoreOnlyDialog(Activity a, NodeApi n, Done done, String open) {
+    /** Another family app is on this phone: no account is created or restored here until it is gone (one holder of the
+     *  account at a time — two apps signing with the same keys would reuse one-time leaves). */
+    private static void blocked(Activity a, Transport node, Done done, boolean ro, String open, String other) {
+        dialog(a).setTitle("One Trading Account app at a time").setCancelable(false)
+                .setView(pad(a, text(a, other + " is installed on this phone. Dexicon, AtomiX and PandaPools share ONE Trading "
+                        + "Account, and only one of them may hold it.\n\nIn " + other + ": finish or hand over anything open, "
+                        + "then uninstall it. Then come back here and " + (ro ? "restore your account." : "create or restore your account."), false)))
+                .setPositiveButton("Check again", (d, w) -> show(a, node, done, ro, open))
+                .setNegativeButton("Close", (d, w) -> a.finish()).show();
+    }
+
+    private static void restoreOnlyDialog(Activity a, Transport n, Done done, String open) {
         AccountVault v = new AccountVault(a);
         boolean nodeMode = AccountVault.MODE_NODE.equals(v.lostMode());
         boolean nothingOpen = open == null || "funds".equals(open);
-        AlertDialog.Builder b = new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Restore your Trading Account").setCancelable(false)
+        AlertDialog.Builder b = dialog(a).setTitle("Restore your Trading Account").setCancelable(false)
                 .setView(pad(a, text(a, "This phone's Trading Account can no longer be unlocked" + (nothingOpen ? "" : ", and it still has " + open)
                         + ". Restore THE SAME account: " + (nodeMode ? "it came from your node's seed — use Use node seed." : "its 24 words.")
                         + " (The locked copy is kept.)", false)))
                 .setPositiveButton(nodeMode ? "Use node seed" : "Restore 24 words", (d, w) -> { if (nodeMode) fromNode(a, n, done); else restore(a, done); });
-        if (nothingOpen) b.setNegativeButton("Lost the words?", (d, w) -> new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Start a NEW account?")
+        if (nothingOpen) b.setNegativeButton("Lost the words?", (d, w) -> dialog(a).setTitle("Start a NEW account?")
                 .setMessage("Anything still at the old Trading Account's addresses stays there, reachable ONLY with its own words "
-                        + "(restore them in Dexicon on a fresh install). Start a new, empty account anyway?").setCancelable(false)
+                        + "(restore them on a fresh install). Start a new, empty account anyway?").setCancelable(false)
                 .setPositiveButton("Start new", (x, y) -> create(a, done))
                 .setNegativeButton("Back", (x, y) -> back(a, done)).show());
         b.show();
@@ -99,12 +124,12 @@ public final class AccountSetup {
         String phrase = AccountVault.newPhrase();
         LinearLayout box = new LinearLayout(a); box.setOrientation(LinearLayout.VERTICAL);
         box.addView(text(a, "Write these 24 words down, in order, and keep them offline. They are the ONLY way to recover "
-                + "this Trading Account. Dexicon never shows them to anyone and never sends them anywhere.", false));
+                + "this Trading Account. " + app() + " never shows them to anyone and never sends them anywhere.", false));
         TextView words = text(a, numbered(phrase), true);
         box.addView(words);
-        CheckBox ok = new CheckBox(a); ok.setText("I have written down all 24 words"); ok.setTextColor(Design.TEXT());
+        CheckBox ok = new CheckBox(a); ok.setText("I have written down all 24 words"); { Look l = Account.config().look; if (l != null) ok.setTextColor(l.text()); }
         box.addView(ok);
-        AlertDialog d = new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("New Trading Account").setView(pad(a, box))
+        AlertDialog d = dialog(a).setTitle("New Trading Account").setView(pad(a, box))
                 .setCancelable(false).setPositiveButton("Create", null).setNegativeButton("Back", (x, w) -> back(a, done)).create();
         secure(d);
         d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
@@ -119,12 +144,12 @@ public final class AccountSetup {
         EditText in = new EditText(a);
         in.setHint("24 words, separated by spaces");
         in.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        in.setTextColor(Design.TEXT()); in.setMinLines(3);
+        { Look l = Account.config().look; if (l != null) in.setTextColor(l.text()); } in.setMinLines(3);
         in.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
         LinearLayout box = new LinearLayout(a); box.setOrientation(LinearLayout.VERTICAL);
         box.addView(text(a, "Restore a Trading Account. Only use it on ONE phone: stop using it everywhere else first.", false));
         box.addView(in);
-        AlertDialog d = new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Restore Trading Account").setView(pad(a, box))
+        AlertDialog d = dialog(a).setTitle("Restore Trading Account").setView(pad(a, box))
                 .setCancelable(false).setPositiveButton("Restore", null).setNegativeButton("Back", (x, w) -> back(a, done)).create();
         secure(d);
         d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
@@ -139,15 +164,15 @@ public final class AccountSetup {
         d.show();
     }
 
-    private static void fromNode(Activity a, NodeApi node, Done done) {
+    private static void fromNode(Activity a, Transport node, Done done) {
         if (node == null) { back(a, done); return; }
-        new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Derive from your node's seed")
-                .setView(pad(a, text(a, "Dexicon will read ONE value derived from your node's seed. That needs ADMIN once: "
-                        + "give Dexicon ADMIN in Minima Core → Apps, tap Derive, then switch ADMIN off again.\n\n"
+        dialog(a).setTitle("Derive from your node's seed")
+                .setView(pad(a, text(a, app() + " will read ONE value derived from your node's seed. That needs ADMIN once: "
+                        + "give " + app() + " ADMIN in Minima Core → Apps, tap Derive, then switch ADMIN off again.\n\n"
                         + "Your node's 24 words will then also restore this account. Note: on Minima Core any app you have "
                         + "enabled could compute the same value, so a new phrase (Create new) is the safer choice.", false)))
                 .setCancelable(false)
-                .setPositiveButton("Derive", (d, w) -> { node.reRegister(); new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> node.cmdDirect("seedrandom modifier:" + AccountKeys.DOMAIN, null, 0, new NodeApi.Cb() {
+                .setPositiveButton("Derive", (d, w) -> { node.reRegister(); new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> node.cmdDirect("seedrandom modifier:" + AccountKeys.DOMAIN, null, 0, new Transport.Reply() {
                     public void onResult(JSONObject j) {
                         JSONObject r = j.optJSONObject("response");
                         String hex = r == null ? "" : r.optString("seedrandom", "");
@@ -157,9 +182,9 @@ public final class AccountSetup {
                             if (wrong != null) { Toast.makeText(a, wrong, Toast.LENGTH_LONG).show(); back(a, done); return; }
                             new AccountVault(a).storeNodeBase(hex); done.ready();
                         }
-                        catch (Exception e) { Toast.makeText(a, "Dexicon needs ADMIN for this step: " + e.getMessage(), Toast.LENGTH_LONG).show(); back(a, done); }
+                        catch (Exception e) { Toast.makeText(a, app() + " needs ADMIN for this step: " + e.getMessage(), Toast.LENGTH_LONG).show(); back(a, done); }
                     }
-                    public void onError(String m) { Toast.makeText(a, "Dexicon needs ADMIN for this step: " + m, Toast.LENGTH_LONG).show(); back(a, done); }
+                    public void onError(String m) { Toast.makeText(a, app() + " needs ADMIN for this step: " + m, Toast.LENGTH_LONG).show(); back(a, done); }
                 }), 2500); })
                 .setNegativeButton("Back", (d, w) -> back(a, done)).show();
     }
@@ -171,7 +196,7 @@ public final class AccountSetup {
             String p = new AccountVault(a).revealPhrase();
             if (p == null) { Toast.makeText(a, "This account comes from your node's seed: your node's 24 words restore it.", Toast.LENGTH_LONG).show(); return; }
             // No Copy: the 24 words never go on a clipboard any other app can read. Write them down.
-            AlertDialog d = new AlertDialog.Builder(a, Design.dialogTheme()).setTitle("Trading Account words").setView(pad(a, text(a, numbered(p), true)))
+            AlertDialog d = dialog(a).setTitle("Trading Account words").setView(pad(a, text(a, numbered(p), true)))
                     .setPositiveButton("Done", null).create();
             secure(d);
             d.show();
@@ -192,17 +217,18 @@ public final class AccountSetup {
 
     private static TextView text(Context c, String s, boolean mono) {
         TextView t = new TextView(c);
-        t.setText(s); t.setTextColor(Design.TEXT()); t.setTextSize(mono ? 15 : 14);
-        t.setTypeface(mono ? Design.mono() : Design.sans(), Typeface.NORMAL);
+        t.setText(s); color(t); t.setTextSize(mono ? 15 : 14);
+        Look l = Account.config().look;
+        t.setTypeface(l == null ? (mono ? Typeface.MONOSPACE : Typeface.DEFAULT) : (mono ? l.mono() : l.sans()), Typeface.NORMAL);
         t.setTextIsSelectable(false);   // the 24 words are never selectable / copyable — write them down
-        t.setPadding(0, Design.dp(c, 6), 0, Design.dp(c, 6));
+        t.setPadding(0, dp(c, 6), 0, dp(c, 6));
         return t;
     }
 
     private static android.view.View pad(Context c, android.view.View v) {
         android.widget.ScrollView s = new android.widget.ScrollView(c);
-        int p = Design.dp(c, 20);
-        s.setPadding(p, Design.dp(c, 8), p, 0);
+        int p = dp(c, 20);
+        s.setPadding(p, dp(c, 8), p, 0);
         s.addView(v);
         return s;
     }
