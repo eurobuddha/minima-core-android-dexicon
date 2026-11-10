@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.90 app/src/main/java/com/eurobuddha/pandapools/ActivityLog.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.94 app/src/main/java/com/eurobuddha/pandapools/ActivityLog.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.Context;
@@ -14,7 +14,7 @@ import java.util.List;
  * neither elapsed blocks since submission nor wall-clock time establishes inclusion. */
 public final class ActivityLog {
 
-    public static final String CREATE="CREATE", SWAP="SWAP", DEPOSIT="DEPOSIT", MIGRATE="MIGRATE", CLOSE="CLOSE", CONSOLIDATE="CONSOLIDATE";
+    public static final String CREATE="CREATE", SWAP="SWAP", DEPOSIT="DEPOSIT", MIGRATE="MIGRATE", CLOSE="CLOSE", CONSOLIDATE="CONSOLIDATE", WITHDRAW="WITHDRAW";
     /** Node-reported confirmation depth required for a confirmed receipt. */
     public static final int CONFIRM_BLOCKS = 3;
 

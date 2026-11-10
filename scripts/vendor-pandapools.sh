@@ -21,7 +21,8 @@
 # since Dexicon 0.2.0: PandaPools' Wallet tab is hosted on Dexicon's ASSETS (owner, 4 Nov: full parity).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-ROOT=../pandapools/app/src
+PP=${PANDAPOOLS:-../pandapools}   # the PandaPools source tree (a worktree of another branch: PANDAPOOLS=../.pandapools-stock)
+ROOT=$PP/app/src
 SRC=$ROOT/main/java
 DST=app/src/main/java
 P=com/eurobuddha/pandapools
@@ -57,8 +58,8 @@ main/res/layout/view_balances.xml:app/src/main/res/layout/view_balances.xml main
 main/res/raw/minima_icon.svg:app/src/main/res/raw/minima_icon.svg
 test/resources/receipt-consolidation-header.json:app/src/test/resources/receipt-consolidation-header.json
 ../libs/minima.jar:app/libs/minima.jar"
-VER=$(grep -E 'versionName' ../pandapools/app/build.gradle | head -1 | grep -oE '"[^"]+"' | tr -d '"')
-head_for() { echo "// VENDORED VERBATIM from apks/pandapools $VER ${1#../pandapools/}/$2 by scripts/vendor-pandapools.sh — do not edit here; re-vendor."; }
+VER=$(grep -E 'versionName' $PP/app/build.gradle | head -1 | grep -oE '"[^"]+"' | tr -d '"')
+head_for() { echo "// VENDORED VERBATIM from apks/pandapools $VER ${1#$PP/}/$2 by scripts/vendor-pandapools.sh — do not edit here; re-vendor."; }
 fail=0
 MODE="${1:-}"
 run() {  # $1 = source root, $2 = destination root, $3 = file

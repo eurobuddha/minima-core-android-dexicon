@@ -601,4 +601,18 @@ public final class DexiconPools {
     static void resetPassClock() { lastPassMs = 0; }
     /** For tests: make the cached custody read {@code ms} older. */
     public static synchronized void ageCustody(long ms) { Custody k = custody; if (k != null) custody = new Custody(k.installed, k.keptHere, k.at - ms); }
+
+    /** Pool work still tied to keys that are not yet settled, as PandaPools' hand-over judges it: a close / migrate not
+     *  yet confirmed on chain, a payout still to collect, a withdrawal not settled (Dexicon's LegacyPositions). */
+    public static String poolWorkOpen(android.content.Context c) {
+        StringBuilder b = new StringBuilder();
+        if (ActivityLog.hasPending(c, 0, ActivityLog.CLOSE) || ActivityLog.hasPending(c, 0, ActivityLog.MIGRATE)) b.append("a pool close not yet confirmed");
+        if (!PendingCollect.all(c).isEmpty()) b.append(b.length() > 0 ? ", " : "").append("a pool payout to collect");
+        for (ExitStore.Record r : ExitStore.all(c)) {   // terminal = DONE / SKIPPED / FAILED as stored (PandaPools Handover.exitSettled)
+            boolean settled = ExitStore.State.DONE.name().equals(r.state) || ExitStore.State.SKIPPED.name().equals(r.state)
+                    || ExitStore.State.FAILED.name().equals(r.state);
+            if (!settled) { b.append(b.length() > 0 ? ", " : "").append("a pool withdrawal in progress"); break; }
+        }
+        return b.length() == 0 ? null : b.toString();
+    }
 }

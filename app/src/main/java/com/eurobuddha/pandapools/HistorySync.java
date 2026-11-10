@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.90 app/src/main/java/com/eurobuddha/pandapools/HistorySync.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.94 app/src/main/java/com/eurobuddha/pandapools/HistorySync.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONArray;
@@ -54,7 +54,7 @@ public class HistorySync {
         if (++fetches > MAX_FETCHES) { finish(false); return; }
         act.node().cmd("history relevant:true max:" + pageMax + " offset:" + offset, new NodeApi.Cb() {
             @Override public void onResult(JSONObject j) {
-                act.markPaired(true);                     // reached the node — hide the pairing banner
+                // NodeApi reports pairing transitions after validating a successful reply.
                 JSONObject r = j.optJSONObject("response");
                 JSONArray txpows = r != null ? r.optJSONArray("txpows") : null;
                 if (r == null || txpows == null || !j.optBoolean("status", true)) {
@@ -88,7 +88,7 @@ public class HistorySync {
                 act.ui().postDelayed(() -> fetchPage(offset + got), PAGE_DELAY_MS); // keep paging
             }
             @Override public void onError(String m) {
-                if (NodeApi.ERR_NOT_ENABLED.equals(m)) { act.markPaired(false); finish(false); return; }
+                if (NodeApi.ERR_NOT_ENABLED.equals(m)) { finish(false); return; }
                 overLimit(offset);                        // dropped oversized reply / timeout → shrink + retry
             }
         });

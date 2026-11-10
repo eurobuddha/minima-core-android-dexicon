@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.90 app/src/main/java/com/eurobuddha/pandapools/OwnerKeyRecovery.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.94 app/src/main/java/com/eurobuddha/pandapools/OwnerKeyRecovery.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.Context;
@@ -245,6 +245,10 @@ public final class OwnerKeyRecovery {
                 if (!readable) { cb.accept("Could not verify current wallet keys. Nothing consolidated."); return; }
                 Set<String> held = pubkeys(reply);
                 for (Pool p : recipes.get()) {
+                    // a RETIRED recipe whose owner key this wallet does not hold (a node-key pool, closed, on a phone that
+                    // moved to the Trading Account): the wallet can never sign with that key, so no consolidate / send can
+                    // pick its coins — nothing to protect. A LIVE pool keeps the strict rule (refuse until it is resolved).
+                    if (p.retired && (p.opk == null || !held.contains(p.opk.toLowerCase(Locale.ROOT)))) continue;
                     Integer uses = KeyUses.extractUses(reply, p.opk);
                     int cap = KeyUses.capacityOf(reply, p.opk);
                     if (signingAllowed(p, uses, cap)) continue;

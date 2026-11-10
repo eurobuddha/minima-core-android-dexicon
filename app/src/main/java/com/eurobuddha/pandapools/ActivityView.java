@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.90 app/src/main/java/com/eurobuddha/pandapools/ActivityView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.94 app/src/main/java/com/eurobuddha/pandapools/ActivityView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.ClipData;
@@ -492,6 +492,7 @@ public class ActivityView extends BaseView {
     private static String prettyType(String type) {
         switch (type) {
             case ActivityLog.CONSOLIDATE: return "Consolidate coins";
+            case ActivityLog.WITHDRAW: return "Withdraw to your node";
             case ActivityLog.CREATE:  return "Create pool";
             case ActivityLog.SWAP:    return "Swap";
             case ActivityLog.DEPOSIT: return "Add liquidity";

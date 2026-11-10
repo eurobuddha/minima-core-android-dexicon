@@ -234,6 +234,12 @@ public class NodeApi {
         });
     }
 
+    /** Straight to the node (no Trading Account interception): the vendored Wallet's withdraw reads the NODE's own
+     *  getaddress through this (PandaPools' NodeApi has the same method). */
+    public void cmdDirect(String command, java.util.function.BooleanSupplier guard, long timeoutMs, com.eurobuddha.account.Transport.Reply reply) {
+        node.cmdDirect(command, guard, timeoutMs, reply);
+    }
+
     /** Existing admin-gated FILE service; bytes travel through content URIs, never Binder payloads. */
     public void file(String action, String path, String newPath, android.net.Uri uri, Cb cb) {
         node.file(action, path, newPath, uri, new com.eurobuddha.dexicon.NodeApi.Cb() {

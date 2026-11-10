@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.90 app/src/main/java/com/eurobuddha/pandapools/WalletView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.94 app/src/main/java/com/eurobuddha/pandapools/WalletView.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.ClipData;
@@ -171,6 +171,14 @@ public class WalletView extends BaseView {
         TextView check = mono("Check node connection", 14f, Design.accent(), true);
         check.setPadding(0, dp(12), 0, dp(12));
         check.setOnClickListener(v -> new WalletTools(act).checkNode()); box.addView(check);
+        if (com.eurobuddha.account.Account.exists(act)) {   // the Trading Account: move funds back to the node, see the words
+            TextView withdraw = mono("Withdraw to your node", 14f, Design.accent(), true);
+            withdraw.setPadding(0, dp(12), 0, dp(12));
+            withdraw.setOnClickListener(v -> new WalletTools(act).showWithdraw(balances)); box.addView(withdraw);
+            TextView words = mono("Show Trading Account words", 14f, Design.accent(), true);
+            words.setPadding(0, dp(12), 0, dp(12));
+            words.setOnClickListener(v -> com.eurobuddha.account.AccountSetup.reveal(act)); box.addView(words);
+        }
         if (act.node().hasInterruptedWrite()) {
             TextView resolve = mono("Resolve interrupted write", 14f, Design.amber(), true);
             resolve.setPadding(0, dp(12), 0, dp(12));

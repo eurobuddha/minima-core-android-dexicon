@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.90 app/src/main/java/com/eurobuddha/pandapools/WalletTools.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.9.94 app/src/main/java/com/eurobuddha/pandapools/WalletTools.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import org.json.JSONObject;
@@ -79,6 +79,82 @@ final class WalletTools {
             });
         });
     }
+    /** Withdraw from the Trading Account to the node's OWN wallet (its real getaddress, read straight from the node).
+     *  Mx addresses only: the checksum catches a pasted token / coin id, which a bare 0x string would burn to. */
+    void showWithdraw(java.util.List<TokenBalance> balances) {
+        java.util.List<TokenBalance> some = new java.util.ArrayList<>();
+        for (TokenBalance b : balances) try { if (new java.math.BigDecimal(b.sendable).signum() > 0) some.add(b); } catch (Exception ignored) { }
+        if (some.isEmpty()) { message("Nothing sendable to withdraw right now."); return; }
+        String[] names = new String[some.size()];
+        for (int i = 0; i < names.length; i++) names[i] = label(some.get(i)) + "  (" + some.get(i).sendable + " sendable)";
+        new androidx.appcompat.app.AlertDialog.Builder(act, theme()).setTitle("Withdraw which token?")
+                .setItems(names, (d, i) -> act.node().cmdDirect("getaddress", null, 0, new com.eurobuddha.account.Transport.Reply() {
+                    public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); withdrawForm(some.get(i), r == null ? "" : r.optString("miniaddress", "")); }
+                    public void onError(String m) { withdrawForm(some.get(i), ""); }
+                })).setNegativeButton("Cancel", null).show();
+    }
+
+    private void withdrawForm(TokenBalance b, String nodeAddr) {
+        if (act.isFinishing() || act.isDestroyed()) return;
+        android.widget.LinearLayout box = new android.widget.LinearLayout(act); box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int p = Math.round(20 * act.getResources().getDisplayMetrics().density); box.setPadding(p, p / 2, p, 0);
+        android.widget.EditText amt = new android.widget.EditText(act);
+        amt.setHint("Amount (max " + b.sendable + ")");
+        amt.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        android.widget.EditText to = new android.widget.EditText(act);
+        to.setHint("Minima address (Mx…)"); to.setText(nodeAddr); to.setTypeface(android.graphics.Typeface.MONOSPACE);
+        box.addView(amt); box.addView(to);
+        new androidx.appcompat.app.AlertDialog.Builder(act, theme()).setTitle("Withdraw " + b.name).setView(box)
+                .setMessage(nodeAddr.isEmpty() ? null : "Pre-filled with your node's own wallet address.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Review", (d, w) -> {
+                    java.math.BigDecimal a, max;
+                    String typed = amt.getText().toString().trim();
+                    if (!typed.matches("[0-9]+(\\.[0-9]+)?")) { message("Enter the amount as plain digits, e.g. 10 or 0.5."); return; }
+                    try { a = new java.math.BigDecimal(typed); max = new java.math.BigDecimal(b.sendable); }
+                    catch (Exception e) { message("Enter an amount."); return; }
+                    String addr = to.getText().toString().trim();
+                    if (a.signum() <= 0 || a.compareTo(max) > 0) { message("The amount must be above 0 and at most " + b.sendable + "."); return; }
+                    if (!validMx(addr)) { message("That is not a valid Minima address (Mx…)."); return; }
+                    String amount = a.stripTrailingZeros().toPlainString();
+                    new androidx.appcompat.app.AlertDialog.Builder(act, theme()).setTitle("Withdraw " + amount + " " + label(b) + "?")
+                            .setMessage("To:\n" + addr + "\n\nSigned by your Trading Account and posted through your node.")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Withdraw", (x, y) -> withdraw(b.tokenid, label(b), amount, addr)).show();
+                }).show();
+    }
+
+    /** MINIMA by name; any other token by name AND its full token id (two tokens can share a name). */
+    private static String label(TokenBalance b) { return b.isMinima() ? "MINIMA" : b.name + " (" + b.tokenid + ")"; }
+
+    static boolean validMx(String a) {
+        if (a == null || !a.startsWith("Mx")) return false;
+        try { return org.minima.objects.Address.convertMinimaAddress(a).getLength() == 32; } catch (RuntimeException bad) { return false; }
+    }
+
+    private void withdraw(String token, String name, String amount, String addr) {
+        String summary = "Withdraw " + amount + " " + name + " to " + addr;
+        TxPost.Done done = TxPost.gated(new TxPost.Done() {
+            public void ok(String id) { ActivityLog.record(act, ActivityLog.WITHDRAW, summary, id, act.chainBlock()); message("Withdrawal submitted. Activity shows its on-chain confirmations."); }
+            public void fail(String error) { ActivityLog.recordFailed(act, ActivityLog.WITHDRAW, summary, error); message(error); }
+        });
+        TxPost.submit(() -> OwnerKeyRecovery.checkConsolidation(act.node()::cmd, () -> OwnPoolStore.all(act), error -> {
+            // a send picks coins like consolidate does: never a pool owner coin it must not sign (the same guard)
+            if (error != null) { done.fail(error); return; }
+            act.node().cmd("send address:" + addr + " amount:" + amount + (Util.MINIMA_TOKENID.equals(token) ? "" : " tokenid:" + token), new NodeApi.Cb() {
+                public void onResult(JSONObject reply) {
+                    if (!TxPost.truthy(reply, "status")) { done.fail(nodeError(reply)); return; }
+                    String id = Util.extractTxpowid(reply, "");
+                    ActivityLog.rememberSubmission(act, reply, id);
+                    done.ok(id);
+                }
+                public void onError(String error) { done.fail(error); }
+            });
+        }));
+    }
+
+    private int theme() { return Design.isDark() ? androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert : androidx.appcompat.R.style.Theme_AppCompat_Light_Dialog_Alert; }
+
     void resolveInterruptedWrite() {
         if (!act.node().hasInterruptedWrite()) { message("There is no interrupted write to resolve."); return; }
         final String reviewed = act.node().interruptedWriteId();

@@ -52,6 +52,10 @@ public final class LegacyPositions {
             int pools = com.eurobuddha.pandapools.OwnPoolStore.active(c).size();
             if (pools > 0) b.append(b.length() > 0 ? ", " : "").append(pools).append(pools == 1 ? " pool you own" : " pools you own");
         } catch (RuntimeException unreadable) { b.append(b.length() > 0 ? ", " : "").append("pools unreadable"); }
+        try {
+            String work = com.eurobuddha.pandapools.DexiconPools.poolWorkOpen(c);   // a close posted but not yet confirmed, …
+            if (work != null) b.append(b.length() > 0 ? ", " : "").append(work);
+        } catch (RuntimeException unreadable) { b.append(b.length() > 0 ? ", " : "").append("pool work unreadable"); }
         return b.length() == 0 ? null : b.toString();
     }
 }
