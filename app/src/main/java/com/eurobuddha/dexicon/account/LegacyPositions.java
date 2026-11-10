@@ -40,6 +40,27 @@ public final class LegacyPositions {
 
     public static void invalidate() { cachedAt = 0; }
 
+    /** The fingerprints recorded on those account pools (empty = none recorded). */
+    public static java.util.Set<String> accountPoolOwners(Context c) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        try { for (com.eurobuddha.pandapools.Pool p : com.eurobuddha.pandapools.OwnPoolStore.all(c))
+                if (p.accountOwned && (!p.retired || !p.drained) && !p.accountFp.isEmpty()) out.add(p.accountFp); }
+        catch (RuntimeException unreadable) { }
+        return out;
+    }
+
+    /** How that account was made, when every such pool records the same mode; "" otherwise. */
+    public static String accountPoolMode(Context c) {
+        String mode = null;
+        try {
+            for (com.eurobuddha.pandapools.Pool p : com.eurobuddha.pandapools.OwnPoolStore.all(c)) {
+                if (!p.accountOwned || (p.retired && p.drained)) continue;
+                if (mode == null) mode = p.accountMode; else if (!mode.equals(p.accountMode)) return "";
+            }
+        } catch (RuntimeException unreadable) { return ""; }
+        return mode == null ? "" : mode;
+    }
+
     /** {@code nodeKeyOnly}: the node-key gate ("finish before upgrading") skips account-owned recipes; everything else
      *  (a lost account's restore, "Move your Trading Account") must see every pool not proven empty, whoever owns it. */
     private static String scan(Context c, boolean nodeKeyOnly) {

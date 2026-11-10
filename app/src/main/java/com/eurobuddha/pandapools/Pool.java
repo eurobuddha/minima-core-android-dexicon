@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.97 app/src/main/java/com/eurobuddha/pandapools/Pool.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.0 app/src/main/java/com/eurobuddha/pandapools/Pool.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import java.math.BigDecimal;
@@ -38,6 +38,8 @@ public class Pool {
     public boolean drained = false;
     /** Recorded while a Trading Account existed on this phone: its owner key is an ACCOUNT key, never the node's. */
     public boolean accountOwned = false;
+    /** That account's fingerprint and mode (AccountVault marker) — a restore on another phone must be THIS account. */
+    public String accountFp = "", accountMode = "";
 
     /** Display symbol for the token side: its resolved name where we have one, otherwise the FULL tokenid.
      *  Never abbreviated — a shortened tokenid cannot be pasted into an explorer or a support request, and this

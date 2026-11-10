@@ -53,12 +53,28 @@ public final class AccountSetup {
     /** Where Back returns to: the restore-only screen once a lost account is being restored. */
     private static boolean restoreOnly;
     private static String restoreOpen;
-    private static void back(Activity a, Done done) { show(a, null, done, restoreOnly, restoreOpen); }
+    private static void back(Activity a, Done done) { show0(a, null, done, restoreOnly, restoreOpen); }
+    /** Pools carried to this phone without their account (a device transfer): the fingerprints / mode recorded on them. */
+    private static java.util.Set<String> owners = java.util.Collections.emptySet();
+    private static String ownersMode = "";
+
+    /** Restore-only for pools that belong to a Trading Account this phone never held: only an account whose fingerprint
+     *  is one of {@code fingerprints} is accepted (empty = not recorded, e.g. pools from an early test build); {@code mode}
+     *  is how that account was made (AccountVault.MODE_NODE = from the node's seed; "" = unknown, both are offered). */
+    public static void showForPools(Activity a, Transport node, Done done, String open, java.util.Set<String> fingerprints, String mode) {
+        owners = fingerprints == null ? java.util.Collections.emptySet() : fingerprints;
+        ownersMode = mode == null ? "" : mode;
+        show0(a, node, done, true, open);
+    }
 
     /** {@code restoreOnly}: the account on this phone was lost (keystore) while {@code open} (positions, or "funds")
      *  remain locked to ITS keys — only the SAME account may be restored (checked by fingerprint); a new account is
      *  offered only on an explicit confirmation, and only when no position is open. */
     public static void show(Activity a, Transport node, Done done, boolean ro, String open) {
+        owners = java.util.Collections.emptySet(); ownersMode = "";
+        show0(a, node, done, ro, open);
+    }
+    private static void show0(Activity a, Transport node, Done done, boolean ro, String open) {
         if (node != null) lastNode = node; else node = lastNode;
         String other = Family.otherInstalled(a);
         if (other != null) { blocked(a, node, done, ro, open, other); return; }
@@ -96,12 +112,13 @@ public final class AccountSetup {
                         + "Account, and only one of them may hold it.\n\nIn " + other + ": finish or hand over anything open, "
                         + "then uninstall it fully (an app removed with its data kept still counts). Then come back here and "
                         + (ro ? "restore your account." : "create or restore your account.") + " One phone, one profile.", false)))
-                .setPositiveButton("Check again", (d, w) -> show(a, node, done, ro, open))
+                .setPositiveButton("Check again", (d, w) -> show0(a, node, done, ro, open))
                 .setNegativeButton("Close", (d, w) -> a.finish()).show();
     }
 
     private static void restoreOnlyDialog(Activity a, Transport n, Done done, String open) {
         AccountVault v = new AccountVault(a);
+        if (v.lostMode().isEmpty() && v.knownFingerprints().isEmpty()) { carriedPoolsDialog(a, n, done, open); return; }
         boolean nodeMode = AccountVault.MODE_NODE.equals(v.lostMode());
         boolean nothingOpen = open == null || "funds".equals(open);
         AlertDialog.Builder b = dialog(a).setTitle("Restore your Trading Account").setCancelable(false)
@@ -117,12 +134,35 @@ public final class AccountSetup {
         b.show();
     }
 
-    /** A restore while recovering a LOST account must be that account (same fingerprint). */
+    /** No account was ever on this phone, yet pools made with one are here (a device transfer copies their recipes, not
+     *  the account): restore THAT account — by its words or the node seed, as it was made — or leave it for later. */
+    private static void carriedPoolsDialog(Activity a, Transport n, Done done, String open) {
+        boolean node = AccountVault.MODE_NODE.equals(ownersMode), phrase = !ownersMode.isEmpty() && !node;
+        AlertDialog.Builder b = dialog(a).setTitle("Restore the account these pools belong to").setCancelable(false)
+                .setView(pad(a, text(a, (open == null ? "These pools" : "These " + open) + " were made with a Trading Account "
+                        + "that is not on this phone. Only THAT account can close them or collect from them: restore it "
+                        + (node ? "from your node's seed (Use node seed)." : phrase ? "from its 24 words." : "from its 24 words, or with "
+                        + "Use node seed if it came from your node.") + " A different account is refused.", false)))
+                .setNegativeButton("Later", null);
+        if (!node) b.setPositiveButton("Restore 24 words", (d, w) -> restore(a, done));
+        if (!phrase) b.setNeutralButton("Use node seed", (d, w) -> fromNode(a, n, done));
+        b.show();
+    }
+
+    /** A restore while recovering a LOST account, or the account of carried-over pools, must be that account. */
     private static String wrongAccount(Activity a, String fingerprint) {
         if (!restoreOnly) return null;
-        java.util.Set<String> known = new AccountVault(a).knownFingerprints();
-        return known.isEmpty() || known.contains(fingerprint.toLowerCase(java.util.Locale.ROOT)) ? null
-                : "That is not this phone's Trading Account — its positions need the SAME account. Nothing was changed.";
+        return wrongAccount(new AccountVault(a).knownFingerprints(), owners, fingerprint);
+    }
+
+    /** Pure: accepted when no fingerprint is known at all, or {@code fp} is one of this phone's or the pools' accounts. */
+    static String wrongAccount(java.util.Set<String> known, java.util.Set<String> pools, String fp) {
+        String f = fp.toLowerCase(java.util.Locale.ROOT);
+        if (known.isEmpty() && pools.isEmpty()) return null;
+        if (known.contains(f)) return null;
+        for (String p : pools) if (p.equalsIgnoreCase(f)) return null;
+        return pools.isEmpty() ? "That is not this phone's Trading Account — its positions need the SAME account. Nothing was changed."
+                : "That is not the account these pools belong to. Nothing was changed.";
     }
 
     private static void create(Activity a, Done done) {

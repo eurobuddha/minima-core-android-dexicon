@@ -260,6 +260,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     /** First run: set up the Trading Account — unless an earlier Dexicon still has node-key positions here, which settle
      *  the old way first (owner, 9 Nov: finish before upgrading). */
     private boolean offering, legacyNoticeShown;
+    private static String lastProofSaid = "";
     private int lockedTries;
     private final Runnable retryOffer = this::offerAccount;
     private void offerAccount() {
@@ -293,7 +294,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         }
         int acctPools = com.eurobuddha.dexicon.account.LegacyPositions.accountPools(this);
         if (acctPools > 0) {   // pools made under a Trading Account (e.g. carried by a device transfer): only its words settle them
-            com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, true, acctPools + (acctPools == 1 ? " pool" : " pools"));
+            com.eurobuddha.account.AccountSetup.showForPools(this, node, this::onAccountReady, acctPools + (acctPools == 1 ? " pool" : " pools"),
+                    com.eurobuddha.dexicon.account.LegacyPositions.accountPoolOwners(this), com.eurobuddha.dexicon.account.LegacyPositions.accountPoolMode(this));
             return;
         }
         String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);
@@ -304,8 +306,10 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             if (isFinishing() || isDestroyed()) return;
             com.eurobuddha.dexicon.account.LegacyPositions.invalidate();
             if (com.eurobuddha.dexicon.account.LegacyPositions.describe(this) == null) { offerAccount(); return; }
-            if (!failed.isEmpty()) {
-                TextView t = new TextView(this); t.setText(String.join("\n\n", failed)); t.setTextIsSelectable(true);   // full pool addresses, copyable
+            String said = String.join("\n\n", failed);
+            if (!failed.isEmpty() && !said.equals(lastProofSaid)) {   // the same answer is not shown again
+                lastProofSaid = said;
+                TextView t = new TextView(this); t.setText(said); t.setTextIsSelectable(true);   // full pool addresses, copyable
                 int pp = Design.dp(this, 20); t.setPadding(pp, pp / 2, pp, 0);
                 track(new AlertDialog.Builder(this, Design.dialogTheme()).setTitle("Closed pools not proven empty").setView(t)
                         .setPositiveButton("OK", null).show());

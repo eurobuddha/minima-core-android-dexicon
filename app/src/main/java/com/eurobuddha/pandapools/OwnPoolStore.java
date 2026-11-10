@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/pandapools 0.9.97 app/src/main/java/com/eurobuddha/pandapools/OwnPoolStore.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/pandapools 0.10.0 app/src/main/java/com/eurobuddha/pandapools/OwnPoolStore.java by scripts/vendor-pandapools.sh — do not edit here; re-vendor.
 package com.eurobuddha.pandapools;
 
 import android.content.Context;
@@ -44,7 +44,10 @@ public final class OwnPoolStore {
         try {
             String previous = prefs(c).getString(key(p.address), "");
             // a pool CREATED here (create / migrate) while the Trading Account exists is owned by an account key
-            if (previous.isEmpty() && p.newlyCreatedWithCurrentOwnerState && com.eurobuddha.account.Account.everCreated(c)) p.accountOwned = true;
+            if (previous.isEmpty() && p.newlyCreatedWithCurrentOwnerState && com.eurobuddha.account.Account.everCreated(c)) {
+                com.eurobuddha.account.AccountVault v = new com.eurobuddha.account.AccountVault(c);
+                p.accountOwned = true; p.accountFp = v.lostFingerprint(); p.accountMode = v.lostMode();
+            }
             JSONObject o = mergeRecord(p, previous);
             if (signingMetadataChanged(previous, o)) signingStateChanged();
             return prefs(c).edit().putString(key(p.address), o.toString()).commit();
@@ -78,7 +81,14 @@ public final class OwnPoolStore {
         if (retired) o.put("retired", true);
         // drained (proven empty) only means anything while retired; the owner-signer mark never changes once set
         if (retired && (p.drained || (!previous.isEmpty() && new JSONObject(previous).optBoolean("drained", false)))) o.put("drained", true);
-        if (p.accountOwned || (!previous.isEmpty() && new JSONObject(previous).optBoolean("acct", false))) o.put("acct", true);
+        if (p.accountOwned || (!previous.isEmpty() && new JSONObject(previous).optBoolean("acct", false))) {
+            o.put("acct", true);
+            JSONObject old = previous.isEmpty() ? new JSONObject() : new JSONObject(previous);
+            String fp = !isEmpty(p.accountFp) ? p.accountFp : old.optString("acct_fp", "");
+            String mode = !isEmpty(p.accountMode) ? p.accountMode : old.optString("acct_mode", "");
+            if (!fp.isEmpty()) o.put("acct_fp", fp);
+            if (!mode.isEmpty()) o.put("acct_mode", mode);
+        }
         if (FundingCoins.hex(p.coinidM) && FundingCoins.hex(p.coinidT)) {
             o.put("last_coinid_m", p.coinidM).put("last_coinid_t", p.coinidT);
         } else if (!previous.isEmpty()) {
@@ -187,6 +197,7 @@ public final class OwnPoolStore {
                 p.retired = o.optBoolean("retired", false);
                 p.drained = p.retired && o.optBoolean("drained", false);
                 p.accountOwned = o.optBoolean("acct", false);
+                p.accountFp = o.optString("acct_fp", ""); p.accountMode = o.optString("acct_mode", "");
                 p.coinidM = o.optString("last_coinid_m", ""); p.coinidT = o.optString("last_coinid_t", "");
                 p.covenantScript = o.optString("script", "");
                 if (!isEmpty(p.address) && !isEmpty(p.covenantScript)) out.add(p);
