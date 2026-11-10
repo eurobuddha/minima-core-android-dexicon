@@ -32,7 +32,11 @@ public class H1 {
         public synchronized void recordExternalUses(int k, int n) { u.put(k, Math.max(currentUses(k), n)); }
         public synchronized Map<Integer, Integer> snapshotAllUses() { return new HashMap<>(u); }
     }
-    static class MemStore implements VirtualWallet.Store { int n; public int keyCount() { return n; } public void setKeyCount(int x) { n = x; } }
+    static class MemStore implements VirtualWallet.Store {
+        int n; String posted = "{}";
+        public int keyCount() { return n; } public void setKeyCount(int x) { n = x; }
+        public String posted() { return posted; } public boolean savePosted(String j) { posted = j; return true; }
+    }
     static class MemCache implements AccountKeys.PubCache { Map<Integer,String> c = new HashMap<>(); public String get(int i) { return c.get(i); } public void put(int i, String p) { c.put(i, p); } }
 
     static VirtualWallet wallet(String phrase) {
@@ -230,6 +234,33 @@ public class H1 {
         check("consolidate reduced the coin count (" + before + " -> " + after + ")", before < 2 || after < before, before + " -> " + after);
         JSONObject dry = v(A, "send address:" + bAddr + " amount:1 dryrun:true");
         check("dryrun send signs and posts nothing", dry.optBoolean("status") && dry.getJSONObject("response").optBoolean("dryrun"), dry);
+
+        System.out.println("\n== 9. mine:false posts: txpow onchain: of the PRE-mining id is proven by the account (0.3.15)");
+        JSONObject sent = must(A, "send address:" + bAddr + " amount:1 mine:true");
+        String pre = sent.getJSONObject("response").optString("txpowid");
+        String txnid = sent.getJSONObject("response").getJSONObject("body").getJSONObject("txn").getString("transactionid");
+        System.out.println("  posted pre-mining txpowid " + pre + " txn " + txnid);
+        waitBlocks(2);
+        JSONObject nodeSays = raw("txpow onchain:" + pre, "0xFF");
+        check("the node itself never finds the pre-mining id (the bug)", !nodeSays.optJSONObject("response").optBoolean("found"), nodeSays);
+        waitBlocks(5);
+        JSONObject acct = A.handle("txpow onchain:" + pre);
+        JSONObject ar = acct == null ? new JSONObject() : acct.optJSONObject("response");
+        check("the account proves it: found at depth >= 3", ar != null && ar.optBoolean("found") && Long.parseLong(ar.optString("confirmations", "0")) >= 3, acct);
+        if (ar != null && ar.optBoolean("found")) {
+            long b = Long.parseLong(ar.getString("block"));
+            JSONObject blk = admin("txpow block:" + b).getJSONObject("response");
+            check("its blockid is the real block " + b, blk.getString("txpowid").equalsIgnoreCase(ar.getString("blockid")), blk.optString("txpowid"));
+            boolean inIt = txnid.equalsIgnoreCase(blk.getJSONObject("body").getJSONObject("txn").optString("transactionid"));
+            JSONArray inList = blk.getJSONObject("body").optJSONArray("txnlist");
+            for (int i = 0; !inIt && inList != null && i < inList.length(); i++) {
+                JSONObject t = admin("txpow txpowid:" + inList.getString(i)).optJSONObject("response");
+                if (t != null && txnid.equalsIgnoreCase(t.getJSONObject("body").getJSONObject("txn").optString("transactionid"))) inIt = true;
+            }
+            check("block " + b + " really carries our transaction " + txnid, inIt, blk.getJSONObject("body").opt("txnlist"));
+            check("engines' check: tip - block == confirmations", Long.parseLong(ar.getString("tip")) - b == Long.parseLong(ar.getString("confirmations")), ar);
+        }
+        check("a foreign id is not answered by the account", A.handle("txpow onchain:0x" + "99".repeat(32)) == null, "answered");
 
         System.out.println("\n===== H1: " + pass + " passed, " + failn + " failed =====");
         System.exit(failn == 0 ? 0 : 1);
