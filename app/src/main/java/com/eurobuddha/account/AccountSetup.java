@@ -110,11 +110,11 @@ public final class AccountSetup {
     /** Another family app is on this phone: no account is created or restored here until it is gone (one holder of the
      *  account at a time — two apps signing with the same keys would reuse one-time leaves). */
     private static void blocked(Activity a, Transport node, Done done, boolean ro, String open, String other) {
-        dialog(a).setTitle("One Trading Account app at a time").setCancelable(false)
-                .setView(pad(a, text(a, other + " is installed on this phone. Dexicon, AtomiX and PandaPools share ONE Trading "
-                        + "Account, and only one of them may hold it.\n\nIn " + other + ": finish or hand over anything open, "
-                        + "then uninstall it fully (an app removed with its data kept still counts). Then come back here and "
-                        + (ro ? "restore your account." : "create or restore your account.") + " One phone, one profile.", false)))
+        dialog(a).setTitle("AtomiX + PandaPools, or Dexicon").setCancelable(false)
+                .setView(pad(a, text(a, other + " is installed on this phone. A phone runs either Dexicon, or AtomiX and "
+                        + "PandaPools together — not both (and never two builds of the same app).\n\nIn " + other + ": finish or "
+                        + "hand over anything open, then uninstall it fully (an app removed with its data kept still counts). "
+                        + "Then come back here and " + (ro ? "restore your account." : "create or restore your account."), false)))
                 .setPositiveButton("Check again", (d, w) -> show0(a, node, done, ro, open))
                 .setNegativeButton("Close", (d, w) -> a.finish()).show();
     }

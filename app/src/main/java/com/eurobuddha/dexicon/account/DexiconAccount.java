@@ -25,7 +25,7 @@ public final class DexiconAccount {
 
     public static Account.Config config() {
         return new Account.Config("Dexicon", Arrays.asList(com.eurobuddha.atomix.swap.MinimaHtlc.HTLC_ADDRESSES),
-                DexiconAccount::received, LOOK, DexiconAccount::oldAtomixNotice);
+                DexiconAccount::received, LOOK, DexiconAccount::oldAtomixNotice, com.eurobuddha.account.AccountKeys.SLOT_DEXICON);
     }
 
     private static final AccountSetup.Look LOOK = new AccountSetup.Look() {

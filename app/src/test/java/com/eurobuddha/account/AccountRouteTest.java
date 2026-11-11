@@ -15,7 +15,7 @@ public class AccountRouteTest {
     static final Transport NODE = (c, g, t, cb) -> { };
 
     @Test public void withNoAccountWalletVerbsAreRefusedAndChainReadsPass() {
-        Account.configure(new Account.Config("Test", null, null, null, null));
+        Account.configure(new Account.Config("Test", null, null, null, null, AccountKeys.SLOT_DEXICON));
         Context c = RuntimeEnvironment.getApplication();
         assertEquals(Account.Route.NO_ACCOUNT, Account.route(c, NODE, "balance"));
         assertEquals(Account.Route.NO_ACCOUNT, Account.route(c, NODE, "send address:MxG081Z479YMTA95KCJBUW1B3JN0AMTBFVKG1HENPMM9C0GH76HUW4YYQWTRZFH amount:1"));

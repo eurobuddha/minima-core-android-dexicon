@@ -150,7 +150,7 @@ public final class AccountVault {
         if (exists()) throw new IllegalStateException("A Trading Account already exists on this phone.");
         // re-checked HERE, at the write (a setup dialog may have stayed open while another family app was installed)
         String other = Family.otherInstalled(app);
-        if (other != null) throw new IllegalStateException(other + " is installed: only one Trading Account app at a time. Nothing was saved.");
+        if (other != null) throw new IllegalStateException(other + " is installed: a phone runs either Dexicon, or AtomiX and PandaPools — not both. Nothing was saved.");
         String alias = KEY_ALIAS + "_" + System.currentTimeMillis();   // a fresh key per vault: a quarantined copy keeps its own
         Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
         c.init(Cipher.ENCRYPT_MODE, newKey(alias));
