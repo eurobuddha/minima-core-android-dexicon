@@ -509,8 +509,11 @@ public final class VirtualWallet {
             // it — no scan ever sees a lock older than that, so tracking cannot wait (review of 0.3.27). Known cost: once
             // spent, a lock imported this way stays in the NODE's balance as unspent (the spend of a coin the node does not
             // otherwise watch is never marked; cointrack cannot remove it; a resync clears it) — display only, never the
-            // account's funds. The real fix needs the lock to carry the receiver's tracked address (protocol change).
+            // account's funds. Locks from AtomiX 0.2.32 on carry the receiver's address at port 253 (an address the node
+            // tracks), so the node holds those itself and marks their spend — they are skipped here; the import remains
+            // for locks made by older apps.
             try {
+                if (Boolean.TRUE.equals(relevantNow(row.optString("coinid")))) { imported.add(id); continue; }
                 if (!unspentNow(row.optString("coinid"))) continue;
                 JSONObject ex = node.call("coinexport coinid:" + row.optString("coinid"));
                 JSONObject resp = ex.optJSONObject("response");

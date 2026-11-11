@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.31 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.32 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -237,6 +237,31 @@ public final class MinimaHtlc {
         }, cb::err);
     }
 
+    /**
+     * Port 253 of every new lock: the RECEIVER's simple address, {@code RETURN SIGNEDBY(<port 4 key>)}. No contract reads
+     * it (v1.2 and v1.3 read ports 0-6, and 100-103 at claim), so the HTLC address is unchanged and older apps simply
+     * ignore it. A node keeps a coin, and notices its spend, when one of its state values equals an address the node
+     * tracks: the receiver's node therefore holds the lock as soon as it is mined and sees the claim or refund — instead
+     * of a hand import that never learns the coin was spent (the phantom MxUSD of 10 Nov 2026). Timing is untouched:
+     * this never changes CP_BLOCKS / CP_SECS_CHECK (see the counter-leg analysis before changing either).
+     */
+    public static final int RECEIVER_ADDRESS_PORT = 253;
+
+    /** The receiver's address from the node's read-only {@code runscript}; null when the node cannot say — the lock then
+     *  goes out in today's format (no port 253), never blocked by this lookup. The CLEAN address: the node tracks an
+     *  account by its cleaned script (newscript cleans; cleaning uppercases hex), and a counter-leg receiver key read
+     *  off the Ethereum contract is lowercase — the raw-script address of that is one nobody tracks (review, 11 Nov).
+     *  {@code then} runs exactly once (a NodeApi may report a callback's own exception as a second, error reply). */
+    private void receiverAddress(String receiverPubkey, Consumer<String> then) {
+        java.util.concurrent.atomic.AtomicBoolean once = new java.util.concurrent.atomic.AtomicBoolean();
+        cmd("runscript script:\"RETURN SIGNEDBY(" + receiverPubkey + ")\"", r -> {
+            JSONObject resp = r.optJSONObject("response");
+            JSONObject clean = resp == null ? null : resp.optJSONObject("clean");
+            String a = clean == null ? "" : clean.optString("address", "");
+            if (once.compareAndSet(false, true)) then.accept(a.matches("0x[0-9a-fA-F]{64}") ? a : null);
+        }, e -> { if (once.compareAndSet(false, true)) then.accept(null); });
+    }
+
     // ---- LOCK: send a coin to the HTLC with the 7 PREVSTATE fields ----
 
     /**
@@ -265,9 +290,14 @@ public final class MinimaHtlc {
         if (!isDecimal(requestAmount)) { cb.err("lock: non-decimal request amount"); return; }
         String lockAmt = maybeGrain(amount);
         if (!isDecimal(lockAmt))    { cb.err("lock: non-decimal amount"); return; }
+        // Fixed NOW, with the grain and the caller's market check: the lookup is a node round trip, and a host can
+        // switch the active market meanwhile (Dexicon) — a lock must never go out in another token than it was priced in.
+        final String token = activeToken, owner = myPubkey;
+        receiverAddress(receiverPubkey, receiverAddr -> {
+        if (!token.equals(activeToken)) { cb.err(NodeApi.ERR_COMMAND_CHANGED); return; }
         JSONObject state = new JSONObject();
         try {
-            state.put("0", myPubkey);
+            state.put("0", owner);
             state.put("1", requestAmount);
             state.put("2", "[" + reqToken + "]");
             state.put("3", timelockBlock);
@@ -275,19 +305,21 @@ public final class MinimaHtlc {
             state.put("5", hashlock);
             state.put("6", ownerEthKey);
             state.put("7", otc);
+            if (receiverAddr != null) state.put(String.valueOf(RECEIVER_ADDRESS_PORT), receiverAddr);
         } catch (Exception e) { cb.err("state build: " + e.getMessage()); return; }
 
         // Fund from ANY of my 64 default addresses (no fromaddress/signkey constraint) — the node has no
         // dedicated "bridge wallet" here, so pinning to one address would fail when funds sit elsewhere.
         // The refund owner is set explicitly via state[0]=myPubkey, so the coin stays mine to reclaim.
         String send = "send amount:" + lockAmt + " mine:true address:" + HTLC_ADDRESS
-                + " state:" + state.toString() + " tokenid:" + activeToken;
+                + " state:" + state.toString() + " tokenid:" + token;
         // M1: a `send` SIGNS on the node, so it must go through SignGate like every other signing path — a
         // user-initiated lock can otherwise sign a one-time key leaf concurrently with an autonomous claim/refund.
         runSigned(send, r -> {
             JSONObject resp = r.optJSONObject("response");
             cb.ok(resp == null ? "" : resp.optString("txpowid", ""));
         }, cb::err);
+        });
     }
 
     /** Lock the HTLC counter-leg from MULTIPLE pinned coins (combined), so the responder can fill a deal larger than
@@ -336,6 +368,8 @@ public final class MinimaHtlc {
         String change = subtract(totalSelected, amount);
         if (!isDecimal(amount)) { cb.err("lock: non-decimal amount"); return; }
         if (positive(change) && !isDecimal(change)) { cb.err("lock: non-decimal change"); return; }
+        final String lockAmount = amount;
+        receiverAddress(receiverPubkey, receiverAddr -> {
         String id = txnId();
         List<String> seq = new ArrayList<>();
         seq.add("txncreate id:" + id);
@@ -348,7 +382,8 @@ public final class MinimaHtlc {
         seq.add("txnstate id:" + id + " port:5 value:" + hashlock);
         seq.add("txnstate id:" + id + " port:6 value:" + ownerEthKey);
         seq.add("txnstate id:" + id + " port:7 value:" + otc);
-        seq.add("txnoutput id:" + id + " amount:" + amount + " address:" + htlcAddress + " tokenid:" + token + " storestate:true");
+        if (receiverAddr != null) seq.add("txnstate id:" + id + " port:" + RECEIVER_ADDRESS_PORT + " value:" + receiverAddr);
+        seq.add("txnoutput id:" + id + " amount:" + lockAmount + " address:" + htlcAddress + " tokenid:" + token + " storestate:true");
         if (positive(change)) seq.add("txnoutput id:" + id + " amount:" + change + " address:" + myAddress + " tokenid:" + token + " storestate:false");
         seq.add("txnsign id:" + id + " publickey:auto");
         addValidation(seq, id);
@@ -359,6 +394,7 @@ public final class MinimaHtlc {
                 posted -> cb.ok(txpowOf(posted)),
                 e -> { deleteTxn(id); cb.err(NodeApi.ERR_COMMAND_CHANGED.equals(e) ? e : "POSTED:" + e); }),
             e -> { deleteTxn(id); cb.err(e); });
+        });
     }
 
     // Measured MxUSD/native row costs with a margin below the observed fatal 270,864-byte parcel.

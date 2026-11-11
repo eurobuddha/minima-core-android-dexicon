@@ -262,6 +262,45 @@ public class H1 {
         }
         check("a foreign id is not answered by the account", A.handle("txpow onchain:0x" + "99".repeat(32)) == null, "answered");
 
+        System.out.println("\n== 9. port 253: a coin naming the receiver's tracked address is held and its spend is seen (no phantom)");
+        // AtomiX 0.2.32 locks carry the receiver's address at port 253. Here: two coins at an UNTRACKED script address,
+        // X with B's account address at port 253, Y (control) without it and imported by hand the way locks were before.
+        String anyone = "RETURN TRUE";
+        String tAddr = admin("runscript script:\"" + anyone + "\"").getJSONObject("response").getJSONObject("script").getString("address");
+        check("runscript (clean) gives B's account address for RETURN SIGNEDBY(B key)", bAddr.equalsIgnoreCase(admin("runscript script:\"RETURN SIGNEDBY(" + bPk + ")\"")
+                .getJSONObject("response").getJSONObject("clean").getString("address")), bAddr);
+        // the counter-leg receiver key comes off the Ethereum contract in lowercase: the CLEAN address is still B's
+        check("runscript (clean) gives B's address for the LOWERCASE key too", bAddr.equalsIgnoreCase(admin("runscript script:\"RETURN SIGNEDBY(0x"
+                + bPk.substring(2).toLowerCase() + ")\"").getJSONObject("response").getJSONObject("clean").getString("address")), bAddr);
+        System.out.println("  X: " + admin("send address:" + tAddr + " amount:1 state:{\"7\":\"0\",\"253\":\"" + bAddr + "\"}").optBoolean("status"));
+        waitBlocks(4);
+        System.out.println("  Y: " + admin("send address:" + tAddr + " amount:2 state:{\"7\":\"0\"}").optBoolean("status"));
+        waitBlocks(4);
+        String x = null, y = null;
+        JSONArray atT = coinsAt("coins address:" + tAddr);
+        for (int i = 0; i < atT.length(); i++) {
+            JSONObject c = atT.getJSONObject(i);
+            if (new java.math.BigDecimal(c.getString("amount")).compareTo(java.math.BigDecimal.ONE) == 0) x = c.getString("coinid"); else y = c.getString("coinid");
+        }
+        check("both coins on chain", x != null && y != null, atT);
+        check("X (port 253 = B) is RELEVANT on its own", coinsAt("coins relevant:true coinid:" + x).length() == 1, x);
+        check("Y (no port 253) is not relevant", coinsAt("coins relevant:true coinid:" + y).length() == 0, y);
+        String ydata = admin("coinexport coinid:" + y).getJSONObject("response").getString("data");
+        check("Y imported by hand (today's lock path)", admin("coinimport track:true data:" + ydata).optBoolean("status"), y);
+        admin("newscript script:\"" + anyone + "\" trackall:false");
+        String nodeAddr = admin("getaddress").getJSONObject("response").getString("address");
+        String sid = "p253" + System.nanoTime();
+        for (String c : new String[]{"txncreate id:" + sid, "txninput id:" + sid + " coinid:" + x + " scriptmmr:true",
+                "txninput id:" + sid + " coinid:" + y + " scriptmmr:true", "txnoutput id:" + sid + " amount:3 address:" + nodeAddr + " storestate:false",
+                "txnpost id:" + sid + " mine:true txndelete:true"}) {
+            JSONObject r = admin(c); if (!r.optBoolean("status")) throw new RuntimeException("FAILED: " + c + " -> " + r);
+        }
+        waitBlocks(5);
+        check("X and Y spent on chain", coinsAt("coins coinid:" + x).length() == 0 && coinsAt("coins coinid:" + y).length() == 0, coinsAt("coins address:" + tAddr));
+        check("X: its spend was seen — no phantom", coinsAt("coins relevant:true coinid:" + x).length() == 0, coinsAt("coins relevant:true coinid:" + x));
+        System.out.println("  control Y (hand import, no port 253) still relevant after its spend: "
+                + (coinsAt("coins relevant:true coinid:" + y).length() == 1 ? "YES — the 10 Nov phantom, reproduced" : "no"));
+
         System.out.println("\n===== H1: " + pass + " passed, " + failn + " failed =====");
         System.exit(failn == 0 ? 0 : 1);
     }
