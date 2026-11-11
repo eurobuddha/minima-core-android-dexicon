@@ -121,6 +121,8 @@ public class MinimaAPI {
     final Set<String> claimed = new HashSet<>();
     final Map<String, Runnable> expiries = new HashMap<>();
     final Map<String, FutureTask<Void>> fileTasks = new HashMap<>();
+    /** Minima Core 1.8+ sends a reply over 64K in pieces; they are put back together here (bounded, see the class). */
+    final ChunkAssembler chunks = new ChunkAssembler();
 
     MinimaAPIReceive mMinimaAPIReceiver;
 
@@ -163,7 +165,10 @@ public class MinimaAPI {
         mMinimaAPIReceiver = new MinimaAPIReceive(this);
 
         IntentFilter filter = new IntentFilter();
-        for (String prefix : MinimaAPIMessages.PREFIXES) filter.addAction(MinimaAPIMessages.key(prefix, "RESPONSE"));
+        for (String prefix : MinimaAPIMessages.PREFIXES) {
+            filter.addAction(MinimaAPIMessages.key(prefix, "RESPONSE"));
+            filter.addAction(MinimaAPIMessages.key(prefix, "RESPONSE_CHUNKED"));
+        }
 
         ContextCompat.registerReceiver(zContext, mMinimaAPIReceiver, filter, ContextCompat.RECEIVER_EXPORTED);
 
@@ -190,7 +195,7 @@ public class MinimaAPI {
         discoveryGeneration++;
         awaitingNode.clear();
         synchronized (mResponseHandlers) {
-            mResponseHandlers.clear(); claimed.clear();
+            mResponseHandlers.clear(); claimed.clear(); chunks.clear();
             for (Runnable expiry : expiries.values()) deadlines.removeCallbacks(expiry);
             expiries.clear();
             for (FutureTask<Void> task : fileTasks.values()) cancelRead(task);
@@ -264,11 +269,42 @@ public class MinimaAPI {
 
     private void deliver(String id, JSONObject json) { finish(id, json, false); }
 
+    /** One piece of a chunked reply (Minima Core 1.8+). Same checks as a whole reply — this core's pairing secret and a
+     *  request we are still waiting for — then the pieces are joined and delivered exactly like an inline reply. */
+    public void ResponseChunkReceived(Intent zIntent) {
+        if (destroyed || zIntent == null) return;
+        final String responseid, whole;
+        try {
+            String prefix = MinimaAPIMessages.prefixOfAction(zIntent.getAction());
+            if (prefix == null || !MinimaAPIMessages.key(prefix, "RESPONSE_CHUNKED").equals(zIntent.getAction())) return;
+            String minimaid = zIntent.getStringExtra(MinimaAPIMessages.key(prefix, "REGISTER_MINIMAID"));
+            if (minimaid == null || minimaid.isEmpty() || !minimaid.equals(MINIMA_ID)) return;
+            responseid = zIntent.getStringExtra(MinimaAPIMessages.key(prefix, "RESPONSE_ID"));
+            if (responseid == null || responseid.isEmpty() || !mResponseHandlers.containsKey(responseid)) return;
+            int size = zIntent.getIntExtra(MinimaAPIMessages.key(prefix, "RESPONSE_CHUNKED_SIZE"), -1);
+            int pos = zIntent.getIntExtra(MinimaAPIMessages.key(prefix, "RESPONSE_CHUNKED_POS"), -1);
+            String part = zIntent.getStringExtra(MinimaAPIMessages.key(prefix, "RESPONSE_RESULT"));
+            try { whole = chunks.add(responseid, size, pos, part, System.currentTimeMillis()); }
+            catch (ChunkAssembler.Refused refused) {
+                finish(responseid, MinimaAPIResponse.failure("Node reply could not be reassembled: " + refused.getMessage()), true);
+                return;
+            }
+        } catch (RuntimeException malformedExtras) {
+            return;
+        }
+        if (whole == null) return;   // more pieces to come
+        synchronized (mResponseHandlers) {
+            if (destroyed || !mResponseHandlers.containsKey(responseid) || !claimed.add(responseid)) return;
+        }
+        deliver(responseid, MinimaAPIResponse.parse(whole));
+    }
+
     private void finish(String id, JSONObject json, boolean cancelFile) {
         MinimaAPIListener listener;
         synchronized (mResponseHandlers) {
             listener = mResponseHandlers.remove(id);
             claimed.remove(id);
+            chunks.forget(id);
             FutureTask<Void> task = fileTasks.remove(id);
             if (cancelFile && task != null) cancelRead(task);
             Runnable expiry = expiries.remove(id);
@@ -294,7 +330,7 @@ public class MinimaAPI {
             listener.response(MinimaAPIResponse.failure("Node connection is unavailable or has too many unanswered requests."));
             return;
         }
-        if (!MinimaAPIMessages.trusted(mContext, intent.getPackage())) {   // never hand the pairing ids to an impostor
+        if (!trustCheck.test(mContext, intent.getPackage())) {   // never hand the pairing ids to an impostor
             deliver(id, MinimaAPIResponse.failure("That Minima node app is not signed by a known Minima build. Nothing was sent."));
             return;
         }
@@ -429,6 +465,9 @@ public class MinimaAPI {
         });
         if (!discovering) Register(null);
     }
+
+    /** Node signature check; a seam for JVM tests (no node app is installed there). Same as AtomiX's copy. */
+    static java.util.function.BiPredicate<Context, String> trustCheck = MinimaAPIMessages::trusted;
 
     public void Command(String zCommand, MinimaAPIListener zListener){
         deadlines.post(() -> withNode(() -> sendCommand(zCommand, zListener), zListener));

@@ -31,6 +31,11 @@ public class MinimaAPIReceive extends BroadcastReceiver {
             //Process the response..
             mMinimaAPI.ResponseReceived(zIntent);
 
+        }else if (prefix != null && Objects.equals(action, MinimaAPIMessages.key(prefix, "RESPONSE_CHUNKED"))) {
+
+            //One piece of a reply Minima Core 1.8+ sent in chunks
+            mMinimaAPI.ResponseChunkReceived(zIntent);
+
         }else{
             MinimaAPILogger.log("MinimaAPIReceive RECEIVED UNKNOWN action : "+action);
         }
