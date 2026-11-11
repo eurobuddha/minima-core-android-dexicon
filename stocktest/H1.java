@@ -39,8 +39,12 @@ public class H1 {
     }
     static class MemCache implements AccountKeys.PubCache { Map<Integer,String> c = new HashMap<>(); public String get(int i) { return c.get(i); } public void put(int i, String p) { c.put(i, p); } }
 
-    static VirtualWallet wallet(String phrase) {
-        AccountKeys k = AccountKeys.fromPhrase(phrase, new Mem(), new MemCache());
+    static VirtualWallet wallet(String phrase) { return walletWith(phrase, new Mem(), -1); }
+
+    /** A wallet with its own counter store and (slot >= 0) its app's leaf share — as AtomiX / PandaPools run it. */
+    static VirtualWallet walletWith(String phrase, Mem mem, int slot) {
+        AccountKeys k = AccountKeys.fromPhrase(phrase, mem, new MemCache());
+        if (slot >= 0) k.setLeafSlot(slot);
         VirtualWallet.Node n = cmd -> {
             if (cmd.contains(";")) throw new IllegalStateException("command split char in " + cmd);
             return raw(cmd, "0xFF");                     // EXACTLY what a non-admin IPC companion is
@@ -300,6 +304,39 @@ public class H1 {
         check("X: its spend was seen — no phantom", coinsAt("coins relevant:true coinid:" + x).length() == 0, coinsAt("coins relevant:true coinid:" + x));
         System.out.println("  control Y (hand import, no port 253) still relevant after its spend: "
                 + (coinsAt("coins relevant:true coinid:" + y).length() == 1 ? "YES — the 10 Nov phantom, reproduced" : "no"));
+
+        System.out.println("\n== 10. leaf shares: ONE phrase in two apps (AtomiX slot 1, PandaPools slot 2), same key, both sign");
+        String shared = BIP39.convertWordListToString(BIP39.getNewWordList());
+        Mem memAx = new Mem(), memPp = new Mem();
+        VirtualWallet AX = walletWith(shared, memAx, AccountKeys.SLOT_ATOMIX), PP = walletWith(shared, memPp, AccountKeys.SLOT_PANDAPOOLS);
+        AX.ensureTracked(); PP.ensureTracked();
+        String sAddr = must(AX, "getaddress").getJSONObject("response").getString("address");
+        check("same words, same account address in both apps", sAddr.equalsIgnoreCase(must(PP, "getaddress").getJSONObject("response").getString("address")), sAddr);
+        System.out.println("  fund: " + admin("send address:" + sAddr + " amount:20 split:2").optBoolean("status"));
+        waitBlocks(5);
+        JSONArray two = must(AX, "coins relevant:true sendable:true tokenid:0x00 address:" + sAddr).getJSONArray("response");
+        check("two coins at the shared address", two.length() == 2, two);
+        String nodeAddr10 = admin("getaddress").getJSONObject("response").getString("address");
+        String[] posted = new String[2];
+        VirtualWallet[] apps = {AX, PP};
+        for (int i = 0; i < 2; i++) {   // each app spends its own coin, signing with key 0 of the SAME words
+            String lid = "ls" + i + System.nanoTime(), coin = two.getJSONObject(i).getString("coinid");
+            for (String c : new String[]{"txncreate id:" + lid, "txninput id:" + lid + " coinid:" + coin,
+                    "txnoutput id:" + lid + " amount:4 address:" + nodeAddr10 + " tokenid:0x00 storestate:false",
+                    "txnoutput id:" + lid + " amount:6 address:" + sAddr + " tokenid:0x00 storestate:false",
+                    "txnsign id:" + lid + " publickey:auto"}) must(apps[i], c);
+            posted[i] = lid;
+        }
+        int leafAx = memAx.currentUses(0) - 1, leafPp = memPp.currentUses(0) - 1;
+        System.out.println("  AtomiX signed leaf " + leafAx + ", PandaPools signed leaf " + leafPp);
+        check("AtomiX's leaf is in its share (mod 4 = 1)", Math.floorMod(leafAx, 4) == 1, leafAx);
+        check("PandaPools' leaf is in its share (mod 4 = 2)", Math.floorMod(leafPp, 4) == 2, leafPp);
+        check("the two apps never signed with the same leaf", leafAx != leafPp, leafAx + " / " + leafPp);
+        for (int i = 0; i < 2; i++) must(apps[i], "txnpost id:" + posted[i] + " mine:true txndelete:true");
+        waitBlocks(5);
+        check("both coins spent on chain (both signatures valid)", coinsAt("coins coinid:" + two.getJSONObject(0).getString("coinid")).length() == 0
+                && coinsAt("coins coinid:" + two.getJSONObject(1).getString("coinid")).length() == 0, two);
+        check("the shared account holds the two change coins (12)", new java.math.BigDecimal(tokbal(AX, "0x00")).compareTo(new java.math.BigDecimal("12")) == 0, tokbal(AX, "0x00"));
 
         System.out.println("\n===== H1: " + pass + " passed, " + failn + " failed =====");
         System.exit(failn == 0 ? 0 : 1);
