@@ -93,7 +93,10 @@ public final class AccountSetup {
         AlertDialog main = dialog(a).setTitle("Your Trading Account").setView(pad(a, body)).setCancelable(false)
                 .setPositiveButton("Create new", (d, w) -> create(a, done))
                 .setNeutralButton("Restore 24 words", (d, w) -> restore(a, done))
-                .setNegativeButton("Use node seed", (d, w) -> fromNode(a, n, done))
+                // Words only for a NEW account (owner, 11 Nov 2026): 24 words outside the node work on every node (Minima
+                // Core and the Bears have different seeds), and no app on the node can derive them — a node-seed account
+                // needs ADMIN to make and any app that can run `seedrandom` with this modifier gets its keys. An account
+                // already made from the node seed is still restored that way (lostVault / carriedPoolsDialog below).
                 .show();
         if (tradedBefore) {
             dialog(a).setTitle("Before you continue").setCancelable(false)
