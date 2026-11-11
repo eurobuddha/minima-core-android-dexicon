@@ -31,8 +31,9 @@ import java.util.Map;
  * raised to the TIME FLOOR: one leaf per {@link #LEAF_MILLIS} ms since {@link #EPOCH_MS} (stock Minima's
  * block-as-key-uses idea, on wall-clock time so a lagging or hostile node cannot pull it back; the caller refuses to
  * sign when the phone clock disagrees with the chain). A restore on any phone therefore starts beyond every leaf an
- * earlier install signed, unless that install out-signed the clock — more than one signature per 2 s on one key,
- * sustained. A key never signs past its capacity (the vendored {@code TreeKey.sign} wraps to leaf 0) — the in-app
+ * earlier install signed, unless that install out-signed the clock — with leaf shares (index mod 4 per app) a
+ * signature can step up to 4 indices, so "out-signed" means more than one signature per 8 s on one key, sustained (the
+ * restore margin is scaled to match). A key never signs past its capacity (the vendored {@code TreeKey.sign} wraps to leaf 0) — the in-app
  * replacement for fork commit 477db548347392692c443bbfa9a4db193c195aab.
  */
 public final class AccountKeys {
@@ -147,7 +148,8 @@ public final class AccountKeys {
      *  the clock — so a restore on a slow phone never lands on a leaf a fast one already signed. */
     public static int restoreFloor(long nowMillis) {
         long skewLeaves = 2 * (30 * 60_000L) / LEAF_MILLIS;
-        return (int) Math.min(Integer.MAX_VALUE, (long) timeFloor(nowMillis) + skewLeaves + 10_000L);
+        // the out-signing margin scales with the leaf shares: each signature can now step up to LEAF_SLOTS indices
+        return (int) Math.min(Integer.MAX_VALUE, (long) timeFloor(nowMillis) + skewLeaves + 10_000L * LEAF_SLOTS);
     }
 
     public void setRestoreFloor(int floor) { restoreFloor = Math.max(0, floor); }

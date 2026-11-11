@@ -49,6 +49,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Dexicon"
         tools:targetApi="31">
+        <!-- Leaf share of the Trading Account (com.eurobuddha.account.Family / AccountKeys SLOT_DEXICON): siblings read
+             this to know this build signs only its own one-time leaves. -->
+        <meta-data android:name="com.eurobuddha.account.leafSlot" android:value="0" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

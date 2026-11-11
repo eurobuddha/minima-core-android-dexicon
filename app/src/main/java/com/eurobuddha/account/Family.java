@@ -28,15 +28,28 @@ public final class Family {
             {"com.eurobuddha.pandapools", "P", "PandaPools"}, {"com.eurobuddha.pandapools.stock", "P", "PandaPools (test build)"},
     };
 
+    /** Manifest {@code <meta-data>} every leaf-share-aware build declares: its share (AccountKeys SLOT_*). A build
+     *  without it (any AtomiX / PandaPools from before 11 Nov 2026) may sign ANY leaf, so it never runs alongside. */
+    public static final String META_LEAF_SLOT = "com.eurobuddha.account.leafSlot";
+
     static String kindOf(String pkg) { for (String[] a : APPS) if (a[0].equals(pkg)) return a[1]; return null; }
 
+    /** The one place a share is defined: Dexicon 0, AtomiX 1, PandaPools 2; -1 = not a family app. */
+    public static int slotOf(String pkg) {
+        String k = kindOf(pkg);
+        return "D".equals(k) ? AccountKeys.SLOT_DEXICON : "A".equals(k) ? AccountKeys.SLOT_ATOMIX
+                : "P".equals(k) ? AccountKeys.SLOT_PANDAPOOLS : -1;
+    }
+
     /** True when {@code mine} and {@code other} may not hold the account on one phone: Dexicon against AtomiX or
-     *  PandaPools, or two builds of the same app (same leaf slot). AtomiX with PandaPools is allowed. */
-    static boolean conflicts(String mine, String other) {
+     *  PandaPools; two builds of the same app (same share); or a sibling that does not declare its own correct share
+     *  ({@code otherDeclaredSlot} from its manifest, -1 when absent) — an older build would sign any leaf. */
+    static boolean conflicts(String mine, String other, int otherDeclaredSlot) {
         String a = kindOf(mine), b = kindOf(other);
         if (a == null || b == null || mine.equals(other)) return false;
-        if (a.equals(b)) return true;                  // a release and its test build: same slot
-        return "D".equals(a) || "D".equals(b);         // Dexicon versus the AtomiX + PandaPools pair
+        if (a.equals(b)) return true;                       // a release and its test build: same share
+        if ("D".equals(a) || "D".equals(b)) return true;    // Dexicon versus the AtomiX + PandaPools pair
+        return otherDeclaredSlot != slotOf(other);          // AtomiX with PandaPools: only when both are share-aware
     }
 
     /** The name of an installed app this one may not share the phone with, or null. */
@@ -44,10 +57,14 @@ public final class Family {
         String me = c.getPackageName();
         PackageManager pm = c.getPackageManager();
         for (String[] a : APPS) {
-            if (!conflicts(me, a[0])) continue;
+            if (a[0].equals(me) || kindOf(me) == null) continue;
             // MATCH_UNINSTALLED_PACKAGES: an app removed with its data KEPT (`uninstall -k`, archiving) still holds its
             // vault and would hold the account again on reinstall — it counts as installed.
-            try { pm.getPackageInfo(a[0], PackageManager.MATCH_UNINSTALLED_PACKAGES); return a[2]; } catch (PackageManager.NameNotFoundException absent) { }
+            android.content.pm.ApplicationInfo ai;
+            try { ai = pm.getApplicationInfo(a[0], PackageManager.GET_META_DATA | PackageManager.MATCH_UNINSTALLED_PACKAGES); }
+            catch (PackageManager.NameNotFoundException absent) { continue; }
+            int declared = ai.metaData == null ? -1 : ai.metaData.getInt(META_LEAF_SLOT, -1);
+            if (conflicts(me, a[0], declared)) return a[2];
         }
         return null;
     }

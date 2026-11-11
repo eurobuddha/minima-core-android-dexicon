@@ -296,7 +296,10 @@ public class MinimaAPI {
         synchronized (mResponseHandlers) {
             if (destroyed || !mResponseHandlers.containsKey(responseid) || !claimed.add(responseid)) return;
         }
-        deliver(responseid, MinimaAPIResponse.parse(whole));
+        if (whole.length() <= 65536) { deliver(responseid, MinimaAPIResponse.parse(whole)); return; }
+        // A reply up to 4M characters: parse it on the reply-reader thread, as a file reply is, never on the main thread.
+        try { mFileExecutor.execute(() -> deliver(responseid, MinimaAPIResponse.parse(whole))); }
+        catch (RejectedExecutionException busy) { finish(responseid, MinimaAPIResponse.failure("Node response reader is busy."), true); }
     }
 
     private void finish(String id, JSONObject json, boolean cancelFile) {

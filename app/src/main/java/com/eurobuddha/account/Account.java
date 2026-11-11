@@ -22,8 +22,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * 26cc3983495acafcb1b99f10c744dc506e254b07).
  *
  * <p>Shared by Dexicon, AtomiX and PandaPools (vendored from Dexicon, the single source). The same 24 words give the
- * same keys in all three (domain {@link AccountKeys#DOMAIN}): the apps are mutually exclusive on a phone, and moving
- * between them is a RESTORE of the words — never two of them signing with one account. The prefs and Keystore names
+ * same keys in all three (domain {@link AccountKeys#DOMAIN}). A phone runs AtomiX + PandaPools side by side, or Dexicon
+ * (see {@link Family}); apps holding the same words each sign only their own leaf share (AccountKeys leaf slots), so
+ * their separate counters can never land on the same one-time leaf. The prefs and Keystore names
  * keep their original "dexicon_" spelling so existing vaults open unchanged.
  */
 public final class Account {
@@ -129,6 +130,10 @@ public final class Account {
         KeyUses uses = new PrefsKeyUses(app);
         keys = AccountVault.MODE_NODE.equals(mode) ? AccountKeys.fromBase(secret, uses, cache) : AccountKeys.fromPhrase(secret, uses, cache);
         keys.setRestoreFloor(restoreFloor);
+        // the share is defined ONCE, by the app's package (Family): a Config that names another app's share is refused
+        int ownSlot = Family.slotOf(app.getPackageName());
+        if (ownSlot >= 0 && ownSlot != config.leafSlot)
+            throw new IllegalStateException("leaf share " + config.leafSlot + " configured, but " + app.getPackageName() + " signs share " + ownSlot);
         keys.setLeafSlot(config.leafSlot);
         fp[0] = keys.fingerprint();
         final String countKey = "keys_" + fp[0];

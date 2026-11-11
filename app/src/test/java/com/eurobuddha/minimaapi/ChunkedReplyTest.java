@@ -60,6 +60,19 @@ public class ChunkedReplyTest {
         assertEquals("delivered once", 1, replies.size());
     }
 
+    /** Over 64K the joined reply is parsed on the reply-reader thread, then delivered once, whole. */
+    @Test public void aBigReplyIsParsedOffTheMainThreadAndDeliveredWhole() throws Exception {
+        Intent req = sent(); String id = req.getStringExtra(MinimaAPIMessages.MINIMA_API_REGISTER_MINIMAID);
+        String pad = new String(new char[70_000]).replace('\0', 'a');
+        String body = "{\"status\":true,\"response\":\"" + pad + "\"}";
+        int half = body.length() / 2;
+        new MinimaAPIReceive(api).onReceive(app, piece(req, id, 2, 0, body.substring(0, half))); idle();
+        new MinimaAPIReceive(api).onReceive(app, piece(req, id, 2, 1, body.substring(half))); idle();
+        for (int i = 0; i < 200 && replies.isEmpty(); i++) { Thread.sleep(10); idle(); }
+        assertEquals(1, replies.size());
+        assertEquals(70_000, replies.get(0).getString("response").length());
+    }
+
     @Test public void piecesWithTheWrongPairingSecretAreIgnored() {
         Intent req = sent();
         new MinimaAPIReceive(api).onReceive(app, piece(req, "0x" + "AB".repeat(16), 1, 0, "{\"status\":true}")); idle();
