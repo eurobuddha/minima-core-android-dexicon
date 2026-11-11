@@ -7,6 +7,7 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.os.Bundle;
 
+import org.junit.Assume;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -33,6 +34,7 @@ public class FamilyInstalledTest {
 
     @Test public void aSiblingFromBeforeLeafSharesAlwaysConflicts() {
         Context c = RuntimeEnvironment.getApplication();
+        Assume.assumeTrue("runs only where the test app carries a family package name", Family.slotOf(c.getPackageName()) >= 0);
         assertNull(Family.otherInstalled(c));
         String sib = sibling(c);
         install(c, sib, null);   // no declared share: it may sign any leaf
@@ -41,6 +43,7 @@ public class FamilyInstalledTest {
 
     @Test public void aShareAwareSiblingConflictsOnlyWhenTheRuleSaysSo() {
         Context c = RuntimeEnvironment.getApplication();
+        Assume.assumeTrue("runs only where the test app carries a family package name", Family.slotOf(c.getPackageName()) >= 0);
         String sib = sibling(c);
         install(c, sib, Family.slotOf(sib));
         boolean expected = Family.conflicts(c.getPackageName(), sib, Family.slotOf(sib));   // Dexicon: yes; AtomiX/PandaPools: no
