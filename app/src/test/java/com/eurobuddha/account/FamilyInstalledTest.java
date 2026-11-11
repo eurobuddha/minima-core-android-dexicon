@@ -14,7 +14,8 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 
-/** otherInstalled reads the sibling's declared leaf share from its manifest (review, 11 Nov 2026). Runs as Dexicon. */
+/** otherInstalled reads the sibling's declared leaf share from its manifest (review, 11 Nov 2026). Vendored into every
+ *  app, so each expectation follows the app running it (Dexicon, AtomiX or PandaPools). */
 @RunWith(RobolectricTestRunner.class) @Config(sdk = 33)
 public class FamilyInstalledTest {
     static void install(Context c, String pkg, Integer slot) {
@@ -26,25 +27,32 @@ public class FamilyInstalledTest {
         Shadows.shadowOf(c.getPackageManager()).installPackage(pi);
     }
 
-    @Test public void dexiconSeesAnyAtomixOrPandaPoolsAsAConflict() {
+    /** A sibling of another kind than this app (PandaPools, or AtomiX when this app is PandaPools). */
+    static String sibling(Context c) { return Family.slotOf(c.getPackageName()) == AccountKeys.SLOT_PANDAPOOLS ? "com.eurobuddha.atomix" : "com.eurobuddha.pandapools"; }
+    static String name(String pkg) { return pkg.endsWith("atomix") ? "AtomiX" : "PandaPools"; }
+
+    @Test public void aSiblingFromBeforeLeafSharesAlwaysConflicts() {
         Context c = RuntimeEnvironment.getApplication();
         assertNull(Family.otherInstalled(c));
-        install(c, "com.eurobuddha.pandapools", AccountKeys.SLOT_PANDAPOOLS);
-        assertEquals("PandaPools", Family.otherInstalled(c));
+        String sib = sibling(c);
+        install(c, sib, null);   // no declared share: it may sign any leaf
+        assertEquals(name(sib), Family.otherInstalled(c));
     }
 
-    @Test public void theDeclaredShareIsReadFromTheManifest() {
+    @Test public void aShareAwareSiblingConflictsOnlyWhenTheRuleSaysSo() {
         Context c = RuntimeEnvironment.getApplication();
-        install(c, "com.eurobuddha.atomix", null);   // an AtomiX from before leaf shares
-        assertEquals(-1, metaSlot(c, "com.eurobuddha.atomix"));
-        install(c, "com.eurobuddha.atomix.stock", AccountKeys.SLOT_ATOMIX);
-        assertEquals(AccountKeys.SLOT_ATOMIX, metaSlot(c, "com.eurobuddha.atomix.stock"));
+        String sib = sibling(c);
+        install(c, sib, Family.slotOf(sib));
+        boolean expected = Family.conflicts(c.getPackageName(), sib, Family.slotOf(sib));   // Dexicon: yes; AtomiX/PandaPools: no
+        assertEquals(expected ? name(sib) : null, Family.otherInstalled(c));
     }
 
-    static int metaSlot(Context c, String pkg) {
-        try {
-            ApplicationInfo ai = c.getPackageManager().getApplicationInfo(pkg, android.content.pm.PackageManager.GET_META_DATA);
-            return ai.metaData == null ? -1 : ai.metaData.getInt(Family.META_LEAF_SLOT, -1);
-        } catch (Exception e) { return -2; }
+    @Test public void theDeclaredShareIsReadFromTheManifest() throws Exception {
+        Context c = RuntimeEnvironment.getApplication();
+        install(c, "com.eurobuddha.dexicon.stock", null);
+        install(c, "com.eurobuddha.pandapools.stock", AccountKeys.SLOT_PANDAPOOLS);
+        assertNull(c.getPackageManager().getApplicationInfo("com.eurobuddha.dexicon.stock", android.content.pm.PackageManager.GET_META_DATA).metaData);
+        assertEquals(AccountKeys.SLOT_PANDAPOOLS, c.getPackageManager().getApplicationInfo("com.eurobuddha.pandapools.stock",
+                android.content.pm.PackageManager.GET_META_DATA).metaData.getInt(Family.META_LEAF_SLOT, -1));
     }
 }
