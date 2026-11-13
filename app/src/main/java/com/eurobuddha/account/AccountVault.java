@@ -38,6 +38,9 @@ public final class AccountVault {
             MARKER = "dexicon_account_marker", KEY_ALIAS = "dexicon_account_v1";
     private static final String P_MODE = "mode", P_CT = "ct", P_IV = "iv", P_FLOOR = "restore_floor", P_CREATED = "created", P_ALIAS = "alias";
     public static final String MODE_PHRASE = "phrase", MODE_NODE = "node";
+    /** 13 Nov 2026: a free-form phrase (not 24 list words), RESTORE only - stored trimmed, never cleaned. An older app
+     *  reading it as MODE_PHRASE fails in BIP39.cleanSeedPhrase: loud, never wrong keys. */
+    public static final String MODE_ANY = "any";
 
     private final SharedPreferences prefs, marker;
     private final Context app;
@@ -99,6 +102,13 @@ public final class AccountVault {
         store(MODE_PHRASE, cleanPhrase(phrase), AccountKeys.restoreFloor(System.currentTimeMillis()));
     }
 
+    /** A RESTORED free-form phrase (owner: restore only, with a warning): exactly as made, trimmed; restore floor. */
+    public void storeRestoredAnyPhrase(String phrase) throws Exception {
+        String why = WordEntry.anyPhraseProblem(phrase, false);
+        if (why != null) throw new IllegalArgumentException(why);
+        store(MODE_ANY, phrase.trim(), AccountKeys.restoreFloor(System.currentTimeMillis()));
+    }
+
     public void storeNodeBase(String seedRandomHex) throws Exception {
         String h = seedRandomHex == null ? "" : seedRandomHex.trim();
         if (!h.matches("0x[0-9a-fA-F]{64}")) throw new IllegalArgumentException("The node returned no derived seed.");
@@ -146,7 +156,7 @@ public final class AccountVault {
     }
 
     /** Show the phrase again (phrase mode only) so the user can re-check their backup. */
-    public String revealPhrase() throws Exception { return MODE_PHRASE.equals(mode()) ? secret() : null; }
+    public String revealPhrase() throws Exception { return MODE_PHRASE.equals(mode()) || MODE_ANY.equals(mode()) ? secret() : null; }
 
     private void store(String mode, String secret, int floor) throws Exception {
         if (exists()) throw new IllegalStateException("A Trading Account already exists on this phone.");

@@ -194,7 +194,7 @@ public final class AccountSetup {
         // One box per word (WordEntry, ported from apks/entropy): a free-text box let a line break or a number glue two
         // words together and a correct phrase was refused. No checksum: Minima phrases have none.
         Look l = Account.config().look;
-        WordEntry words = new WordEntry(a, l == null ? 0 : l.text(), l == null ? null : l.mono(), null);
+        WordEntry words = new WordEntry(a, l == null ? 0 : l.text(), l == null ? null : l.mono(), null).enableAnyPhrase(false);
         LinearLayout box = new LinearLayout(a); box.setOrientation(LinearLayout.VERTICAL);
         box.addView(text(a, "Restore a Trading Account. Only use it on ONE phone and ONE profile, in ONE app: stop using it "
                 + "everywhere else first.", false));
@@ -208,11 +208,12 @@ public final class AccountSetup {
         d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             try {
                 String typed = words.phrase();
-                if (typed == null) { Toast.makeText(a, "Word " + words.firstProblem() + " is empty or not one of the 2048 words.", Toast.LENGTH_LONG).show(); return; }
-                String p = AccountVault.cleanPhrase(typed);
-                String wrong = wrongAccount(a, Account.fingerprintOfPhrase(p));
+                if (typed == null) { Toast.makeText(a, words.problem(), Toast.LENGTH_LONG).show(); return; }
+                boolean any = words.isAnyPhrase();
+                String p = any ? typed : AccountVault.cleanPhrase(typed);
+                String wrong = wrongAccount(a, any ? Account.fingerprintOfAnyPhrase(p) : Account.fingerprintOfPhrase(p));
                 if (wrong != null) { Toast.makeText(a, wrong, Toast.LENGTH_LONG).show(); return; }
-                new AccountVault(a).storeRestoredPhrase(p);
+                if (any) new AccountVault(a).storeRestoredAnyPhrase(p); else new AccountVault(a).storeRestoredPhrase(p);
                 d.dismiss(); done.ready();
             } catch (Exception e) { Toast.makeText(a, e.getMessage(), Toast.LENGTH_LONG).show(); }
         }));
@@ -248,10 +249,12 @@ public final class AccountSetup {
     /** Show the 24 words again (phrase mode). No copy: they are written down, never put on a clipboard. */
     public static void reveal(Activity a) {
         try {
-            String p = new AccountVault(a).revealPhrase();
+            AccountVault vault = new AccountVault(a);
+            String p = vault.revealPhrase();
+            boolean any = AccountVault.MODE_ANY.equals(vault.mode());
             if (p == null) { Toast.makeText(a, "This account comes from your node's seed: your node's 24 words restore it.", Toast.LENGTH_LONG).show(); return; }
             // No Copy: the 24 words never go on a clipboard any other app can read. Write them down.
-            AlertDialog d = dialog(a).setTitle("Trading Account words").setView(pad(a, text(a, numbered(p), true)))
+            AlertDialog d = dialog(a).setTitle(any ? "Trading Account phrase" : "Trading Account words").setView(pad(a, text(a, (any ? p : numbered(p)), true)))
                     .setPositiveButton("Done", null).create();
             secure(d);
             d.show();

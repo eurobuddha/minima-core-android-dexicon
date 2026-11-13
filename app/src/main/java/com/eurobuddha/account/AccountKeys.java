@@ -80,6 +80,13 @@ public final class AccountKeys {
         return new AccountKeys(Crypto.getInstance().hashObjects(new MiniString(DOMAIN), seed), uses, cache);
     }
 
+    /** A free-form phrase (AccountVault.MODE_ANY): the same domain-separated recipe as {@link #fromPhrase}, but the phrase
+     *  is hashed exactly as made (trimmed) - like the node's anyphrase:true / -anyseed - instead of cleaned to list words. */
+    public static AccountKeys fromAnyPhrase(String phrase, KeyUses uses, PubCache cache) {
+        MiniData seed = BIP39.convertStringToSeed(phrase.trim());
+        return new AccountKeys(Crypto.getInstance().hashObjects(new MiniString(DOMAIN), seed), uses, cache);
+    }
+
     /** Node mode: {@code base} is the 0x hex the node returned for {@code seedrandom modifier:dexicon-account-v1}. */
     public static AccountKeys fromBase(String baseHex, KeyUses uses, PubCache cache) {
         return new AccountKeys(new MiniData(baseHex), uses, cache);

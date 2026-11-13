@@ -60,4 +60,15 @@ public class WordEntryTest {
         assertEquals(p, WordEntry.join(Arrays.asList(p.split(" "))));
         assertEquals(p.toUpperCase(), AccountVault.cleanPhrase(p));
     }
+
+    @Test public void anyPhraseIsForRealCustomPhrasesOnly() {
+        assertEquals("too short", "A phrase needs at least 16 characters.", WordEntry.anyPhraseProblem("short phrase", false));
+        assertNull(WordEntry.anyPhraseProblem("  My very own Phrase, 2019!  ", false));
+        assertNotNull("24 list words belong in the boxes", WordEntry.anyPhraseProblem(PLAIN, false));
+        assertNotNull("...even typed messy", WordEntry.anyPhraseProblem("1. " + PLAIN.toLowerCase().replace(" ", "\n"), false));
+        assertNull("23 list words is a custom phrase", WordEntry.anyPhraseProblem(PLAIN.substring(0, PLAIN.lastIndexOf(' ')), false));
+        assertNull("a colon is fine in the app", WordEntry.anyPhraseProblem("my secret: the long one", false));
+        for (String bad : new String[]{"my secret: the long one", "my \"quoted\" long phrase", "two; commands here please"})
+            assertNotNull("node commands refuse it: " + bad, WordEntry.anyPhraseProblem(bad, true));
+    }
 }
