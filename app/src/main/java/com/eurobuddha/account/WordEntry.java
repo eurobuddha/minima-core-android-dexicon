@@ -86,8 +86,11 @@ public final class WordEntry {
     private final Button hide;
     private boolean hidden, mute;
 
+    /** @param textColor 0 = the theme's text colour; @param mono null = monospace; @param onChange may be null */
     public WordEntry(Context c, int textColor, Typeface mono, Runnable onChange) {
-        this.c = c; this.onChange = onChange; this.textColor = textColor; this.mono = mono == null ? Typeface.MONOSPACE : mono;
+        this.c = c; this.onChange = onChange; this.mono = mono == null ? Typeface.MONOSPACE : mono;
+        // 0 = the app gave no colour: use the dialog theme's own text colour (a fixed light grey vanished on light themes).
+        this.textColor = textColor != 0 ? textColor : new TextView(c).getCurrentTextColor();
         view = new LinearLayout(c); view.setOrientation(LinearLayout.VERTICAL);
 
         LinearLayout top = new LinearLayout(c);

@@ -194,7 +194,7 @@ public final class AccountSetup {
         // One box per word (WordEntry, ported from apks/entropy): a free-text box let a line break or a number glue two
         // words together and a correct phrase was refused. No checksum: Minima phrases have none.
         Look l = Account.config().look;
-        WordEntry words = new WordEntry(a, l == null ? 0xFFDDDDDD : l.text(), l == null ? null : l.mono(), null);
+        WordEntry words = new WordEntry(a, l == null ? 0 : l.text(), l == null ? null : l.mono(), null);
         LinearLayout box = new LinearLayout(a); box.setOrientation(LinearLayout.VERTICAL);
         box.addView(text(a, "Restore a Trading Account. Only use it on ONE phone and ONE profile, in ONE app: stop using it "
                 + "everywhere else first.", false));
