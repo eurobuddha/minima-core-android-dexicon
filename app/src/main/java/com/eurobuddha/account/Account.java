@@ -129,7 +129,7 @@ public final class Account {
         };
         KeyUses uses = new PrefsKeyUses(app);
         keys = AccountVault.MODE_NODE.equals(mode) ? AccountKeys.fromBase(secret, uses, cache)
-                : AccountVault.MODE_ANY.equals(mode) ? AccountKeys.fromAnyPhrase(secret, uses, cache)
+                : AccountVault.MODE_ANY.equals(mode) ? AccountKeys.fromAnyPhrase(AccountVault.anyPhraseOf(secret), uses, cache)
                 : AccountKeys.fromPhrase(secret, uses, cache);
         keys.setRestoreFloor(restoreFloor);
         // the share is defined ONCE, by the app's package (Family): a Config that names another app's share is refused

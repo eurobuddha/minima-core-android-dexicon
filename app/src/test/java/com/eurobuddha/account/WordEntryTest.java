@@ -66,9 +66,36 @@ public class WordEntryTest {
         assertNull(WordEntry.anyPhraseProblem("  My very own Phrase, 2019!  ", false));
         assertNotNull("24 list words belong in the boxes", WordEntry.anyPhraseProblem(PLAIN, false));
         assertNotNull("...even typed messy", WordEntry.anyPhraseProblem("1. " + PLAIN.toLowerCase().replace(" ", "\n"), false));
-        assertNull("23 list words is a custom phrase", WordEntry.anyPhraseProblem(PLAIN.substring(0, PLAIN.lastIndexOf(' ')), false));
         assertNull("a colon is fine in the app", WordEntry.anyPhraseProblem("my secret: the long one", false));
-        for (String bad : new String[]{"my secret: the long one", "my \"quoted\" long phrase", "two; commands here please"})
+        for (String bad : new String[]{"my secret: the long one", "my \"quoted\" long phrase", "two; commands here please",
+                "with [a bracket in it", "with {a brace} in it ok", "line one\nline two here"})
             assertNotNull("node commands refuse it: " + bad, WordEntry.anyPhraseProblem(bad, true));
+        assertNotNull("a leading - crash-loops the node's -seed", WordEntry.anyPhraseProblem("-my own long phrase here", false));
+    }
+
+    /** Review M1: a near-miss of the 24 words is a mistake in the words, not a custom phrase - never hashed raw. */
+    @Test public void nearMissWordPhrasesAreRefused() {
+        String[] w = PLAIN.toLowerCase().split(" ");
+        String typo = PLAIN.toLowerCase().replace("absurd", "absrud");
+        String missed = PLAIN.substring(0, PLAIN.lastIndexOf(' '));
+        String header = "Seed: " + PLAIN;
+        String glued = PLAIN.replaceFirst("ABANDON ABILITY", "ABANDONABILITY");
+        for (String bad : new String[]{typo, missed, header, glued})
+            assertNotNull(bad, WordEntry.anyPhraseProblem(bad, false));
+        assertNotNull("even in the node app, unless EVERY run is a list word", WordEntry.anyPhraseProblem(typo, false, true));
+        assertEquals(24, w.length);
+    }
+
+    /** Review H1: the node's old first-run screens hashed typed words as typed, so the node app may restore list words
+     *  as typed (the caller asks "Minima form or exactly as typed"); the Trading Account never could. */
+    @Test public void nodeAppMayTakeListWordsAsTyped() {
+        String lower = PLAIN.toLowerCase();
+        assertNull(WordEntry.anyPhraseProblem(lower, true, true));
+        assertTrue(WordEntry.allListWords(lower));
+        String twelve = String.join(" ", java.util.Arrays.copyOf(lower.split(" "), 12));
+        assertNull("12 list words (old Vault lengths)", WordEntry.anyPhraseProblem(twelve, true, true));
+        assertTrue(WordEntry.allListWords(twelve));
+        assertNotNull("not in the Trading Account", WordEntry.anyPhraseProblem(lower, false, false));
+        assertFalse(WordEntry.allListWords("My very own Phrase, 2019!"));
     }
 }

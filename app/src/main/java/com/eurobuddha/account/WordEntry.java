@@ -76,19 +76,45 @@ public final class WordEntry {
 
     /**
      * Why a free-form phrase cannot be used, or null. Owner, 13 Nov 2026: any-phrase is for RESTORING a wallet made with
-     * exactly that phrase. Refused: under {@link #ANY_MIN} characters; exactly 24 list words (those go in the boxes - hashed
-     * raw they would open a DIFFERENT wallet than the boxes do); and, for a phrase sent in a node command
-     * ({@code forCommand}), {@code " ; :} which the node's command parser splits, strips or rewrites (CommandRunner).
+     * exactly that phrase. Refused (review 13 Nov):
+     * <ul><li>under {@link #ANY_MIN} characters;
+     * <li>a leading "-" (the node reads its -seed value as a program option and would crash-loop);
+     * <li>LIST WORDS: 12-30 letter-runs of which 3/4 or more are list words or unique prefixes - 24 exact list words go in
+     *     the boxes (hashed raw they open a DIFFERENT wallet), and a near-miss (a typo, a missed word, a "Seed:" header) is
+     *     a mistake in the words, not a custom phrase. Exception {@code nodeWords} (the node app): a phrase made ONLY of
+     *     list words is allowed - the node's old first-run screens hashed typed words as typed - and the caller asks
+     *     "Minima form or exactly as typed" ({@link #allListWords});
+     * <li>{@code forCommand} (the phrase goes into a node command): {@code " ; : [ ] { }} and control characters, which the
+     *     node's command parser splits, strips, rewrites or reads as JSON (CommandRunner).</ul>
      */
-    public static String anyPhraseProblem(String phrase, boolean forCommand) {
+    public static String anyPhraseProblem(String phrase, boolean forCommand) { return anyPhraseProblem(phrase, forCommand, false); }
+
+    public static String anyPhraseProblem(String phrase, boolean forCommand, boolean nodeWords) {
         String t = phrase == null ? "" : phrase.trim();
         if (t.length() < ANY_MIN) return "A phrase needs at least " + ANY_MIN + " characters.";
-        String[] tokens = t.replaceAll("[^A-Za-z]+", " ").trim().split(" ");
-        if (tokens.length == WORDS && join(splitPasted(t)) != null)
-            return "These are 24 list words: enter them in the word boxes instead.";
-        if (forCommand && (t.indexOf('"') >= 0 || t.indexOf(';') >= 0 || t.indexOf(':') >= 0))
-            return "A phrase restored by the node cannot contain \" ; or :";
+        if (t.startsWith("-")) return "A phrase cannot start with \"-\".";
+        if (forCommand && t.matches("(?s).*[\";:\\[\\]{}\\p{Cntrl}].*"))
+            return "A phrase restored by the node cannot contain \" ; : [ ] { } or a line break.";
+        List<String> tok = splitPasted(t);
+        int n = tok.size(), listish = 0; boolean allWords = n > 0;
+        for (String w : tok) {
+            if (isWord(w)) listish++;
+            else { allWords = false; if (w.length() >= 4 && matches(w, 2).size() == 1) listish++; }
+        }
+        if (n >= 12 && n <= 30 && listish * 4 >= n * 3) {
+            if (nodeWords && allWords) return null;
+            return n == WORDS && allWords ? "These are 24 list words: enter them in the word boxes instead."
+                    : "This looks like list words with a mistake in them: check them in the word boxes.";
+        }
         return null;
+    }
+
+    /** 12 or more letter-runs, every one a list word: the node app asks "Minima form or exactly as typed". */
+    public static boolean allListWords(String phrase) {
+        List<String> tok = splitPasted(phrase);
+        if (tok.size() < 12) return false;
+        for (String w : tok) if (!isWord(w)) return false;
+        return true;
     }
 
     // ---- the view ----
@@ -109,7 +135,12 @@ public final class WordEntry {
     private LinearLayout anyPanel;
     private EditText any1, any2;
     private TextView toggle;
-    private boolean anyMode, forCommand;
+    private boolean anyMode, forCommand, nodeWords;
+    /** After an auto-complete: the rest of that word, swallowed if it is typed straight on into the next box (review M3:
+     *  "acco" completed ACCOUNT and the typed "unt" became UNTIL). */
+    private String tail = "";
+    private int tailBox = -1;
+    private long tailUntil;
 
     /** @param textColor 0 = the theme's text colour; @param mono null = monospace; @param onChange may be null */
     public WordEntry(Context c, int textColor, Typeface mono, Runnable onChange) {
@@ -158,9 +189,12 @@ public final class WordEntry {
      * exactly that phrase (owner, 13 Nov 2026: restore only, with a warning). {@code forCommand}: the phrase goes into a
      * node command, so {@code " ; :} are refused. Returns this.
      */
-    public WordEntry enableAnyPhrase(boolean forCommand) {
+    public WordEntry enableAnyPhrase(boolean forCommand) { return enableAnyPhrase(forCommand, false); }
+
+    /** {@code nodeWords}: the node app - a phrase of list words only is allowed (see {@link #anyPhraseProblem}). */
+    public WordEntry enableAnyPhrase(boolean forCommand, boolean nodeWords) {
         if (anyPanel != null) return this;
-        this.forCommand = forCommand;
+        this.forCommand = forCommand; this.nodeWords = nodeWords;
         anyPanel = new LinearLayout(c); anyPanel.setOrientation(LinearLayout.VERTICAL); anyPanel.setVisibility(View.GONE);
         TextView warn = new TextView(c);
         warn.setText("Only use this to RESTORE a wallet that was made with exactly this phrase. Anyone who guesses a short "
@@ -187,7 +221,7 @@ public final class WordEntry {
     public String phrase() {
         if (anyMode) {
             String a = any1.getText().toString().trim();
-            return a.equals(any2.getText().toString().trim()) && anyPhraseProblem(a, forCommand) == null ? a : null;
+            return a.equals(any2.getText().toString().trim()) && anyPhraseProblem(a, forCommand, nodeWords) == null ? a : null;
         }
         List<String> w = new ArrayList<>(WORDS);
         for (EditText e : boxes) w.add(e.getText().toString());
@@ -198,7 +232,7 @@ public final class WordEntry {
     public String problem() {
         if (anyMode) {
             String a = any1.getText().toString().trim();
-            String why = anyPhraseProblem(a, forCommand);
+            String why = anyPhraseProblem(a, forCommand, nodeWords);
             if (why != null) return why;
             return a.equals(any2.getText().toString().trim()) ? null : "The two copies of the phrase are not the same.";
         }
@@ -226,6 +260,11 @@ public final class WordEntry {
         e.setBackground(rounded(BORDER));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.topMargin = dp(8); e.setLayoutParams(lp);
+        e.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int x) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int x) {}
+            @Override public void afterTextChanged(Editable s) { if (onChange != null) onChange.run(); }
+        });
         return e;
     }
 
@@ -264,6 +303,16 @@ public final class WordEntry {
         List<String> pasted = splitPasted(raw);
         // Pasted words (or a typed space): spread them over this box and the ones after it.
         if (pasted.size() > 1) { spread(idx, pasted); return; }
+        if (idx == tailBox && !tail.isEmpty() && System.currentTimeMillis() < tailUntil) {
+            String typed = letters(raw);
+            if (!typed.isEmpty() && tail.startsWith(typed)) {   // still typing the word that just completed: drop it
+                tail = tail.substring(typed.length()); tailUntil = System.currentTimeMillis() + 1500;
+                if (tail.isEmpty()) tailBox = -1;
+                set(e, ""); prevLens.set(idx, 0); style(idx);
+                return;
+            }
+        }
+        tail = ""; tailBox = -1;
         String v = letters(raw);
         if (!v.equals(raw)) set(e, v);
         boolean grew = v.length() > prevLens.get(idx);
@@ -271,34 +320,61 @@ public final class WordEntry {
         List<String> m = matches(v, 2);
         // A word is certain once only one matches (4 letters always suffice). Only while TYPING: completing on a
         // backspace would make a finished word impossible to edit.
-        if (grew && m.size() == 1) { commit(idx, m.get(0)); return; }
+        if (grew && m.size() == 1) {
+            String w = m.get(0);
+            tail = w.substring(Math.min(v.length(), w.length()));
+            tailBox = commit(idx, w); tailUntil = System.currentTimeMillis() + 1500;
+            return;
+        }
         style(idx); showSuggestions(idx); refresh();
     }
 
+    /** Pasted words. A whole phrase (24+) always fills from box 1; words are never dropped - too many is refused with the
+     *  count (review M2: "Seed word list: ..." filled 3 boxes with SEED WORD LIST and lost the last 3 words). */
     private void spread(int idx, List<String> words) {
-        int i = idx;
+        int start = words.size() >= WORDS ? 0 : idx;
+        clearClipboard();
+        if (start + words.size() > WORDS) {
+            set(boxes.get(idx), ""); prevLens.set(idx, 0); style(idx);
+            count.setText(words.size() + " words pasted, but " + (start == 0 ? WORDS : WORDS - idx) + " fit"
+                    + (start == 0 ? "" : " from box " + (idx + 1)) + ". Nothing was filled in: paste exactly the 24 words.");
+            count.setTextColor(RED);
+            return;
+        }
+        int i = start;
         for (String w : words) {
-            if (i >= boxes.size()) break;
             List<String> m = matches(w, 2);
             String v = isWord(w) ? w : m.size() == 1 ? m.get(0) : w;   // a unique prefix completes, as when typing
             set(boxes.get(i), v); prevLens.set(i, v.length()); style(i); i++;
         }
-        focusNextProblem(idx);
+        tail = ""; tailBox = -1;
+        focusNextProblem(i - 1);
         refresh();
     }
 
-    private void commit(int idx, String w) {
-        set(boxes.get(idx), w); prevLens.set(idx, w.length());
-        style(idx); refresh();
-        focusNextProblem(idx);
+    /** Review L3: a pasted phrase must not stay on the clipboard where any app can read it. */
+    private void clearClipboard() {
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) c.getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) cm.clearPrimaryClip();
+        } catch (RuntimeException ignored) {}
     }
 
-    private void focusNextProblem(int from) {
-        for (int j = 0; j < boxes.size(); j++) {
-            int k = (from + 1 + j) % boxes.size();
-            if (!isWord(boxes.get(k).getText().toString())) { boxes.get(k).requestFocus(); showSuggestions(k); return; }
+    /** Returns the box now focused, -1 when none. */
+    private int commit(int idx, String w) {
+        set(boxes.get(idx), w); prevLens.set(idx, w.length());
+        style(idx); refresh();
+        return focusNextProblem(idx);
+    }
+
+    /** Forward only: wrapping to an earlier empty box let a finished word's typed tail land there (review M3). */
+    private int focusNextProblem(int from) {
+        for (int k = from + 1; k < boxes.size(); k++) {
+            if (!isWord(boxes.get(k).getText().toString())) { boxes.get(k).requestFocus(); showSuggestions(k); return k; }
         }
-        boxes.get(from).clearFocus(); suggRow.removeAllViews();
+        if (from >= 0 && from < boxes.size()) boxes.get(from).clearFocus();
+        suggRow.removeAllViews();
+        return -1;
     }
 
     private void set(EditText e, String v) { mute = true; e.setText(v); e.setSelection(v.length()); mute = false; }
