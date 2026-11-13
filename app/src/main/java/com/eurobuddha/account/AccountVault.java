@@ -84,7 +84,9 @@ public final class AccountVault {
 
     /** Normalise and validate a typed phrase; throws if it is not 24 BIP39 words. */
     public static String cleanPhrase(String typed) {
-        String p = BIP39.cleanSeedPhrase(typed == null ? "" : typed);
+        // BIP39.cleanSeedPhrase splits on spaces only: a line break, number or comma glued two words into one "unknown
+        // word". Anything that is not a letter separates words (no BIP39 word has anything else in it).
+        String p = BIP39.cleanSeedPhrase(typed == null ? "" : typed.replaceAll("[^A-Za-z]+", " ").trim());
         if (p.trim().split("\\s+").length != 24) throw new IllegalArgumentException("A Trading Account phrase is 24 words.");
         return p;
     }

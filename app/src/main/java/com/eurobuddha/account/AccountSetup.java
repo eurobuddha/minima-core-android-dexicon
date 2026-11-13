@@ -5,9 +5,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Typeface;
-import android.text.InputType;
 import android.widget.CheckBox;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -193,21 +191,25 @@ public final class AccountSetup {
     }
 
     private static void restore(Activity a, Done done) {
-        EditText in = new EditText(a);
-        in.setHint("24 words, separated by spaces");
-        in.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        { Look l = Account.config().look; if (l != null) in.setTextColor(l.text()); } in.setMinLines(3);
-        in.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
+        // One box per word (WordEntry, ported from apks/entropy): a free-text box let a line break or a number glue two
+        // words together and a correct phrase was refused. No checksum: Minima phrases have none.
+        Look l = Account.config().look;
+        WordEntry words = new WordEntry(a, l == null ? 0xFFDDDDDD : l.text(), l == null ? null : l.mono(), null);
         LinearLayout box = new LinearLayout(a); box.setOrientation(LinearLayout.VERTICAL);
         box.addView(text(a, "Restore a Trading Account. Only use it on ONE phone and ONE profile, in ONE app: stop using it "
                 + "everywhere else first.", false));
-        box.addView(in);
+        box.addView(text(a, "Type each word in its box. A box completes itself as soon as the word is certain; tap a "
+                + "suggestion for short words. You can also paste all 24 words into box 1.", false));
+        box.addView(words.view);
         AlertDialog d = dialog(a).setTitle("Restore Trading Account").setView(pad(a, box))
                 .setCancelable(false).setPositiveButton("Restore", null).setNegativeButton("Back", (x, w) -> back(a, done)).create();
         secure(d);
+        if (d.getWindow() != null) d.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         d.setOnShowListener(x -> d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             try {
-                String p = AccountVault.cleanPhrase(in.getText().toString());
+                String typed = words.phrase();
+                if (typed == null) { Toast.makeText(a, "Word " + words.firstProblem() + " is empty or not one of the 2048 words.", Toast.LENGTH_LONG).show(); return; }
+                String p = AccountVault.cleanPhrase(typed);
                 String wrong = wrongAccount(a, Account.fingerprintOfPhrase(p));
                 if (wrong != null) { Toast.makeText(a, wrong, Toast.LENGTH_LONG).show(); return; }
                 new AccountVault(a).storeRestoredPhrase(p);
