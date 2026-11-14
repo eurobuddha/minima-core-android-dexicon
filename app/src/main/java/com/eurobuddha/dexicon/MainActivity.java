@@ -1412,7 +1412,10 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
             androidx.core.graphics.Insets bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
             androidx.core.graphics.Insets ime = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime());
-            v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
+            // Inside a host (Pandamonium) the host's own root already pads for the bars and the keyboard: padding again
+            // left a bar-high gap at the top and above the host footer (owner, 14 Nov). Standalone: edge-to-edge, pad here.
+            if (HostMode.on()) v.setPadding(0, 0, 0, 0);
+            else v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
             return insets;
         });
 
@@ -1431,6 +1434,15 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         themePill.setOnClickListener(v -> { if (poolsBusy()) { toast("Finish your pool transaction first, then switch theme."); return; } stopCcyGlow(); Design.toggle(this); nightModeFollowsDesign(); if (trade != null) trade.close(); chromeRoot = buildChrome(); setContentView(chromeRoot); showPages(tab, tab2); });
         Design.pressable(themePill);
         header.addView(themePill);
+        Runnable leave = HostMode.exit();
+        if (leave != null) {   // full screen inside a host: the way back to it
+            TextView close = Design.pill(this, "✕", Design.SURFACE2(), Design.DIM());
+            close.setMinWidth(Design.dp(this, 48)); close.setMinHeight(Design.dp(this, 48)); close.setGravity(Gravity.CENTER);
+            close.setContentDescription("Back to " + HostMode.host());
+            close.setOnClickListener(v -> leave.run());
+            Design.pressable(close);
+            header.addView(close);
+        }
         root.addView(header);
 
         LinearLayout nodeRow = new LinearLayout(this);

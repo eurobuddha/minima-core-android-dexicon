@@ -28,7 +28,8 @@ final class GateView extends ScrollView {
         // edge-to-edge window (setDecorFitsSystemWindows(false)): pad for the bars exactly as the trading chrome does
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(this, (v, insets) -> {
             androidx.core.graphics.Insets bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            if (HostMode.on()) v.setPadding(0, 0, 0, 0);   // the host pads for the bars
+            else v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
             return insets;
         });
     }

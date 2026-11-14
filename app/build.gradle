@@ -23,8 +23,10 @@ android {
         // Ethereum key when paired with the host's node (warning only: one signer, never exclusion).
         // 0.3.57: DexiconActivity hosts the screen in its own frame (a host's wrapper around the content - Pandamonium's
         // app menu - survives the screen's own swaps). Owner 14 Nov: in Pandamonium Dexicon is an app-list app, not a tab.
-        versionCode 357
-        versionName "0.3.57"
+        // 0.3.58: inside a host the host pads for the system bars (no double gap at top / above the host footer); a ✕ in the
+        // header returns to the host (Pandamonium full-screen Dexicon tab).
+        versionCode 358
+        versionName "0.3.58"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
