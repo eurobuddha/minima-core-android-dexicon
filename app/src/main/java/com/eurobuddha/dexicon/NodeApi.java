@@ -53,7 +53,7 @@ public class NodeApi implements com.eurobuddha.account.Transport {
         return (writesFunds(c) || c.startsWith("txnbasics") || c.startsWith("txnimport")) ? WRITE_TIMEOUT_MS : READ_TIMEOUT_MS;
     }
 
-    private NodeTransport mApi;
+    private NodeLink mApi;
     private final Handler mMain = new Handler(Looper.getMainLooper());
     private final PairingListener mPairing;
     private final Context mContext;
@@ -61,7 +61,7 @@ public class NodeApi implements com.eurobuddha.account.Transport {
     private boolean mReleased = false, destroyRequested = false;
     private Boolean enabled, admin;
     /** The node said Dexicon is enabled but NOT admin (or parked a command as pending): nothing runs until it is. */
-    public boolean needsAdmin() { return Boolean.FALSE.equals(admin) && !com.eurobuddha.account.Account.exists(mContext)
+    public boolean needsAdmin() { return !HostMode.on() && Boolean.FALSE.equals(admin) && !com.eurobuddha.account.Account.exists(mContext)
             && !com.eurobuddha.account.Account.everCreated(mContext) && com.eurobuddha.dexicon.account.LegacyPositions.exist(mContext); }
     /** Stock Minima Core edition: once a Trading Account exists Dexicon signs itself and never needs ADMIN. */
     public boolean hasAccount() { return com.eurobuddha.account.Account.exists(mContext); }
@@ -72,6 +72,8 @@ public class NodeApi implements com.eurobuddha.account.Transport {
     private long lastOk;
     private int consecutiveTimeouts, queuedCommands;
     private static final SerialQueue IPC_QUEUE = new SerialQueue();
+    /** Tests only (see SerialQueue.resetForTest). */
+    static void resetQueueForTest() { IPC_QUEUE.resetForTest(); }
 
     /** The node the user picked when several are installed (Settings → NODE); null = whichever one answers. */
     public static String preferredNode(Context c) { return com.eurobuddha.minimaapi.MinimaAPI.readPreferredNode(c); }
@@ -80,7 +82,7 @@ public class NodeApi implements com.eurobuddha.account.Transport {
     public NodeApi(Context ctx, PairingListener pairing) {
         mContext = ctx;
         mPairing = pairing;
-        mApi = new NodeTransport(ctx, zResponse -> {
+        mApi = HostMode.open(ctx, zResponse -> {
             final boolean en = zResponse.optBoolean("enabled", false), ok = zResponse.optBoolean("status", false);
             mMain.post(() -> { if (!dead()) { answered = ok; noteAccess(zResponse); noteEnabled(en && !needsAdmin()); } });
         });
@@ -123,7 +125,7 @@ public class NodeApi implements com.eurobuddha.account.Transport {
         if (mReleased || destroyRequested || queuedCommands != 0) return;
         enabled = null;
         mApi.onDestroy();
-        mApi = new NodeTransport(mContext, reply -> { answered = reply.optBoolean("status", false); noteAccess(reply); noteEnabled(reply.optBoolean("enabled", false) && !needsAdmin()); });
+        mApi = HostMode.open(mContext, reply -> { answered = reply.optBoolean("status", false); noteAccess(reply); noteEnabled(reply.optBoolean("enabled", false) && !needsAdmin()); });
         cmd("__register__", new Cb() {
             public void onResult(JSONObject reply) { answered = true; noteAccess(reply); noteEnabled(reply.optBoolean("enabled", false) && !needsAdmin()); }
             public void onError(String message) { answered = !(message != null && (message.contains("No Minima node replied") || message.contains("Node discovery"))) && answered; noteEnabled(false); }
@@ -154,6 +156,8 @@ public class NodeApi implements com.eurobuddha.account.Transport {
         if (Looper.myLooper() != Looper.getMainLooper()) { mMain.post(() -> cmd(command, guard, timeoutMs, cb)); return; }
         String invalid = CommandSafety.failure(command);
         if (invalid != null) { if (cb != null) mMain.post(() -> cb.onError(invalid)); return; }
+        // Host-node mode (Pandamonium): the host node's own wallet answers everything - no Trading Account at all.
+        if (HostMode.on()) { cmdDirect(command, guard, timeoutMs, cb); return; }
         // Trading Account: wallet + txn verbs are answered in-app (VirtualWallet); only signed postfrom reaches the node.
         switch (com.eurobuddha.account.Account.route(mContext, this, command)) {
             case ACCOUNT: {

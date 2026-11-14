@@ -81,6 +81,12 @@ public final class RelaysTab extends LinearLayout {
     /** TRADING ACCOUNT (the keys Dexicon signs with) + NODE (which installed node to use when several answer). */
     private void renderAccount() {
         accountCard.removeAllViews();
+        if (HostMode.on()) {   // host-node mode: no Trading Account - the host node's own wallet signs every trade
+            accountCard.addView(t("WALLET", Design.DIM(), 10f, Design.sansBold()));
+            accountCard.addView(t("Dexicon trades with " + HostMode.host() + "'s own wallet: the node signs every trade with its own keys. "
+                    + "Your node's seed phrase backs up everything here.", Design.DIM2(), 9.5f, Design.sans()));
+            return;
+        }
         accountCard.addView(t("TRADING ACCOUNT", Design.DIM(), 10f, Design.sansBold()));
         if (!com.eurobuddha.account.Account.exists(act)) {
             accountCard.addView(t("Not set up yet.", Design.DIM2(), 11f, Design.sans()));

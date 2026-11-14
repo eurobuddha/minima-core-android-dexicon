@@ -14,6 +14,9 @@ final class SerialQueue {
         if (!busy) next();
     }
 
+    /** Tests only: the queue is process-wide, and a test that leaves an operation open would hold every later one. */
+    void resetForTest() { pending.clear(); busy = false; }
+
     private void next() {
         Operation operation = pending.poll();
         if (operation == null) { busy = false; return; }

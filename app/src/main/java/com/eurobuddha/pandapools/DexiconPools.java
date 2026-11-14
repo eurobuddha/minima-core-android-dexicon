@@ -62,6 +62,8 @@ public final class DexiconPools {
     private static volatile Custody custody;
 
     private static boolean pandaPoolsInstalled(Context c) {
+        // host-node mode: a standalone PandaPools signs with ITS Trading Account, never these node-key pools
+        if (com.eurobuddha.dexicon.HostMode.on()) return false;
         return com.eurobuddha.dexicon.TradingGate.installed(c, com.eurobuddha.dexicon.TradingGate.PANDAPOOLS);
     }
 

@@ -264,6 +264,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     private int lockedTries;
     private final Runnable retryOffer = this::offerAccount;
     private void offerAccount() {
+        if (HostMode.on()) return;   // host-node mode: the node's own wallet trades - there is no Trading Account to set up
         // AtomiX / PandaPools on this phone: the hand-over GateView owns that (its guarded Hand over / Remove, the pool
         // backup move) — never cover it with the account's "one app at a time" dialog. Re-offered when the gate lifts.
         if (TradingGate.conflict(this)) return;
@@ -373,7 +374,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
 
     private void deriveIdentity() {
         if (deriving) return;
-        if (!com.eurobuddha.account.Account.exists(this) && !com.eurobuddha.dexicon.account.LegacyPositions.exist(this)) return;   // AccountSetup first
+        if (!HostMode.on() && !com.eurobuddha.account.Account.exists(this) && !com.eurobuddha.dexicon.account.LegacyPositions.exist(this)) return;   // AccountSetup first (host mode: the node's seed)
         deriving = true;
         SeedSource.derive(node, SeedSource.DEX, new SeedSource.Cb() {   // one-way: the node's phrase never enters the app
             public void got(String seed) {

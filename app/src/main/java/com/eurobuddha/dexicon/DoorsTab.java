@@ -626,7 +626,8 @@ public final class DoorsTab extends LinearLayout {
         TextView warn = t("⚠  Clearing Dexicon's storage or reinstalling it wipes the claim secrets for " + unsettled + " unsettled swap" + (unsettled == 1 ? "" : "s")
                 + (IdentityWatch.ethMismatch() ? ", the stale ETH key itself (it is never stored — only your OLD node seed could rebuild it)" : "")
                 + ", your pools' local records and your exchange orders. Rescue what you need FIRST: export the key, sweep the funds, and back up your pools "
-                + "(② Pools › My pools › Recovery › Back up).\n\nIf this warning returns after a reinstall, Android restored old settings from a backup — clear storage instead.",
+                + "(② Pools › My pools › Recovery › Back up)."
+                + (HostMode.on() ? "" : "\n\nIf this warning returns after a reinstall, Android restored old settings from a backup — clear storage instead."),
                 Design.RED(), 12f, Design.sans());
         warn.setPadding(0, Design.dp(act, 14), 0, Design.dp(act, 14)); c.addView(warn);
         WalletActions w = new WalletActions(act);
@@ -634,6 +635,8 @@ public final class DoorsTab extends LinearLayout {
             c.addView(rescuePill("🔑  Export the stale ETH key", Design.SURFACE2(), Design.TEXT(), w::exportKey));
             c.addView(rescuePill("↑  Sweep funds to the node wallet", Design.SURFACE2(), Design.TEXT(), () -> w.send(IdentityWatch.nodeEth())));
         }
+        // Host-node mode (Pandamonium): clearing storage or uninstalling would wipe the whole node app - never offered.
+        if (!HostMode.on()) {
         c.addView(rescuePill("🧹  Clear app storage (App info)", Design.SURFACE2(), Design.TEXT(), () -> act.track(new AlertDialog.Builder(act, Design.dialogTheme())
                 .setTitle("Clear Dexicon storage")
                 .setMessage("This is the step that always works.\n\nTap “Open App info”, then Storage → Clear storage. That wipes the saved AtomiX identity so it "
@@ -649,6 +652,7 @@ public final class DoorsTab extends LinearLayout {
                     try { act.startActivity(new android.content.Intent(android.content.Intent.ACTION_DELETE, android.net.Uri.parse("package:" + act.getPackageName()))); }
                     catch (Exception e) { act.toast("Couldn't open the uninstaller — remove Dexicon from Android Settings › Apps"); }
                 }).setNegativeButton("Cancel", null).show())));
+        }
     }
     private TextView rescuePill(String label, int bg, int fg, Runnable r) {
         TextView p = Design.pill(act, label, bg, fg);

@@ -10,7 +10,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /** Same SDK callback contract as MinimaAPI, with small internal Binder messages. */
-final class NodeTransport {
+final class NodeTransport implements NodeLink {
     static final int MAX_BYTES = com.eurobuddha.minimaapi.MinimaAPIResponse.MAX_BYTES;
     static final int MAX_PENDING = 128;
     static final long REPLY_RETENTION_MS = 10 * 60_000L + 5_000;
@@ -87,7 +87,7 @@ final class NodeTransport {
     }
 
     /** PandaPools NodeTransport.FileCommand: an admin-gated FILE action, staged like a command (type 2). */
-    void FileCommand(String action, String path, String newPath, android.net.Uri uri, MinimaAPIListener cb) {
+    public void FileCommand(String action, String path, String newPath, android.net.Uri uri, MinimaAPIListener cb) {
         try {
             JSONObject value = new JSONObject().put("action", action).put("path", path);
             if (newPath != null) value.put("newPath", newPath);
@@ -96,7 +96,7 @@ final class NodeTransport {
         } catch (Exception invalid) { cb.response(failure("Could not stage file request.")); }
     }
 
-    void Command(String command, MinimaAPIListener cb) { stage(command, 1, cb); }
+    public void Command(String command, MinimaAPIListener cb) { stage(command, 1, cb); }
 
     private void stage(String command, int type, MinimaAPIListener cb) {
         if (closed || !bound) { cb.response(failure("Node reply service is unavailable.")); return; }
@@ -145,7 +145,7 @@ final class NodeTransport {
     private void failAll(String error) {
         for (String id : new ArrayList<>(callbacks.keySet())) complete(id, failure(error));
     }
-    void onDestroy() {
+    public void onDestroy() {
         closed = true;
         failAll("Node reply connection closed.");
         if (bound) { context.unbindService(connection); bound = false; }

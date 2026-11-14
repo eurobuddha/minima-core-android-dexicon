@@ -55,11 +55,14 @@ public final class TradingGate {
         return out;
     }
 
-    /** Trading is off: one of the apps is here, or the MiniHub has never been read (fail closed). */
-    public static boolean blocked(Context c) { return conflict(c) || !miniHubChecked(c); }
+    /** Trading is off: one of the apps is here, or the MiniHub has never been read (fail closed). Never in host-node mode
+     *  (Pandamonium): the host node signs everything and picks every one-time key itself, so a sibling trading app cannot
+     *  reuse a key - at worst two apps pick the same coin and the chain takes one. */
+    public static boolean blocked(Context c) { return !HostMode.on() && (conflict(c) || !miniHubChecked(c)); }
 
     /** One of the apps was actually FOUND (not just "not checked yet"): the maker withdraws its live orders. */
     public static boolean conflict(Context c) {
+        if (HostMode.on()) return false;
         return installed(c, ATOMIX) || installed(c, PANDAPOOLS) || !miniDapps(c).isEmpty();
     }
 
@@ -69,7 +72,7 @@ public final class TradingGate {
     /** Re-reads the node's MiniHub (`mds`, needs the ADMIN Dexicon already requires). A failed read keeps the last answer
      *  (and, before the first success, keeps trading off). The Activity and MakerService both call it. */
     public static void checkMiniHub(Context c, NodeApi node, Runnable done) {
-        if (node == null) { if (done != null) done.run(); return; }
+        if (node == null || HostMode.on()) { if (done != null) done.run(); return; }
         note(c, "asked the node");
         node.cmd("mds", new NodeApi.Cb() {
             public void onResult(JSONObject j) { onReply(c, j); if (done != null) done.run(); }
