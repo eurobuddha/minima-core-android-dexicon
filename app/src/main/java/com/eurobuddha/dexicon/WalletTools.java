@@ -22,7 +22,7 @@ final class WalletTools {
     private WalletTools() {}
 
     static void consolidate(MainActivity act, String tokenid, String name, int coins) {
-        if (!act.paired()) { act.toast("Pair with your node first"); return; }
+        if (!act.paired()) { act.toast(HostMode.text("Pair with your node first", "The node is not ready yet")); return; }
         if (coins < 2) { message(act, "Nothing to consolidate", "Your " + name + " is already in " + coins + (coins == 1 ? " coin." : " coins.")); return; }
         new AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Consolidate " + name)
                 .setMessage("Combine your " + coins + " " + name + " wallet coins into fewer, larger ones?\n\n"
@@ -37,7 +37,7 @@ final class WalletTools {
     }
 
     static void split(MainActivity act, String tokenid, String name, BigDecimal sendable) {
-        if (!act.paired()) { act.toast("Pair with your node first"); return; }
+        if (!act.paired()) { act.toast(HostMode.text("Pair with your node first", "The node is not ready yet")); return; }
         String addr = act.receiveAddress();
         if (addr.isEmpty()) { act.toast("Reading your address — try again in a moment"); return; }
         if (sendable == null || sendable.signum() <= 0) { message(act, "Nothing to split", "No sendable " + name + " right now."); return; }
@@ -101,7 +101,7 @@ final class WalletTools {
     /** WITHDRAW: send from the Trading Account to any address — by default back to the node's OWN wallet (its real
      *  getaddress, straight from the node). Signed by the account; the address is shown in full before anything moves. */
     static void withdraw(MainActivity act, String tokenid, String name, BigDecimal sendable) {
-        if (!act.paired()) { act.toast("Pair with your node first"); return; }
+        if (!act.paired()) { act.toast(HostMode.text("Pair with your node first", "The node is not ready yet")); return; }
         if (sendable == null || sendable.signum() <= 0) { message(act, "Nothing to withdraw", "No sendable " + name + " right now."); return; }
         act.nodeApi().cmdDirect("getaddress", null, 0, new NodeApi.Cb() {
             public void onResult(JSONObject j) { JSONObject r = j.optJSONObject("response"); form(r == null ? "" : r.optString("miniaddress", "")); }

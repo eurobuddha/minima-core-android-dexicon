@@ -14,6 +14,7 @@ import androidx.core.app.NotificationCompat;
 public final class Notifier {
     private static final String CH_ALERT = "dexicon_alert";
     private static int nextId = 3100;
+    private static final String TAG = "dexicon.alert";
     private Notifier() {}
 
     public static void ensureChannels(Context c) {
@@ -33,7 +34,7 @@ public final class Notifier {
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
                     .setSmallIcon(android.R.drawable.stat_sys_upload_done)
                     .setContentIntent(pi).setAutoCancel(true).build();
-            nm.notify(nextId++, n);
+            nm.notify(TAG, nextId++, n);   // tagged: a host app's untagged ids (e.g. 3101) never collide
         } catch (Exception ignored) {}
     }
 }

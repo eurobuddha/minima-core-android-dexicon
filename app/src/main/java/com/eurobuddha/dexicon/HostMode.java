@@ -49,6 +49,26 @@ public final class HostMode {
                 .putExtra("event", event));
     }
 
+    /** Host mode (review of Pandamonium 2.2.34, M3): a host user who never opened Dexicon gets no maker engine, no heartbeat
+     *  and no relay traffic. Background work is allowed once the tab has been opened, or when trading data from the host's
+     *  old built-in AtomiX / PandaPools is on disk (live swaps and pools must keep being served). Standalone: always. */
+    public static boolean backgroundAllowed(Context c) {
+        if (!on()) return true;
+        if (c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("opened", false)) return true;
+        java.io.File prefs = new java.io.File(c.getApplicationInfo().dataDir, "shared_prefs");
+        return c.getDatabasePath("atomix.db").exists() || new java.io.File(prefs, "pandapools_ownpools.xml").exists();
+    }
+
+    /** The user opened Dexicon in the host: from now on its background work runs, as in the standalone app. */
+    public static void markOpened(Context c) {
+        if (on()) c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("opened", true).apply();
+    }
+
+    /** Standalone wording, or the host's (no pairing, no Apps screen: the node is the host itself). */
+    public static String text(String standalone, String host) { return on() ? host : standalone; }
+
+    private static final String PREFS = "dexicon_host";
+
     /** Test seam. */
     static void reset() { factory = null; hostName = ""; }
 }

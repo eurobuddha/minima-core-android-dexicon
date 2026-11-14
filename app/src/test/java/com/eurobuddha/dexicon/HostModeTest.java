@@ -89,6 +89,20 @@ public class HostModeTest {
         assertTrue("standalone Dexicon still gates", TradingGate.blocked(app));
     }
 
+    @Test public void aHostUserWhoNeverOpenedDexiconGetsNoBackgroundWork() {
+        app.getSharedPreferences("dexicon_host", 0).edit().clear().commit();
+        assertFalse("never opened, no old trading data: no maker, no relay traffic", HostMode.backgroundAllowed(app));
+        HostMode.markOpened(app);
+        assertTrue("opened once: background work as standalone", HostMode.backgroundAllowed(app));
+        app.getSharedPreferences("dexicon_host", 0).edit().clear().commit();
+        app.openOrCreateDatabase("atomix.db", 0, null).close();
+        assertTrue("old built-in AtomiX data: live swaps keep being served", HostMode.backgroundAllowed(app));
+        app.deleteDatabase("atomix.db");
+        HostMode.reset();
+        assertTrue("standalone always runs it", HostMode.backgroundAllowed(app));
+        assertEquals("standalone", HostMode.text("standalone", "host"));
+    }
+
     @Test public void standaloneNeverSeesHostMode() {
         HostMode.reset();
         assertFalse(HostMode.on());

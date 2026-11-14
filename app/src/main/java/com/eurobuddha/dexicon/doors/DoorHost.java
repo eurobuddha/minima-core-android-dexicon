@@ -134,7 +134,9 @@ public final class DoorHost {
         // Live stuck-lock cancel test (AtomiX EthTx.stuckLockSwitch): on only while this file exists in Dexicon's own folder,
         // which only adb can create (/sdcard/Android/data/com.eurobuddha.dexicon/files/stuck-lock-test). Absent: no effect.
         java.io.File ext = app.getExternalFilesDir(null);
-        if (ext != null) com.eurobuddha.atomix.eth.EthTx.stuckLockSwitch = new java.io.File(ext, "stuck-lock-test");
+        // Android 11+ only: there no other app can write another app's external folder (scoped storage); below it, one with
+        // WRITE_EXTERNAL_STORAGE could plant the file and make every lock cheap-gas + auto-cancelled.
+        if (ext != null && android.os.Build.VERSION.SDK_INT >= 30) com.eurobuddha.atomix.eth.EthTx.stuckLockSwitch = new java.io.File(ext, "stuck-lock-test");
         prefs = app.getSharedPreferences(DoorForwards.PREFS, Context.MODE_PRIVATE);
         dnode = new com.eurobuddha.dexicon.NodeApi(app, en -> { if (en) { IdentityWatch.forceNext(); ensure(); } changed(); });
         lastRegisterMs = System.currentTimeMillis();

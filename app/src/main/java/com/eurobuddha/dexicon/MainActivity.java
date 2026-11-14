@@ -239,6 +239,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         ContextCompat.registerReceiver(this, nodeReceiver, new IntentFilter(NodeTransportService.EVENT_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 91);
+        HostMode.markOpened(this);
         try { ContextCompat.startForegroundService(this, new Intent(this, MakerService.class)); } catch (Exception ignored) {}
         ui.postDelayed(pollTask, 3_000);
         ui.postDelayed(liveTask, 1000);
@@ -386,7 +387,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                     } catch (Exception e) { ui.post(() -> { deriving = false; setStage("Identity derivation failed: " + e.getMessage()); }); }
                 });
             }
-            public void failed(String m) { deriving = false; setStage(NodeApi.ERR_NOT_ENABLED.equals(m) ? "Enable Dexicon in Minima Core → Apps" : NodeApi.ERR_NOT_ADMIN.equals(m) ? "Dexicon needs ADMIN in Minima Core → Apps. Nothing runs without it." : "Identity: " + m + ". Unlock and reopen."); }
+            public void failed(String m) { deriving = false; setStage(NodeApi.ERR_NOT_ENABLED.equals(m) ? HostMode.text("Enable Dexicon in Minima Core → Apps", "The node is not ready yet") : NodeApi.ERR_NOT_ADMIN.equals(m) ? "Dexicon needs ADMIN in Minima Core → Apps. Nothing runs without it." : "Identity: " + m + ". Unlock and reopen."); }
         });
     }
 
@@ -480,7 +481,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     void openNodeApp() {
         String pkg = NodeApi.nodeApp(this)[0];
         android.content.Intent open = pkg.isEmpty() ? null : getPackageManager().getLaunchIntentForPackage(pkg);
-        if (open != null) startActivity(open); else toast("Install or start your Minima node app first");
+        if (open != null) startActivity(open); else toast(HostMode.text("Install or start your Minima node app first", "The node is not running yet - check Minima Core"));
     }
 
     /** One trading app per phone: every confirmed or automatic trade asks here first (MakerEngine asks again). */
@@ -931,7 +932,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     }
 
     void cancelOrder(MyOrder o) {
-        if (engine == null) { toast("Not paired yet — enable Dexicon in your node app (Apps), unlock it, then try again"); return; }
+        if (engine == null) { toast(HostMode.text("Not paired yet — enable Dexicon in your node app (Apps), unlock it, then try again", "The node is not ready yet - try again in a moment")); return; }
         confirm("Cancel order " + o.orderId + "?", (o.side.equals("sell") ? "SELL " : "BUY ") + Util.fmt(Util.dec(o.remaining)) + " MINIMA @ " + o.price, () -> {
             busy = true; repaint();
             if (engine == null) { busy = false; toast("Not paired — try again once PAIRED"); repaint(); return; }
@@ -940,7 +941,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     }
 
     void editOrder(MyOrder o) {
-        if (engine == null) { toast("Not paired yet — enable Dexicon in your node app (Apps), unlock it, then try again"); return; }
+        if (engine == null) { toast(HostMode.text("Not paired yet — enable Dexicon in your node app (Apps), unlock it, then try again", "The node is not ready yet - try again in a moment")); return; }
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
         int p = Design.dp(this, 16); box.setPadding(p, p, p, 0);
         EditText price = new EditText(this); price.setHint("Price (MxUSD per MINIMA)"); price.setText(o.price);

@@ -65,7 +65,7 @@ import java.util.concurrent.Executors;
 public class MakerService extends Service {
 
     private static final String CH_FG = "dexicon_maker";
-    private static final int FG_ID = 7601;
+    private static final int FG_ID = 7701;   // was 7601 = Atelier's mint notification inside Pandamonium
     public static final String ACTION_HEARTBEAT = "com.eurobuddha.dexicon.HEARTBEAT";
     /** SAVE / STOP on the market maker: reconcile the ladder NOW, not after the inbox long-poll comes back. */
     public static final String ACTION_LADDER = "com.eurobuddha.dexicon.LADDER";

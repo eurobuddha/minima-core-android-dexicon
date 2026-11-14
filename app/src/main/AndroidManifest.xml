@@ -70,6 +70,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
+        <!-- Notifications posted by <= 0.3.51 open the PandaPools screen by its old Activity name. -->
+        <activity-alias
+            android:name="com.eurobuddha.pandapools.MainActivity"
+            android:targetActivity=".DexiconActivity"
+            android:exported="false" />
 
         <service android:name=".NodeTransportService" android:exported="false"
             android:process=":nodeipc" />

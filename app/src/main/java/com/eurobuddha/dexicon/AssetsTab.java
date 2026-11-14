@@ -213,7 +213,7 @@ public final class AssetsTab extends LinearLayout {
         head.addView(t(known ? bal(name, sendable) : "—", Design.TEXT(), 16f, Design.monoBold()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));
         c.addView(head);
         if (!known) {
-            c.addView(Ui.para(act, act.paired() ? "Waiting for wallet balances from Minima Core." : "Pair with Minima Core (Apps → enable Dexicon)."));
+            c.addView(Ui.para(act, act.paired() ? "Waiting for wallet balances from Minima Core." : HostMode.text("Pair with Minima Core (Apps → enable Dexicon).", "Waiting for the node.")));
             return;
         }
         TextView chev = t("", Design.DIM2(), 11.5f, Design.sans());

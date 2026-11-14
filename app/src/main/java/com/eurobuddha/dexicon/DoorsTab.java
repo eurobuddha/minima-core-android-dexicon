@@ -623,7 +623,8 @@ public final class DoorsTab extends LinearLayout {
         det.setTextIsSelectable(true);
         det.setOnLongClickListener(v -> { act.copy("Recovery details", det.getText().toString()); return true; });
         c.addView(det);
-        TextView warn = t("⚠  Clearing Dexicon's storage or reinstalling it wipes the claim secrets for " + unsettled + " unsettled swap" + (unsettled == 1 ? "" : "s")
+        TextView warn = t((HostMode.on() ? "⚠  Never clear " + HostMode.host() + "'s storage or uninstall it: that erases the node wallet and the claim secrets for "
+                : "⚠  Clearing Dexicon's storage or reinstalling it wipes the claim secrets for ") + unsettled + " unsettled swap" + (unsettled == 1 ? "" : "s")
                 + (IdentityWatch.ethMismatch() ? ", the stale ETH key itself (it is never stored — only your OLD node seed could rebuild it)" : "")
                 + ", your pools' local records and your exchange orders. Rescue what you need FIRST: export the key, sweep the funds, and back up your pools "
                 + "(② Pools › My pools › Recovery › Back up)."

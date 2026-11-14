@@ -171,13 +171,15 @@ final class StrandingWatch {
         } else {
             b.addAction(0, "Open PandaPools", open);
         }
-        try { nm.notify(idFor(p.address), b.build()); } catch (Exception blocked) { /* permission refused */ }
+        try { nm.notify(TAG, idFor(p.address), b.build()); } catch (Exception blocked) { /* permission refused */ }
     }
+
+    private static final String TAG = "dexicon.pools";   // never collides with a host app's untagged ids
 
     private static void clear(Context ctx, String address) {
         if (lastLevel(ctx, address) == Level.NONE) return;
         NotificationManager nm = ctx.getSystemService(NotificationManager.class);
-        if (nm != null) try { nm.cancel(idFor(address)); } catch (Exception ignored) {}
+        if (nm != null) try { nm.cancel(TAG, idFor(address)); nm.cancel(idFor(address)); /* an untagged one from <= 0.3.53 */ } catch (Exception ignored) {}
         prefs(ctx).edit().remove(levelKey(address)).remove(atKey(address)).apply();
     }
 
