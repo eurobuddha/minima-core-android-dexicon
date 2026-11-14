@@ -16,7 +16,7 @@ public final class RestartActivity extends Activity {
         super.onCreate(b);
         int pid = getIntent().getIntExtra(EXTRA_PID, -1);
         if (pid > 0 && pid != android.os.Process.myPid()) android.os.Process.killProcess(pid);
-        startActivity(new Intent(this, com.eurobuddha.dexicon.MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        startActivity(new Intent(this, com.eurobuddha.dexicon.DexiconActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
         finish();
         android.os.Process.killProcess(android.os.Process.myPid());
     }

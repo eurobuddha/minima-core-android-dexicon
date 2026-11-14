@@ -177,7 +177,7 @@ public class WalletView extends BaseView {
             withdraw.setOnClickListener(v -> new WalletTools(act).showWithdraw(balances)); box.addView(withdraw);
             TextView words = mono("Show Trading Account words", 14f, Design.accent(), true);
             words.setPadding(0, dp(12), 0, dp(12));
-            words.setOnClickListener(v -> com.eurobuddha.account.AccountSetup.reveal(act)); box.addView(words);
+            words.setOnClickListener(v -> com.eurobuddha.account.AccountSetup.reveal(act.activity())); box.addView(words);
         }
         if (act.node().hasInterruptedWrite()) {
             TextView resolve = mono("Resolve interrupted write", 14f, Design.amber(), true);

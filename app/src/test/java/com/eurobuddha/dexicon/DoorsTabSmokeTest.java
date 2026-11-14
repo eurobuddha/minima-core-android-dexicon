@@ -25,7 +25,7 @@ public class DoorsTabSmokeTest {
     static MainActivity launch() {
         com.eurobuddha.pandapools.DexiconPools.custodyExecutorForTest(Runnable::run);   // the background custody read, inline
         TradingGate.record(org.robolectric.RuntimeEnvironment.getApplication(), new org.json.JSONArray());
-        return org.robolectric.Robolectric.buildActivity(MainActivity.class).setup().get();
+        return org.robolectric.Robolectric.buildActivity(DexiconActivity.class).setup().get().screen();
     }
     static String room(int r) { return MainActivity.ROOMS[r]; }
     /** A bottom-bar tab: the cell (icon over label) that takes the tap. */

@@ -148,7 +148,8 @@ final class StrandingWatch {
         // notification about losing access to funds.
 
         PendingIntent open = PendingIntent.getActivity(ctx, idFor(p.address),
-                new Intent(ctx, MainActivity.class),
+                new Intent(ctx, com.eurobuddha.dexicon.DexiconActivity.class).putExtra(MainActivity.EXTRA_POOLS_PAGE, MainActivity.TAB_MYLP)
+                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP),   // Dexicon on ② My pools
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, CH_STRAND)

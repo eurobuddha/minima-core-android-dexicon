@@ -133,6 +133,9 @@ public class NodeApi implements com.eurobuddha.account.Transport {
     }
 
     private boolean dead() {
+        // the Dexicon screen is no longer an Activity (0.3.52): its own finishing / destroyed state counts, as the Activity's did
+        if (mContext instanceof com.eurobuddha.dexicon.ui.Screen)
+            return ((com.eurobuddha.dexicon.ui.Screen) mContext).isFinishing() || ((com.eurobuddha.dexicon.ui.Screen) mContext).isDestroyed();
         return mContext instanceof Activity && (((Activity) mContext).isFinishing() || ((Activity) mContext).isDestroyed());
     }
 

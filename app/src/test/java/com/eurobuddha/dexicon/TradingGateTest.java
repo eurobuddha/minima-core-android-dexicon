@@ -57,7 +57,7 @@ public class TradingGateTest {
     @Test public void atomixInstalledBlocksTradingUntilRemoved() {
         TradingGate.record(app, new JSONArray());
         installAtomix(186);
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = Robolectric.buildActivity(DexiconActivity.class).setup().get().screen();
         View root = a.getWindow().getDecorView();
         assertNotNull("gate shown", DoorsTabSmokeTest.find(root, "One trading app per phone"));
         assertNull("no trading tabs behind it", DoorsTabSmokeTest.find(root, "Trade"));
@@ -79,7 +79,7 @@ public class TradingGateTest {
         assertFalse(TradingGate.miniHubChecked(app));
         assertTrue("never read: blocked", TradingGate.blocked(app));
         assertFalse("but nothing was FOUND, so nothing is withdrawn", TradingGate.conflict(app));
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = Robolectric.buildActivity(DexiconActivity.class).setup().get().screen();
         View root = a.getWindow().getDecorView();
         assertNotNull("a short checking state, not the trading chrome", DoorsTabSmokeTest.find(root, "Checking your node…"));
         assertNull(DoorsTabSmokeTest.find(root, "Trade"));
@@ -124,13 +124,13 @@ public class TradingGateTest {
     private MainActivity gated() {
         TradingGate.record(app, new JSONArray());
         installAtomix(186);
-        return Robolectric.buildActivity(MainActivity.class).setup().get();
+        return Robolectric.buildActivity(DexiconActivity.class).setup().get().screen();
     }
 
     /** The next started activity, skipping the notification-permission prompt onCreate asks for. */
-    private static Intent next(Activity a) {
+    private static Intent next(MainActivity a) {
         Intent i;
-        do i = Shadows.shadowOf(a).getNextStartedActivity(); while (i != null && "android.content.pm.action.REQUEST_PERMISSIONS".equals(i.getAction()));
+        do i = Shadows.shadowOf(a.activity()).getNextStartedActivity(); while (i != null && "android.content.pm.action.REQUEST_PERMISSIONS".equals(i.getAction()));
         return i;
     }
 
@@ -195,7 +195,7 @@ public class TradingGateTest {
     @Test public void aYesFromAnotherSignerIsIgnored() {
         TradingGate.record(app, new JSONArray());
         installAtomix(186, "0d0e0f");
-        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        MainActivity a = Robolectric.buildActivity(DexiconActivity.class).setup().get().screen();
         a.startHandover(TradingGate.ATOMIX, "AtomiX", true); next(a);
         a.onHandover(Activity.RESULT_OK, answer(true, TradingGate.ATOMIX, 186));
         assertNull("no uninstall", next(a));

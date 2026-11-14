@@ -111,8 +111,8 @@ public class PoolsRoomSmokeTest {
     @Test public void resumingOnMyPoolsRestartsItsRefresh() throws Exception {
         com.eurobuddha.pandapools.DexiconPools.custodyExecutorForTest(Runnable::run);
         TradingGate.record(org.robolectric.RuntimeEnvironment.getApplication(), new org.json.JSONArray());
-        org.robolectric.android.controller.ActivityController<MainActivity> c = org.robolectric.Robolectric.buildActivity(MainActivity.class).setup();
-        MainActivity a = c.get();
+        org.robolectric.android.controller.ActivityController<DexiconActivity> c = org.robolectric.Robolectric.buildActivity(DexiconActivity.class).setup();
+        MainActivity a = c.get().screen();
         a.showTab(MainActivity.TAB_PMINE);
         java.lang.reflect.Field lpF = MainActivity.class.getDeclaredField("pMyLp"); lpF.setAccessible(true);
         Object lp = lpF.get(a);

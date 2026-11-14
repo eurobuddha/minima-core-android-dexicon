@@ -27,7 +27,7 @@ public final class Notifier {
             ensureChannels(c);
             NotificationManager nm = c.getSystemService(NotificationManager.class);
             if (nm == null) return;
-            PendingIntent pi = PendingIntent.getActivity(c, 31, new Intent(c, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            PendingIntent pi = PendingIntent.getActivity(c, 31, new Intent(c, DexiconActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
             Notification n = new NotificationCompat.Builder(c, CH_ALERT)
                     .setContentTitle(title).setContentText(body)
                     .setStyle(new NotificationCompat.BigTextStyle().bigText(body))

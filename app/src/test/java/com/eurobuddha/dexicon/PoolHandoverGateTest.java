@@ -50,7 +50,7 @@ public class PoolHandoverGateTest {
         assertTrue(DexiconPools.keptElsewhere(a, A) && DexiconPools.keptElsewhere(a, B));
 
         a.startHandover(TradingGate.PANDAPOOLS, "PandaPools", false);
-        Intent asked = Shadows.shadowOf(a).getNextStartedActivityForResult().intent;
+        Intent asked = Shadows.shadowOf(a.activity()).getNextStartedActivityForResult().intent;
         assertEquals(TradingGate.ACTION_HANDOVER, asked.getAction());
         assertNotNull("Dexicon names the pools it holds", asked.getStringArrayExtra(DexiconPools.EXTRA_DEXICON_POOLS));
 

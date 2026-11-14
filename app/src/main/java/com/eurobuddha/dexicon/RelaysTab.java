@@ -97,7 +97,7 @@ public final class RelaysTab extends LinearLayout {
             com.eurobuddha.account.Account a = com.eurobuddha.account.Account.get(act, act.dexNode());
             if (a != null) a.receiveAddress(x -> { addr.setText(x[1] + "\n" + x[0]); addr.setOnClickListener(v -> act.copy("Trading Account address", x[1])); });
             TextView words = button("SHOW 24 WORDS");
-            words.setOnClickListener(v -> com.eurobuddha.account.AccountSetup.reveal(act));
+            words.setOnClickListener(v -> com.eurobuddha.account.AccountSetup.reveal(act.activity()));
             LayoutParams wl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); wl.topMargin = Design.dp(act, 8);
             accountCard.addView(words, wl);
             TextView move = button("MOVE TO ATOMIX / PANDAPOOLS");

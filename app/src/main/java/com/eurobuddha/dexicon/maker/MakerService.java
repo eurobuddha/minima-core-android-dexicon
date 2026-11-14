@@ -643,7 +643,7 @@ public class MakerService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
         Intent launch = com.eurobuddha.minimaapi.MinimaAPI.launchNode(this);
-        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 13, launch != null ? launch : new Intent(this, com.eurobuddha.dexicon.MainActivity.class),
+        android.app.PendingIntent pi = android.app.PendingIntent.getActivity(this, 13, launch != null ? launch : new Intent(this, com.eurobuddha.dexicon.DexiconActivity.class),
                 android.app.PendingIntent.FLAG_UPDATE_CURRENT | android.app.PendingIntent.FLAG_IMMUTABLE);
         String body = "Your Minima node isn't running — your published AtomiX market will drop off the book. Tap to open it.";
         try {
@@ -710,7 +710,7 @@ public class MakerService extends Service {
     }
 
     private Notification fgNotification(String text) {
-        PendingIntent pi = PendingIntent.getActivity(this, 24, new Intent(this, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent pi = PendingIntent.getActivity(this, 24, new Intent(this, com.eurobuddha.dexicon.DexiconActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, CH_FG)
                 .setContentTitle("Dexicon maker")
                 .setContentText(text)

@@ -21,7 +21,6 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
 import com.eurobuddha.dexicon.envelope.Envelope;
@@ -67,6 +66,9 @@ import java.util.concurrent.Executors;
  * visible tab renders. The maker side lives in {@link MakerService}; this Activity is the TAKER and the order desk.
  */
 public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
+
+    /** A screen, not an Activity (0.3.52): {@link DexiconActivity} hosts it standalone; another app can host it in a tab. */
+    public MainActivity(Host host) { super(host); }
 
     public static volatile boolean FOREGROUND = false;
     private static final long POLL_MS = 30_000;
@@ -195,7 +197,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         super.onCreate(savedInstanceState);
         Design.load(this);
         nightModeFollowsDesign();
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        if (windowChangesAllowed()) androidx.core.view.WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         db = new DexDb(this);
         relay = new RelayClient(new HttpTransport());
         applySettings();
@@ -227,13 +229,6 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         poolRepo.subscribe((pools, syncing) -> repaint());
         initPools(node);
         chromeRoot = buildChrome();
-        // AtomiX: Back from any other page returns to Swap; from Swap it leaves as usual.
-        getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
-            @Override public void handleOnBackPressed() {
-                if (!Boolean.TRUE.equals(gateShown) && (tab != TAB_DOORS || tab2 >= 0)) { selectTab(TAB_DOORS); return; }
-                setEnabled(false); getOnBackPressedDispatcher().onBackPressed(); setEnabled(true);
-            }
-        });
         selectTab(tab);
         if (getIntent() != null && getIntent().getIntExtra(EXTRA_POOLS_PAGE, -1) >= 0) goToTab(getIntent().getIntExtra(EXTRA_POOLS_PAGE, -1));   // a pool notification
         applyGate();
@@ -247,6 +242,12 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         try { ContextCompat.startForegroundService(this, new Intent(this, MakerService.class)); } catch (Exception ignored) {}
         ui.postDelayed(pollTask, 3_000);
         ui.postDelayed(liveTask, 1000);
+    }
+
+    /** AtomiX: Back from any other page returns to Swap; from Swap it leaves as usual (the host's default). */
+    @Override public boolean back() {
+        if (!Boolean.TRUE.equals(gateShown) && (tab != TAB_DOORS || tab2 >= 0)) { selectTab(TAB_DOORS); return true; }
+        return false;
     }
 
     NodeApi dexNode() { return node; }
@@ -280,7 +281,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
                         com.eurobuddha.account.Account.quarantineForRestore(this);
                         // straight to RESTORE of the SAME account (fingerprint-checked) — never "Create new" over it
                         String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(this);
-                        com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
+                        com.eurobuddha.account.AccountSetup.show(activity(), node, this::onAccountReady, true, open == null ? "funds" : open);
                     })
                     .setNegativeButton("Later", (d, w) -> { offering = false; lockedTries = 0; }).show());
             return;
@@ -290,17 +291,17 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
             // The account existed here and was lost: its positions are locked to ITS keys — only the same words can settle
             // them, so a brand-new account is not offered while any remain.
             String open = com.eurobuddha.dexicon.account.LegacyPositions.describeAny(this);
-            com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, true, open == null ? "funds" : open);
+            com.eurobuddha.account.AccountSetup.show(activity(), node, this::onAccountReady, true, open == null ? "funds" : open);
             return;
         }
         int acctPools = com.eurobuddha.dexicon.account.LegacyPositions.accountPools(this);
         if (acctPools > 0) {   // pools made under a Trading Account (e.g. carried by a device transfer): only its words settle them
-            com.eurobuddha.account.AccountSetup.showForPools(this, node, this::onAccountReady, acctPools + (acctPools == 1 ? " pool" : " pools"),
+            com.eurobuddha.account.AccountSetup.showForPools(activity(), node, this::onAccountReady, acctPools + (acctPools == 1 ? " pool" : " pools"),
                     com.eurobuddha.dexicon.account.LegacyPositions.accountPoolOwners(this), com.eurobuddha.dexicon.account.LegacyPositions.accountPoolMode(this));
             return;
         }
         String legacy = com.eurobuddha.dexicon.account.LegacyPositions.describe(this);
-        if (legacy == null) { com.eurobuddha.account.AccountSetup.show(this, node, this::onAccountReady, false, null); return; }
+        if (legacy == null) { com.eurobuddha.account.AccountSetup.show(activity(), node, this::onAccountReady, false, null); return; }
         offering = false;
         // closed node-key pools may be all that is left: prove them empty, then look again — and say why if they are not
         com.eurobuddha.pandapools.DexiconPools.proveClosedPools(this, node(), failed -> {
@@ -335,7 +336,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         com.eurobuddha.atomix.IdentityWatch.forceNext();
         toast("Trading Account ready — Dexicon restarts once.");
         stopService(new Intent(this, MakerService.class));
-        com.eurobuddha.dexicon.account.RestartActivity.restart(this);
+        com.eurobuddha.dexicon.account.RestartActivity.restart(activity());
     }
 
     private void onPaired() {
@@ -1725,7 +1726,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
      *  mode is bound to the palette — on a light phone with Dexicon dark, the vendored pool dialogs (create, add,
      *  migrate, backup password) painted white with white text. Dexicon handles uiMode itself (manifest), so no recreate. */
     private void nightModeFollowsDesign() {
-        getDelegate().setLocalNightMode(Design.isDark() ? androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES : androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO);
+        if (windowChangesAllowed()) getDelegate().setLocalNightMode(Design.isDark() ? androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_YES : androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_NO);
     }
 
     static final String CONSOLIDATE_MINIMA = "Consolidate MINIMA coins", CONSOLIDATE_MXUSD = "Consolidate MxUSD coins";

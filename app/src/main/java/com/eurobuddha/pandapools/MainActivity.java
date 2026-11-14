@@ -8,7 +8,6 @@ import android.os.Looper;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
-import androidx.appcompat.app.AppCompatActivity;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -26,9 +25,10 @@ import java.util.function.Consumer;
  * Ported from apks/pandapools MainActivity: node()/history()/pools(), the file pickers, the per-block refresh and the
  * once-per-session boot (sentinel untrack, re-track my pools, foreign-tracking hygiene).
  *
- * Launched by itself (the stranding notification's "Open"), it forwards to Dexicon's ② My pools and closes.
+ * A {@link com.eurobuddha.dexicon.ui.Screen}, not an Activity (0.3.52): it runs in whatever hosts Dexicon's screen. The stranding
+ * notification's "Open" goes straight to {@link com.eurobuddha.dexicon.DexiconActivity} on ② My pools.
  */
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends com.eurobuddha.dexicon.ui.Screen {
 
     public static final int TAB_SWAP = 0, TAB_POOLS = 1, TAB_MYLP = 2, TAB_WALLET = 3, TAB_ACTIVITY = 4;
     /** Extra on the Dexicon launch intent: open this ② page (one of TAB_SWAP / TAB_POOLS / TAB_MYLP). */
@@ -47,14 +47,10 @@ public class MainActivity extends AppCompatActivity {
     private ActivityResultLauncher<String[]> openDocLauncher;
     private Consumer<Uri> pendingSave, pendingOpen, pendingCsv;
 
+    protected MainActivity(Host host) { super(host); }
+
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
-        if (getClass() == MainActivity.class) {   // the bare shim (a notification tap): open Dexicon on ② My pools
-            startActivity(new Intent().setClassName(this, "com.eurobuddha.dexicon.MainActivity").putExtra(EXTRA_POOLS_PAGE, TAB_MYLP)
-                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_NEW_TASK));
-            finish();
-            return;
-        }
         // Storage Access Framework pickers (pool backup save / restore, statement CSV) — registered before STARTED.
         saveDocLauncher = registerForActivityResult(new ActivityResultContracts.CreateDocument("application/octet-stream"), uri -> {
             Consumer<Uri> cb = pendingSave; pendingSave = null; if (cb != null) cb.accept(uri);
@@ -139,7 +135,7 @@ public class MainActivity extends AppCompatActivity {
         try {
             if (android.os.Build.VERSION.SDK_INT >= 33 && androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS)
                     != android.content.pm.PackageManager.PERMISSION_GRANTED)
-                androidx.core.app.ActivityCompat.requestPermissions(this, new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
+                androidx.core.app.ActivityCompat.requestPermissions(activity(), new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1);
         } catch (Exception ignored) {}
     }
 
