@@ -70,5 +70,5 @@ public final class HostMode {
     private static final String PREFS = "dexicon_host";
 
     /** Test seam. */
-    static void reset() { factory = null; hostName = ""; }
+    public static void reset() { factory = null; hostName = ""; }
 }

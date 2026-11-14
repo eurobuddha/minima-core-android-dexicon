@@ -65,6 +65,26 @@ public final class AssetsTab extends LinearLayout {
     /** A new block while ASSETS is on screen: the wallet re-reads (it is not in the every-block fan-out — ② Wallet is). */
     void newBlock() { wallet.onNewBlock(); }
 
+    /** Host mode only: resting orders the host's old built-in PandaDEX placed from this node, with a way to take them home. */
+    private void oldDexCard() {
+        java.util.List<com.eurobuddha.dexicon.resting.Order5> old = act.oldDexOrders();
+        if (old.isEmpty()) return;
+        LinearLayout c = card();
+        c.addView(Ui.label(act, "OLD PANDADEX ORDERS · " + old.size()));
+        c.addView(Ui.para(act, "Placed from this node by the built-in PandaDEX. Nothing re-prices them any more: they stay fillable at their "
+                + "old price until they expire (600 blocks). Return them to your wallet."));
+        for (com.eurobuddha.dexicon.resting.Order5 o : old) {
+            TextView row = t((o.sell ? "SELL " : "BUY ") + o.minimaAmount().stripTrailingZeros().toPlainString() + " MINIMA for "
+                    + o.mxusdAmount().stripTrailingZeros().toPlainString() + " MxUSD\ncoin " + o.coinid, Design.TEXT(), 11f, Design.mono());
+            row.setTextIsSelectable(true);
+            c.addView(row);
+        }
+        TextView go = Ui.button(act, "Return all to my wallet");
+        go.setOnClickListener(v -> act.returnOldDexOrders());
+        c.addView(go);
+        body.addView(c);
+    }
+
     public void render() {
         body.removeAllViews();
         Funds f = Funds.of(act);   // the same numbers the TRADE funds panel shows
@@ -79,6 +99,7 @@ public final class AssetsTab extends LinearLayout {
         body.addView(walletBox);
 
         identityCard();
+        oldDexCard();
 
         // Advanced (folded): the dollar-token override exists only for TEST chains, where mainnet MxUSD does not exist and
         // a test token stands in for it. On mainnet it must stay empty.

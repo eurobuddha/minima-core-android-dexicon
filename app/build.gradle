@@ -16,8 +16,11 @@ android {
         // 0.3.54: review of the Pandamonium tab - alerts/pool warnings posted with tags and the maker's foreground id moved
         // (7601 = Atelier's), host user never opening Dexicon gets no maker/heartbeat, host-mode wording (no pairing, never
         // "clear storage"), stuck-lock test switch only on Android 11+, old PandaPools notification taps still open Dexicon.
-        versionCode 354
-        versionName "0.3.54"
+        // 0.3.55: host mode - return the node's old PandaDEX resting orders (owner cancel ported from PandaDEX) from an Assets
+        // card; "Start fresh with the node's current keys" on the identity-halt card (the in-app reinstall: rescue first, no
+        // unsettled swap). Standalone unchanged.
+        versionCode 355
+        versionName "0.3.55"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

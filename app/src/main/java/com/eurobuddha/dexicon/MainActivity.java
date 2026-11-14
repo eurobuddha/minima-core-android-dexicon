@@ -347,6 +347,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         readBalances(); readBlock();
         if (me == null) deriveIdentity();
         refreshResting();
+        loadNodeKeys();
     }
 
     /** BOOK/POOL use the mainnet MxUSD id baked into the V5 covenant and the pool scan; a dev dollar-token
@@ -929,6 +930,50 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         if (due.isEmpty()) return;
         db.setMeta("retry_due", "");
         if (run == null) setStage("Your take of order " + due + " lost the race (" + db.meta("last_refusal", "taken") + "). Nothing was traded.");
+    }
+
+    // ---- host mode: the node's own resting orders left by the host's old built-in PandaDEX (Pandamonium 2.2.35 review).
+    //      Nothing re-prices them any more; they would stay fillable at their old price until they expire. ----
+    private java.util.Set<String> nodeKeys = java.util.Collections.emptySet();
+
+    private void loadNodeKeys() {
+        if (!HostMode.on()) return;
+        com.eurobuddha.dexicon.doors.DoorHost.get(this).minima().loadMyKeys(new com.eurobuddha.atomix.swap.MinimaHtlc.KeysCb() {
+            @Override public void ok(java.util.Set<String> keys) { ui.post(() -> { if (keys != null && !keys.isEmpty()) { nodeKeys = keys; repaint(); } }); }
+            @Override public void err(String m) {}
+        });
+    }
+
+    List<Order5> oldDexOrders() {
+        List<Order5> out = new ArrayList<>();
+        if (!HostMode.on() || nodeKeys.isEmpty()) return out;
+        for (Order5 o : restingBook().values())
+            if (nodeKeys.contains(com.eurobuddha.atomix.swap.MinimaHtlc.normKey(o.ownerPk))) out.add(o);
+        return out;
+    }
+
+    void returnOldDexOrders() {
+        final List<Order5> todo = oldDexOrders();
+        if (todo.isEmpty() || busy) return;
+        confirm("Return " + todo.size() + " old PandaDEX order" + (todo.size() == 1 ? "" : "s") + "?",
+                "Each order's coin goes back, whole, to the address it pays out to - your wallet. One signature each.", () -> {
+            busy = true; repaint();
+            returnNext(todo, 0, 0);
+        });
+    }
+
+    private void returnNext(List<Order5> todo, int i, int failed) {
+        if (i >= todo.size()) {
+            busy = false;
+            setStage(failed == 0 ? "Old PandaDEX orders returned - they reach your wallet once mined"
+                    : failed + " could not be returned - try again after the next block");
+            refreshResting(); repaint();
+            return;
+        }
+        restingTxn.cancel(todo.get(i), new DexTxn.Result() {
+            @Override public void onPosted(String txpowid) { ui.post(() -> returnNext(todo, i + 1, failed)); }
+            @Override public void onFailed(String message) { ui.post(() -> returnNext(todo, i + 1, failed + 1)); }
+        });
     }
 
     void cancelOrder(MyOrder o) {

@@ -636,6 +636,18 @@ public final class DoorsTab extends LinearLayout {
             c.addView(rescuePill("🔑  Export the stale ETH key", Design.SURFACE2(), Design.TEXT(), w::exportKey));
             c.addView(rescuePill("↑  Sweep funds to the node wallet", Design.SURFACE2(), Design.TEXT(), () -> w.send(IdentityWatch.nodeEth())));
         }
+        // Host-node mode: the in-app reinstall (DoorHost.startFreshIdentity) - only after the rescue above, never with an
+        // unsettled swap. Standalone keeps clear-storage / reinstall below.
+        if (HostMode.on()) c.addView(rescuePill("↻  Start fresh with the node's current keys", Design.RED(), 0xFFFFFFFF, () -> act.track(new AlertDialog.Builder(act, Design.dialogTheme())
+                .setTitle("Start fresh")
+                .setMessage("This is " + HostMode.host() + "'s reinstall for Dexicon: it forgets the orphaned swap identity"
+                        + (IdentityWatch.ethMismatch() ? " and the stale ETH key - it is never stored and cannot be rebuilt, so export it and sweep its funds FIRST" : "")
+                        + ", then trades with your node's current keys. Swap history, claim secrets, pools and orders are kept.\n\n"
+                        + "Only possible once every swap is claimed or refunded.")
+                .setPositiveButton("Start fresh", (x, y) -> {
+                    String refused = com.eurobuddha.dexicon.doors.DoorHost.get(act).startFreshIdentity();
+                    act.toast(refused == null ? "Dexicon now uses your node's current keys" : refused);
+                }).setNegativeButton("Cancel", null).show())));
         // Host-node mode (Pandamonium): clearing storage or uninstalling would wipe the whole node app - never offered.
         if (!HostMode.on()) {
         c.addView(rescuePill("🧹  Clear app storage (App info)", Design.SURFACE2(), Design.TEXT(), () -> act.track(new AlertDialog.Builder(act, Design.dialogTheme())

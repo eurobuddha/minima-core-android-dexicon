@@ -88,6 +88,8 @@ public final class MinimaHtlc {
     public String myAddress() { return myAddress; }
     public String myPubkey() { return myPubkey; }
     public boolean ready() { return myAddress != null && myPubkey != null; }
+    /** Host mode's in-app reinstall only (DoorHost.startFreshIdentity): the next setup() adopts a node key afresh. */
+    public void forgetIdentity() { myAddress = null; myPubkey = null; }
 
     public interface SetupCb { void ok(String address, String pubkey); void err(String msg); }
     public interface SecretCb { void ok(String secret, String hash); void err(String msg); }

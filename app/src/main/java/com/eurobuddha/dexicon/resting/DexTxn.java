@@ -62,6 +62,30 @@ public class DexTxn {
 
     public String hexAddr() { return myHexAddr; }
 
+    /** Owner cancel, ported from PandaDEX DexTxn.cancel (proven on mainnet): the whole coin goes back to its payout address
+     *  (port 1), signed by its owner key (port 0) - the covenant's SIGNEDBY(PREVSTATE(0)) refund branch; no funding coins.
+     *  Inside a host (Pandamonium) it returns the node's own resting orders left by the old built-in PandaDEX. */
+    public void cancel(Order5 o, Result cb) {
+        String txid = "cancel_" + System.nanoTime();
+        List<String> steps = cancelSteps(o, txid);
+        if (steps == null) { cb.onFailed("Invalid order data. Nothing was signed."); return; }
+        postGated(node::cmd, txid, steps, new ArrayList<>(), cb);
+    }
+
+    /** The cancel's commands, or null when the order data is not safe to sign. */
+    static List<String> cancelSteps(Order5 o, String txid) {
+        if (o == null || !FundingCoins.hex(o.coinid) || !FundingCoins.hex(o.ownerPk) || !FundingCoins.hex(o.wantAddr)
+                || o.locked == null || o.locked.signum() <= 0 || o.lockedTok == null || !o.lockedTok.startsWith("0x")) return null;
+        List<String> steps = new ArrayList<>();
+        steps.add("txncreate id:" + txid);
+        steps.add("txninput id:" + txid + " coinid:" + o.coinid);
+        steps.add("txnoutput id:" + txid + " amount:" + o.locked.toPlainString() + " address:" + o.wantAddr
+                + ("0x00".equals(o.lockedTok) ? "" : " tokenid:" + o.lockedTok) + " storestate:false");
+        steps.add("txnsign id:" + txid + " publickey:" + o.ownerPk);
+        steps.add("txnbasics id:" + txid);
+        return steps;
+    }
+
     /** Execute a blended order-book + PandaPools fill in one atomic transaction. */
     public void fillComposite(CompositeRouter.Plan plan, boolean takerBuys, Result cb) { fillComposite(plan, takerBuys, null, cb); }
 

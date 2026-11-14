@@ -495,6 +495,34 @@ public final class DoorHost {
     public String ethAddress() { return wallet.address(); }
     /** AtomiX's Wallet (send / export key) works on the same node-derived wallet and connection the swaps use. */
     public EthWallet wallet() { return wallet; }
+
+    /**
+     * Host mode's reinstall (Pandamonium 2.2.35 review). Standalone, a halted user rescues (export the stale ETH key, sweep
+     * it) and then clears storage or reinstalls; inside a host that would erase the node wallet. This does the part of a
+     * reinstall that fixes the halt - forget the orphaned swap identity and the stale ETH key, adopt the node's current
+     * ones - and keeps everything else (swap history, claim secrets, pools, orders). It is NOT a self-heal (0.1.19 law):
+     * IdentityWatch still detects and halts; only the user, from the rescue card, after the rescue, runs this. Refused
+     * while any swap is unsettled - those settle with the keys they were made with.
+     * @return null when done, else why it was refused
+     */
+    public String startFreshIdentity() {
+        if (!com.eurobuddha.dexicon.HostMode.on()) return "Not available here - clear storage or reinstall Dexicon instead";
+        int open = 0;
+        for (SwapDb.Swap s : swaps())
+            if (!SwapDb.ST_COMPLETE.equals(s.status) && !SwapDb.ST_REFUNDED.equals(s.status) && !SwapDb.ST_ERROR.equals(s.status)) open++;
+        if (open > 0) return open + (open == 1 ? " swap is" : " swaps are") + " still settling with the old keys. They keep running - "
+                + "start fresh once every one is claimed or refunded.";
+        h.post(() -> {
+            prefs.edit().remove("swap_addr").remove("swap_pk").commit();
+            minima.forgetIdentity();
+            wallet.clear();
+            keysLoaded = false;
+            IdentityWatch.forceNext();
+            ensure();
+            changed();
+        });
+        return null;
+    }
     public EthRpc rpc() { return rpc; }
     public String myPublicId(TradingContext m) { CommsIdentity i = ids.get(m); return i == null ? null : i.publicId(); }
     public Map<String, Order> book(TradingContext m) { return books.get(m); }
