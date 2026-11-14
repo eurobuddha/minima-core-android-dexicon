@@ -64,6 +64,62 @@ public final class HostMode {
         if (on()) c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("opened", true).apply();
     }
 
+    // ---- the host's language (Pandamonium: English, 简体中文, Русский, Українська) ----
+    /** English text -> the host's current language, or null to keep the English. */
+    public interface Translator { String translate(String english); }
+    private static volatile Translator translator;
+    public static void setTranslator(Translator t) { translator = t; }
+
+    public static String tr(String s) {
+        Translator t = translator;
+        if (t == null || s == null || s.isEmpty()) return s;
+        String r = t.translate(s);
+        return r == null ? s : r;
+    }
+    /** Styled text (spans: colours, bold) is left as it is - re-setting it would lose the styling. */
+    public static CharSequence tr(CharSequence s) {
+        if (s == null || s instanceof String) return tr((String) s);
+        if (s instanceof android.text.Spanned && ((android.text.Spanned) s).getSpans(0, s.length(), android.text.style.CharacterStyle.class).length > 0) return s;
+        String r = tr(s.toString());
+        return r.equals(s.toString()) ? s : r;
+    }
+    public static int tr(int resource) { return resource; }
+    public static String[] tr(String[] a) { if (a == null || translator == null) return a; String[] o = a.clone(); for (int i = 0; i < o.length; i++) o[i] = tr(o[i]); return o; }
+    public static CharSequence[] tr(CharSequence[] a) { if (a == null || translator == null) return a; CharSequence[] o = a.clone(); for (int i = 0; i < o.length; i++) o[i] = tr(o[i]); return o; }
+
+    private static final java.util.Map<android.widget.TextView, String[]> shown = new java.util.WeakHashMap<>(), hints = new java.util.WeakHashMap<>();
+    /** Translate every label under {@code v} (typed text is never touched; only hints). Remembers each label's English, so a
+     *  language switch re-translates and English comes back for "en". Main thread only. */
+    public static void translateTree(android.view.View v) {
+        if (translator == null || v == null) return;
+        if (v instanceof android.widget.EditText) {
+            CharSequence h = ((android.widget.EditText) v).getHint();
+            if (h != null) { CharSequence t = trRemembered((android.widget.TextView) v, h, true); if (t != h) ((android.widget.EditText) v).setHint(t); }
+        } else if (v instanceof android.widget.TextView) {
+            android.widget.TextView tv = (android.widget.TextView) v;
+            CharSequence now = tv.getText();
+            CharSequence t = trRemembered(tv, now, false);
+            if (t != now) tv.setText(t);
+        }
+        if (v instanceof android.view.ViewGroup) {
+            android.view.ViewGroup g = (android.view.ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) translateTree(g.getChildAt(i));
+        }
+    }
+    private static CharSequence trRemembered(android.widget.TextView tv, CharSequence now, boolean hint) {
+        if (now == null || now.length() == 0) return now;
+        if (now instanceof android.text.Spanned && ((android.text.Spanned) now).getSpans(0, now.length(), android.text.style.CharacterStyle.class).length > 0) return now;
+        String text = now.toString();
+        java.util.Map<android.widget.TextView, String[]> memory = hint ? hints : shown;
+        String[] mem = memory.get(tv);
+        String english = mem != null && text.equals(mem[1]) ? mem[0] : text;
+        String out = tr(english);
+        memory.put(tv, new String[]{english, out});
+        return out.equals(text) ? now : out;
+    }
+    /** A dialog's own view, translated before it is shown. */
+    public static <V extends android.view.View> V translated(V v) { translateTree(v); return v; }
+
     private static volatile Runnable exitAction;
     /** The host's "leave Dexicon" (Pandamonium: back to its Wallet, bars restored); Dexicon's header shows a ✕ for it. */
     public static void setExit(Runnable leave) { exitAction = leave; }
@@ -75,5 +131,5 @@ public final class HostMode {
     private static final String PREFS = "dexicon_host";
 
     /** Test seam. */
-    public static void reset() { factory = null; hostName = ""; exitAction = null; }
+    public static void reset() { factory = null; hostName = ""; exitAction = null; translator = null; }
 }

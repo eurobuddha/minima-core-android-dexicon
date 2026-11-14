@@ -462,7 +462,7 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
     List<MyOrder> myOrders() { return db.myOrders(); }
     boolean isMine(Envelope e) { return me != null && e.signPk.equalsIgnoreCase(me.signPkHex()); }
 
-    public void toast(String s) { Toast.makeText(this, here(s), Toast.LENGTH_SHORT).show(); }
+    public void toast(String s) { Toast.makeText(this, HostMode.tr(here(s)), Toast.LENGTH_SHORT).show(); }
     /** The vendored PandaDEX layer (verbatim) tells you to consolidate "in MinimaCore"; Dexicon has it on ASSETS. */
     static String here(String s) {
         return s == null ? null : s.replace("the wallet screen's CONSOLIDATE", "ASSETS › CONSOLIDATE")

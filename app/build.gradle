@@ -25,8 +25,10 @@ android {
         // app menu - survives the screen's own swaps). Owner 14 Nov: in Pandamonium Dexicon is an app-list app, not a tab.
         // 0.3.58: inside a host the host pads for the system bars (no double gap at top / above the host footer); a ✕ in the
         // header returns to the host (Pandamonium full-screen Dexicon tab).
-        versionCode 358
-        versionName "0.3.58"
+        // 0.3.59: host language API (HostMode.setTranslator / tr / translateTree / translated) - Pandamonium shows Dexicon in
+        // its chosen language (zh-Hans / ru / uk); labels only, never typed text. Standalone: no translator, unchanged.
+        versionCode 359
+        versionName "0.3.59"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

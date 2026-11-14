@@ -114,6 +114,30 @@ public class HostModeTest {
         assertNull("standalone has its own gate", TradingGate.sharedEthSigners(app));
     }
 
+    @Test public void theHostsLanguageReachesLabelsButNeverTypedText() {
+        String[] lang = {"ru"};
+        HostMode.setTranslator(e -> "ru".equals(lang[0]) && e.equals("Swap") ? "Обмен" : "ru".equals(lang[0]) && e.equals("Amount") ? "Сумма" : null);
+        android.widget.LinearLayout root = new android.widget.LinearLayout(app);
+        android.widget.TextView label = new android.widget.TextView(app); label.setText("Swap");
+        android.widget.EditText amount = new android.widget.EditText(app); amount.setText("Swap"); amount.setHint("Amount");
+        android.widget.TextView id = new android.widget.TextView(app); id.setText("0xAB12");
+        root.addView(label); root.addView(amount); root.addView(id);
+        HostMode.translateTree(root);
+        assertEquals("Обмен", label.getText().toString());
+        assertEquals("typed text is never translated", "Swap", amount.getText().toString());
+        assertEquals("Сумма", amount.getHint().toString());
+        assertEquals("identifiers stay", "0xAB12", id.getText().toString());
+        HostMode.translateTree(root);
+        assertEquals("stable on the next pass", "Обмен", label.getText().toString());
+        lang[0] = "en";
+        HostMode.translateTree(root);
+        assertEquals("English comes back", "Swap", label.getText().toString());
+        assertEquals("Amount", amount.getHint().toString());
+        assertEquals(42, HostMode.tr(42));
+        HostMode.reset();
+        assertEquals("standalone: no translator", "Swap", HostMode.tr("Swap"));
+    }
+
     @Test public void standaloneNeverSeesHostMode() {
         HostMode.reset();
         assertFalse(HostMode.on());
