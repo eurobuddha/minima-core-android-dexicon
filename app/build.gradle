@@ -21,8 +21,10 @@ android {
         // unsettled swap). Standalone unchanged.
         // 0.3.56: host mode - the Assets ETH card names a standalone ETH Wallet / node-key AtomiX that would share this
         // Ethereum key when paired with the host's node (warning only: one signer, never exclusion).
-        versionCode 356
-        versionName "0.3.56"
+        // 0.3.57: DexiconActivity hosts the screen in its own frame (a host's wrapper around the content - Pandamonium's
+        // app menu - survives the screen's own swaps). Owner 14 Nov: in Pandamonium Dexicon is an app-list app, not a tab.
+        versionCode 357
+        versionName "0.3.57"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

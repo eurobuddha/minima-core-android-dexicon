@@ -23,9 +23,10 @@ public class DexiconActivity extends AppCompatActivity implements Screen.Host {
     public MainActivity screen() { return screen; }
 
     @Override public AppCompatActivity activity() { return this; }
-    /** AppCompat's content frame: the screen's setContentView lands exactly where the Activity's own would. */
+    /** The screen's own frame, set once as this Activity's content. Screen swaps (gate, theme rebuild) replace only what is
+     *  inside it, so anything a host wraps around the content (Pandamonium's app menu) survives them. */
     @Override public ViewGroup slot() {
-        if (slot == null) slot = findViewById(android.R.id.content);
+        if (slot == null) { slot = new android.widget.FrameLayout(this); setContentView(slot); }
         return slot;
     }
     @Override public boolean allowWindowChanges() { return true; }
@@ -33,6 +34,7 @@ public class DexiconActivity extends AppCompatActivity implements Screen.Host {
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        slot();
         screen = new MainActivity(this);
         screen.create(b);
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
