@@ -62,8 +62,9 @@ public final class DexiconPools {
     private static volatile Custody custody;
 
     private static boolean pandaPoolsInstalled(Context c) {
-        // host-node mode: a standalone PandaPools signs with ITS Trading Account, never these node-key pools
-        if (com.eurobuddha.dexicon.HostMode.on()) return false;
+        // Kept in host-node mode too (review 14 Nov): an OLD node-key PandaPools can pair with the host's node and keep
+        // the SAME node-key pools alive - custody stops two apps keeping one pool. A Trading Account PandaPools reports
+        // its own (different) addresses, so it never overlaps.
         return com.eurobuddha.dexicon.TradingGate.installed(c, com.eurobuddha.dexicon.TradingGate.PANDAPOOLS);
     }
 
