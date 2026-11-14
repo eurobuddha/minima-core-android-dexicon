@@ -29,6 +29,8 @@
         <!-- One trading app per phone: Dexicon contains these two and refuses to trade while either is installed -->
         <package android:name="com.eurobuddha.atomix" />
         <package android:name="com.eurobuddha.pandapools" />
+        <!-- Host mode: a standalone ETH Wallet paired with the host node shares its Ethereum key (TradingGate.sharedEthSigners) -->
+        <package android:name="com.eurobuddha.ethwallet" />
         <!-- The shared Trading Account family (com.eurobuddha.account.Family): never two holders of one account -->
         <package android:name="com.eurobuddha.dexicon" />
         <package android:name="com.eurobuddha.dexicon.stock" />

@@ -103,6 +103,17 @@ public class HostModeTest {
         assertEquals("standalone", HostMode.text("standalone", "host"));
     }
 
+    @Test public void aStandaloneEthSignerOnTheSameNodeKeyIsNamedNeverBlocked() throws Exception {
+        assertNull(TradingGate.sharedEthSigners(app));
+        PackageInfo eth = new PackageInfo(); eth.packageName = "com.eurobuddha.ethwallet";
+        eth.applicationInfo = new android.content.pm.ApplicationInfo(); eth.applicationInfo.packageName = eth.packageName;
+        Shadows.shadowOf(app.getPackageManager()).installPackage(eth);
+        assertEquals("ETH Wallet", TradingGate.sharedEthSigners(app));
+        assertFalse("never a gate", TradingGate.blocked(app));
+        HostMode.reset();
+        assertNull("standalone has its own gate", TradingGate.sharedEthSigners(app));
+    }
+
     @Test public void standaloneNeverSeesHostMode() {
         HostMode.reset();
         assertFalse(HostMode.on());

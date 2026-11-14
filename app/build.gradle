@@ -19,8 +19,10 @@ android {
         // 0.3.55: host mode - return the node's old PandaDEX resting orders (owner cancel ported from PandaDEX) from an Assets
         // card; "Start fresh with the node's current keys" on the identity-halt card (the in-app reinstall: rescue first, no
         // unsettled swap). Standalone unchanged.
-        versionCode 355
-        versionName "0.3.55"
+        // 0.3.56: host mode - the Assets ETH card names a standalone ETH Wallet / node-key AtomiX that would share this
+        // Ethereum key when paired with the host's node (warning only: one signer, never exclusion).
+        versionCode 356
+        versionName "0.3.56"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

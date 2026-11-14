@@ -137,6 +137,9 @@ public final class AssetsTab extends LinearLayout {
         LinearLayout c = card();
         String a = host.ethAddress();
         c.addView(Ui.copyRow(act, "ETHEREUM", "Ethereum address", host::ethAddress));
+        String twin = TradingGate.sharedEthSigners(act);
+        if (twin != null) c.addView(Ui.para(act, "⚠  " + twin + " is installed. Paired with this node it signs with this SAME Ethereum key "
+                + "and counts its own transactions - never send from it while a swap here is locking, claiming or refunding."));
         LinearLayout row = new LinearLayout(act); row.setGravity(Gravity.CENTER_VERTICAL);
         row.addView(t("USDT " + (host.usdtRaw == null ? "—" : EthWallet.format(host.usdtRaw, 6, 6)) + " · ETH " + (host.ethWei == null ? "—" : EthWallet.format(host.ethWei, 18, 6)),
                 Design.TEXT(), 13f, Design.mono()), new LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f));

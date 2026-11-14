@@ -58,6 +58,21 @@ public final class TradingGate {
     /** Trading is off: one of the apps is here, or the MiniHub has never been read (fail closed). Never in host-node mode
      *  (Pandamonium): the host node signs everything and picks every one-time key itself, so a sibling trading app cannot
      *  reuse a key - at worst two apps pick the same coin and the chain takes one. */
+    /** Host mode (Pandamonium review M5): standalone apps that, when paired with the host's node, derive the SAME Ethereum
+     *  key (node seedrandom "ethbridge") and keep their own Ethereum transaction counter - standalone ETH Wallet, and an
+     *  AtomiX from before the Trading Account (no leaf-share meta-data). Two counters on one key can replace or drop a
+     *  lock/withdraw. Never blocks (owner: one signer, never exclusion) - the Assets ETH card says it. Null when none. */
+    public static String sharedEthSigners(Context c) {
+        if (!HostMode.on()) return null;
+        List<String> names = new ArrayList<>();
+        if (installed(c, "com.eurobuddha.ethwallet")) names.add("ETH Wallet");
+        try {
+            android.content.pm.ApplicationInfo ai = c.getPackageManager().getApplicationInfo(ATOMIX, android.content.pm.PackageManager.GET_META_DATA);
+            if (ai.metaData == null || ai.metaData.getInt(com.eurobuddha.account.Family.META_LEAF_SLOT, -1) < 0) names.add("AtomiX (node keys)");
+        } catch (android.content.pm.PackageManager.NameNotFoundException absent) { /* not installed */ }
+        return names.isEmpty() ? null : String.join(" and ", names);
+    }
+
     public static boolean blocked(Context c) { return !HostMode.on() && (conflict(c) || !miniHubChecked(c)); }
 
     /** One of the apps was actually FOUND (not just "not checked yet"): the maker withdraws its live orders. */
