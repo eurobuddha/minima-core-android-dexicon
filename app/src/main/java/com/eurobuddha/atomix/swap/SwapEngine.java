@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.32 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.35 app/src/main/java/com/eurobuddha/atomix/swap/SwapEngine.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import android.os.Handler;
@@ -181,12 +181,11 @@ public final class SwapEngine {
         if (myMinimaPk != null && !myMinimaPk.isEmpty() && !this.myPubkeys.isEmpty()
                 && !this.myPubkeys.contains(MinimaHtlc.normKey(myMinimaPk)) && !identityAlarmRaised) {
             identityAlarmRaised = true;
-            SwapLog.w("IDENTITY ORPHANED: node does not own persisted swap identity " + myMinimaPk
-                    + " (" + this.myPubkeys.size() + " node keys checked). Node reset with a different seed?"
-                    + " Incoming swap legs and lock-change route to this identity and CANNOT be signed.");
-            // Hand the verdict to the single source of truth so the UI blocker, the FGS line and every
-            // new-liability gate agree — and so it survives being re-checked on a cadence.
-            com.eurobuddha.atomix.IdentityWatch.noteMinimaOrphaned(myMinimaPk, notifier);
+            SwapLog.w("IDENTITY CHECK: persisted swap identity " + myMinimaPk + " not among the "
+                    + this.myPubkeys.size() + " node keys just read — verifying with complete re-reads before any halt.");
+            // This list is not proven complete (a partial `keys` reply looks exactly like an orphan), so it is only a
+            // suspicion: IdentityWatch decides, on two complete reads, and its verdict drives every gate.
+            com.eurobuddha.atomix.IdentityWatch.noteMinimaOrphaned(minima, myMinimaPk, notifier);
         }
     }
 

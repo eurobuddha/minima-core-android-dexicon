@@ -1,10 +1,12 @@
-// VENDORED VERBATIM from apks/atomix 0.2.32 app/src/test/java/com/eurobuddha/atomix/swap/IdentityGuardTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.35 app/src/test/java/com/eurobuddha/atomix/swap/IdentityGuardTest.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -37,6 +39,9 @@ public class IdentityGuardTest {
 
     private SwapEngine engine;
     private SwapEngine.Notifier notifier;
+    /** What the node's `keys` read says when IdentityWatch verifies: keys, complete?, count, total. */
+    private java.util.Set<String> readKeys = Collections.singleton("AAAA");
+    private boolean readComplete = true;
 
     /** The verdict is process-static; halted() now also refuses initiator starts, so never leak it. */
     @After public void clearVerdict() { com.eurobuddha.atomix.IdentityWatch.resetForTest(); }
@@ -48,7 +53,10 @@ public class IdentityGuardTest {
         EthWallet wallet = mock(EthWallet.class);
         when(wallet.address()).thenReturn("0x2222222222222222222222222222222222222222");
         notifier = mock(SwapEngine.Notifier.class);
-        engine = new SwapEngine(mock(NodeApi.class), mock(MinimaHtlc.class), mock(SwapDb.class),
+        MinimaHtlc minima = mock(MinimaHtlc.class);
+        doAnswer(i -> { ((MinimaHtlc.KeysCb) i.getArgument(0)).read(readKeys, readComplete, readKeys.size(),
+                readComplete ? readKeys.size() : 80); return null; }).when(minima).loadMyKeys(any());
+        engine = new SwapEngine(mock(NodeApi.class), minima, mock(SwapDb.class),
                 wallet, mock(Handler.class), notifier);
         engine.setNetwork(new EthRpc(EthNet.MAINNET.defaultRpc), EthNet.MAINNET);
         engine.setMyMinimaPk(MY_PK);
@@ -62,6 +70,14 @@ public class IdentityGuardTest {
 
         engine.setMyPubkeys(Collections.singleton("AAAA"));      // second engine / re-init: no re-alarm
         verify(notifier, times(1)).notify(anyString(), anyString());
+    }
+
+    /** The list setMyPubkeys sees is not proven complete: a suspicion is verified, never halted on directly. */
+    @Test public void anIncompleteVerifyingReadNeverHalts() {
+        readComplete = false;
+        engine.setMyPubkeys(Collections.singleton("AAAA"));
+        verify(notifier, never()).notify(anyString(), anyString());
+        assertFalse(com.eurobuddha.atomix.IdentityWatch.halted());
     }
 
     @Test public void ownedIdentityStaysSilent() {

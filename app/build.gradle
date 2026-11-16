@@ -27,8 +27,8 @@ android {
         // header returns to the host (Pandamonium full-screen Dexicon tab).
         // 0.3.59: host language API (HostMode.setTranslator / tr / translateTree / translated) - Pandamonium shows Dexicon in
         // its chosen language (zh-Hans / ru / uk); labels only, never typed text. Standalone: no translator, unchanged.
-        versionCode 359
-        versionName "0.3.59"
+        versionCode 360
+        versionName "0.3.60"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

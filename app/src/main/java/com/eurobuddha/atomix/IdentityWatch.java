@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.32 app/src/main/java/com/eurobuddha/atomix/IdentityWatch.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.35 app/src/main/java/com/eurobuddha/atomix/IdentityWatch.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix;
 
 import android.content.SharedPreferences;
@@ -24,8 +24,10 @@ import com.eurobuddha.comms.NodeApi;
  * fact that funds are sitting on a key the node can no longer derive. Instead we HALT and make the user
  * rescue-then-reinstall, which is the one reset that provably puts every piece back in line.
  *
- * "Cannot verify" is never "mismatch": an empty key list (node busy/locked) or a failed seedrandom leaves the
- * verdict untouched, so a flaky node can never halt a healthy app.
+ * "Cannot verify" is never "mismatch": an empty or INCOMPLETE key list (fewer keys than the node's own total, or
+ * an element that did not parse) or a failed seedrandom leaves the verdict untouched, so a flaky node can never
+ * halt a healthy app. And no halt rests on one read: a "not owned" / "different ETH address" verdict is re-read
+ * once at once, and only a second identical verdict halts. Clearing needs one good read.
  */
 public final class IdentityWatch {
 
@@ -39,6 +41,10 @@ public final class IdentityWatch {
     private static volatile String orphanedPk = "", staleEth = "", nodeEth = "";
     private static volatile long lastCheckMs;
     private static volatile boolean minimaInFlight, ethInFlight, alarmRaised;
+    /** Log-only evidence for the halt line (never a private key or seedrandom output). */
+    private static volatile String lastPk = "", lastEthHave = "", lastEthNode = "";
+    private static volatile int lastKeysRead = -1;
+    private static volatile long lastKeysTotal = -1;
 
     /** True when either identity provably does not belong to the node → no new liabilities anywhere. */
     public static boolean halted() { return minimaMismatch || ethMismatch; }
@@ -77,11 +83,22 @@ public final class IdentityWatch {
                 : (prefs == null ? "" : prefs.getString("swap_pk", ""));
         if (mine == null || mine.isEmpty() || minimaInFlight) return;
         minimaInFlight = true;
+        readMinima(minima, mine, notifier, false);
+    }
+
+    /** One {@code keys} read. Not owned on a COMPLETE read → exactly one immediate re-read ({@code confirming});
+     *  only a second complete read that also lacks the key halts. */
+    private static void readMinima(final MinimaHtlc minima, final String mine,
+                                   final SwapEngine.Notifier notifier, final boolean confirming) {
+        lastPk = mine;
         minima.loadMyKeys(new MinimaHtlc.KeysCb() {
-            @Override public void ok(java.util.Set<String> keys) {
-                minimaInFlight = false;
-                if (keys == null || keys.isEmpty()) return;             // cannot verify — never halt on this
+            @Override public void ok(java.util.Set<String> keys) { read(keys, false, -1, -1); }   // no completeness verdict
+            @Override public void read(java.util.Set<String> keys, boolean complete, int count, long total) {
+                if (keys == null || keys.isEmpty() || !complete) { minimaInFlight = false; return; }   // cannot verify
+                lastKeysRead = count; lastKeysTotal = total;
                 boolean owned = keys.contains(MinimaHtlc.normKey(mine));
+                if (!owned && !confirming) { readMinima(minima, mine, notifier, true); return; }
+                minimaInFlight = false;
                 minimaMismatch = !owned;
                 orphanedPk = owned ? "" : mine;
                 raiseOrClear(notifier);
@@ -95,11 +112,22 @@ public final class IdentityWatch {
         final String have = wallet.address();
         if (have == null || wallet.isImported() || ethInFlight) return;   // an imported key is the user's own choice
         ethInFlight = true;
+        lastEthHave = have;
+        probeEth(node, wallet, have, ui, notifier, null);
+    }
+
+    /** One derivation. A different address → exactly one immediate re-derivation ({@code first} = the first
+     *  answer); only the SAME different address twice halts. Two different answers = cannot verify. */
+    private static void probeEth(final NodeApi node, final EthWallet wallet, final String have, final Handler ui,
+                                 final SwapEngine.Notifier notifier, final String first) {
         wallet.probeNodeAddress(node, ui, new EthWallet.Cb() {
             @Override public void ok(String nodeAddr) {
-                ethInFlight = false;
-                if (nodeAddr == null || nodeAddr.isEmpty()) return;     // cannot verify
+                if (nodeAddr == null || nodeAddr.isEmpty()) { ethInFlight = false; return; }   // cannot verify
+                lastEthNode = nodeAddr;
                 boolean same = nodeAddr.equalsIgnoreCase(have);
+                if (!same && first == null) { probeEth(node, wallet, have, ui, notifier, nodeAddr); return; }
+                ethInFlight = false;
+                if (!same && !nodeAddr.equalsIgnoreCase(first)) return;  // two different answers: cannot verify
                 ethMismatch = !same;
                 staleEth = same ? "" : have;
                 nodeEth = same ? "" : nodeAddr;
@@ -116,19 +144,22 @@ public final class IdentityWatch {
         alarmRaised = true;
         SwapLog.w("IDENTITY MISMATCH — halting new trades."
                 + (minimaMismatch ? " Minima key not owned by node: " + orphanedPk + "." : "")
-                + (ethMismatch ? " ETH wallet in use " + staleEth + " but node derives " + nodeEth + "." : ""));
+                + (ethMismatch ? " ETH wallet in use " + staleEth + " but node derives " + nodeEth + "." : "")
+                + " Evidence: published Minima key " + lastPk + ", node keys read " + lastKeysRead
+                + " of node total " + lastKeysTotal + "; ETH wallet in use " + lastEthHave
+                + ", node derives " + lastEthNode + ".");
         if (notifier != null) notifier.notify("Wallet mismatch — AtomiX halted",
                 "Your node's seed no longer matches this app. Trading is stopped. Open AtomiX to rescue funds, "
                 + "then reinstall AND clear app storage — a reinstall alone can restore the old keys from a "
                 + "phone/cloud backup.");
     }
 
-    /** Adopt a verdict discovered elsewhere: SwapEngine.setMyPubkeys already compares the published key
-     *  against the node's live key set on every load, so it can find an orphan before our own cadence does. */
-    public static void noteMinimaOrphaned(String pk, SwapEngine.Notifier notifier) {
-        minimaMismatch = true;
-        orphanedPk = pk == null ? "" : pk;
-        raiseOrClear(notifier);
+    /** A suspicion from elsewhere: SwapEngine.setMyPubkeys compares the published key against a key list it
+     *  cannot prove complete. Never halt on that — run the same complete-and-confirmed reads as the cadence. */
+    public static void noteMinimaOrphaned(MinimaHtlc minima, String pk, SwapEngine.Notifier notifier) {
+        if (minima == null || pk == null || pk.isEmpty() || minimaInFlight) return;
+        minimaInFlight = true;
+        readMinima(minima, pk, notifier, false);
     }
 
     /** One-line summary for the foreground-service notification. */
@@ -144,6 +175,7 @@ public final class IdentityWatch {
         minimaMismatch = false; ethMismatch = false;
         orphanedPk = ""; staleEth = ""; nodeEth = "";
         lastCheckMs = 0; minimaInFlight = false; ethInFlight = false; alarmRaised = false;
+        lastPk = ""; lastEthHave = ""; lastEthNode = ""; lastKeysRead = -1; lastKeysTotal = -1;
     }
     public static void setMismatchForTest(boolean minima, boolean eth) { minimaMismatch = minima; ethMismatch = eth; }
 }

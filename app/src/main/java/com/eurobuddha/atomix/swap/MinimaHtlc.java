@@ -1,4 +1,4 @@
-// VENDORED VERBATIM from apks/atomix 0.2.32 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
+// VENDORED VERBATIM from apks/atomix 0.2.35 app/src/main/java/com/eurobuddha/atomix/swap/MinimaHtlc.java by scripts/vendor-atomix.sh — do not edit here; re-vendor.
 package com.eurobuddha.atomix.swap;
 
 import org.json.JSONObject;
@@ -95,7 +95,13 @@ public final class MinimaHtlc {
     public interface SecretCb { void ok(String secret, String hash); void err(String msg); }
     public interface BlockCb { void ok(int block); void err(String msg); }
     public interface PostCb { void ok(String txpowid); void err(String msg); }
-    public interface KeysCb { void ok(java.util.Set<String> pubkeys); void err(String msg); }
+    public interface KeysCb {
+        void ok(java.util.Set<String> pubkeys); void err(String msg);
+        /** The same read with its completeness verdict, for IdentityWatch: {@code complete} only when every element
+         *  parsed (an object carrying a publickey) and {@code count} reaches the node's own {@code response.total}
+         *  ({@code total} is -1 when the node sent none). Default = plain {@link #ok}, so no other caller changes. */
+        default void read(java.util.Set<String> pubkeys, boolean complete, int count, long total) { ok(pubkeys); }
+    }
 
     // ---- setup: register the HTLC script + resolve a STABLE address/pubkey ----
 
@@ -160,11 +166,17 @@ public final class MinimaHtlc {
             JSONObject resp = r.optJSONObject("response");
             org.json.JSONArray arr = resp == null ? null : resp.optJSONArray("keys");
             if (arr == null && r.opt("response") instanceof org.json.JSONArray) arr = (org.json.JSONArray) r.opt("response");
+            int parsed = 0;
             if (arr != null) for (int i = 0; i < arr.length(); i++) {
                 JSONObject k = arr.optJSONObject(i);
-                if (k != null) { String pk = k.optString("publickey", ""); if (!pk.isEmpty()) out.add(normKey(pk)); }
+                if (k != null) { String pk = k.optString("publickey", ""); if (!pk.isEmpty()) { out.add(normKey(pk)); parsed++; } }
             }
-            cb.ok(out);
+            // A halt may only rest on the node's WHOLE list: a short/partial/oddly shaped reply is "cannot verify".
+            // total absent = the node did not say (complete if all parsed); present but unreadable = incomplete.
+            Object t = resp == null ? null : resp.opt("total");
+            long total = t == null ? -1 : resp.optLong("total", Long.MAX_VALUE);
+            boolean complete = arr != null && parsed == arr.length() && (total < 0 || parsed >= total);
+            cb.read(out, complete, parsed, total);
         }, cb::err);
     }
 
