@@ -327,7 +327,12 @@ public class Recovery {
         String label = e.optString("addr", "pool");
         String script = e.optString("script", "");
         Pool restored = poolFrom(e);
-        restored.signingStateUnverified = true;
+        // A recipe this device already holds keeps its own signing state: re-checking its reserves (the card's
+        // button or the automatic pass) is not a wallet restore and must not pause a key the owner has confirmed.
+        // A recipe new to this device starts held, as before (0.2.97).
+        boolean held = true;
+        for (Pool saved : OwnPoolStore.all(ctx)) if (restored.address.equalsIgnoreCase(saved.address)) { held = saved.signingStateUnverified; break; }
+        restored.signingStateUnverified = held;
         if (!OwnPoolStore.recordDurably(ctx, restored)) {
             cb.onProgress("Could not save " + label + ". Nothing imported."); done.run(); return;
         }

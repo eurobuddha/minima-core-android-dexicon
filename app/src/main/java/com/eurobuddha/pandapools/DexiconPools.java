@@ -571,7 +571,7 @@ public final class DexiconPools {
         act.node().cmd("keys action:list publickey:" + key, new NodeApi.Cb() {
             public void onResult(org.json.JSONObject j) {
                 Integer uses = KeyUses.extractUses(j, key);
-                if (uses == null || !OwnPoolStore.acknowledgeSigningState(act, key, uses)) failed.append(key).append('\n');
+                if (uses == null || !OwnPoolStore.acknowledgeSigningState(act, key, uses, KeyUses.capacityOf(j, key), act.chainBlock())) failed.append(key).append('\n');
                 confirmKeys(act, keys, i + 1, failed, done);
             }
             public void onError(String m) { failed.append(key).append('\n'); confirmKeys(act, keys, i + 1, failed, done); }
