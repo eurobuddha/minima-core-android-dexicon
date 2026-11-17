@@ -226,7 +226,9 @@ public final class OwnPoolStore {
                 JSONObject o = new JSONObject(prefs(c).getString(key(p.address), ""));
                 JSONObject held = new JSONObject(o.toString()).put("signing_unverified", true);
                 rollback.putString(key(p.address), held.toString());
-                o.put("signing_unverified", false).put("opkuses", uses);
+                // the floor is the HIGHEST counter ever seen for the key: a block-mode confirmation from the chain
+                // tip may carry a lower node counter, and must not pull the floor down to it.
+                o.put("signing_unverified", false).put("opkuses", Math.max(uses, p.minimumOwnerUses));
                 edit.putString(key(p.address), o.toString()); found = true;
             }
             return found && commitConfirmation(opk, edit::commit, rollback::commit);
