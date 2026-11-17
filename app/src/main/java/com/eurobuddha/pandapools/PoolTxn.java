@@ -178,7 +178,11 @@ public class PoolTxn {
         String script = (p.covenantScript != null && !p.covenantScript.isEmpty())
                 ? p.covenantScript   // the ACTUAL covenant when known (a legacy-fee pool reconstructs differently)
                 : PoolCovenant.script(p.opk, p.oadr, p.tok, p.kmin);
-        node.cmd("newscript trackall:false script:" + Util.scriptArg(script), new NodeApi.Cb() {
+        // 0.2.95: OWN pools are tracked with trackall:true. Reserve coins carry no state, so under trackall:false
+        // they were never "relevant": once they aged out of the light node's window the node could not see,
+        // spend or MegaMMR-sync them, and keep-fresh (which needs them visible) could not run — the lock-up of
+        // 16-17 Nov 2026. Foreign pools stay demoted (TrackHygiene); this is our own covenant only.
+        node.cmd("newscript trackall:true script:" + Util.scriptArg(script), new NodeApi.Cb() {
             @Override public void onResult(JSONObject j) { then.run(); }
             @Override public void onError(String m) { then.run(); }
         });

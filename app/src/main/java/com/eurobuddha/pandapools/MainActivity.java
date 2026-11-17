@@ -218,7 +218,13 @@ public class MainActivity extends com.eurobuddha.dexicon.ui.Screen {
             if (addressesForwarded > 0 && ppRepo != null) ppRepo.refresh();
         });
         for (Pool p : own) {
-            if (p.covenantScript == null || p.covenantScript.isEmpty()) continue;
+            // 0.2.95: a recipe saved without its script (pre-script records) is re-tracked from the recipe
+            // params — the same reconstruction PoolTxn uses. Every own pool is re-asserted trackall:true on
+            // every pairing (newscript replaces the row), so a node that lost or demoted it is repaired here.
+            if (p.covenantScript == null || p.covenantScript.isEmpty()) {
+                if (p.opk == null || p.oadr == null || p.tok == null || p.kmin == null) continue;
+                p.covenantScript = PoolCovenant.script(p.opk, p.oadr, p.tok, p.kmin);
+            }
             PoolManager.retrack(ppNode, p, new NodeApi.Cb() {
                 @Override public void onResult(JSONObject j) { if (ppRepo != null) ppRepo.refresh(); }
                 @Override public void onError(String m) {}

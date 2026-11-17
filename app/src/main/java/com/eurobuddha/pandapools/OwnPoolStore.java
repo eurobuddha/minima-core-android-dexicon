@@ -246,6 +246,13 @@ public final class OwnPoolStore {
 
     /** User attestation only. Diagnostic key recovery must never clear a restored-key hold. */
     public static synchronized boolean acknowledgeSigningState(Context c, String opk, int uses) {
+        return acknowledgeSigningState(c, opk, uses, KeyUses.LEGACY_TREE_USES, 0);
+    }
+
+    /** 0.2.95: the same write, with the key's tree capacity and the chain tip so a block-mode key whose
+     *  counter is below the recorded floor is accepted once the tip has passed that floor
+     *  ({@link KeyUses#counterSafe}). Legacy keys keep the strict counter rule. */
+    public static synchronized boolean acknowledgeSigningState(Context c, String opk, int uses, int capacity, int chainBlock) {
         // Diagnostic installs must not turn a successful identity match into signing authority,
         // including through the existing manual confirmation button.
         if (BuildConfig.VERSION_NAME.endsWith("-diagnostic")) return false;
@@ -255,11 +262,13 @@ public final class OwnPoolStore {
         boolean found = false;
         try {
             for (Pool p : all(c)) if (opk.equalsIgnoreCase(p.opk)) {
-                if (uses < p.minimumOwnerUses) return false;
+                if (!KeyUses.counterSafe(uses, p.minimumOwnerUses, capacity, chainBlock)) return false;
                 JSONObject o = new JSONObject(prefs(c).getString(key(p.address), ""));
                 JSONObject held = new JSONObject(o.toString()).put("signing_unverified", true);
                 rollback.putString(key(p.address), held.toString());
-                o.put("signing_unverified", false).put("opkuses", uses);
+                // the floor is the HIGHEST counter ever seen for the key: a block-mode confirmation from the chain
+                // tip may carry a lower node counter, and must not pull the floor down to it.
+                o.put("signing_unverified", false).put("opkuses", Math.max(uses, p.minimumOwnerUses));
                 edit.putString(key(p.address), o.toString()); found = true;
             }
             return found && commitConfirmation(opk, edit::commit, rollback::commit);

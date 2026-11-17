@@ -168,6 +168,8 @@ public class MyLpView extends BaseView {
         if (!myKeys.isEmpty()) {
             for (Pool p : OwnPoolStore.active(act)) if (!visible.contains(p.address.toLowerCase())) unavailable.add(p);
         }
+        maybeAutoRecover(unavailable);            // 0.2.95: an aged-out own pool recovers itself (re-track → verify/import → keep-fresh)
+        maybeAutoConfirm(OwnPoolStore.active(act)); // 0.2.95: a restored block-mode owner key is confirmed from the chain tip, no button
         maybeReannounce(all);                     // Layer 5 gossip: refresh faded beacons for ALL funded pools (once/session)
         maybeRefresh(mine);                       // keep-fresh: recreate MY aging reserves before they leave the cascade
 
@@ -1405,6 +1407,72 @@ public class MyLpView extends BaseView {
      *  edge, recreate them in place (owner grow-in-place, same amounts + a fresh beacon) so they stay young and
      *  every light node keeps seeing them. Owner-signed, no fund movement, capped in {@link PoolRefresher}. Age is
      *  unaffected (My LP age reads LpStore, not the coin). */
+    // ---- 0.2.95: the daily pool upkeep is automatic ----
+
+    private final Set<String> autoRecovered = new HashSet<>();   // pool addresses tried this session
+    private final Set<String> autoConfirmed = new HashSet<>();   // owner keys tried this session
+
+    /** A saved pool whose reserves this node cannot see recovers itself — once per session per pool and
+     *  silently: re-track the covenant, verify and import both reserve coins (local node, then the archive),
+     *  then let keep-fresh recreate them young so every light node sees the pool again. Only pools whose
+     *  owner key is on this node; a foreign recipe keeps its card. The status line says what happened. */
+    private void maybeAutoRecover(List<Pool> unavailable) {
+        if (busy || unavailable == null || act.node() == null || act.chainBlock() <= 0) return;
+        Pool target = null;
+        for (Pool p : unavailable)
+            if (mine(p) && p.address != null && !p.retired && autoRecovered.add(p.address.toLowerCase())) { target = p; break; }
+        if (target == null) return;
+        final Pool p = target;
+        final String json;
+        try {
+            json = new JSONObject().put("pandapools_backup", 3)
+                    .put("pools", new JSONArray().put(Recovery.baseEntry(p))).toString();
+        } catch (Exception e) { return; }
+        busy = true;
+        status("Recovering pool reserves…");
+        final List<Pool> verified = new ArrayList<>();
+        recovery.restore(act, json, act.chainBlock(), false, false, new Recovery.RestoreCb() {
+            @Override public void onProgress(String line) { status("Recovering… " + line); }
+            @Override public void onVerified(Pool v) { verified.add(v); }
+            @Override public void onDone(int restored, int total) {
+                busy = false;
+                if (verified.isEmpty()) {
+                    status("Pool " + p.address + ": reserves not found on this node or the archive yet. Checked again at the next launch.");
+                } else {
+                    status("Pool " + p.address + ": reserves recovered.");
+                    refreshChecked = false;      // keep-fresh runs again on the next render: the imported (aged) reserves are recreated young
+                }
+                loadKeys();
+                act.pools().refresh();
+            }
+        });
+    }
+
+    /** A restored block-mode owner key (128^4 tree) is confirmed automatically: it signs leaf
+     *  {@code max(chainBlock, uses+1)}, so once the tip has passed the recorded floor no leaf can repeat
+     *  ({@link KeyUses#counterSafe}). Legacy keys keep the manual confirmation. Once per key per session. */
+    private void maybeAutoConfirm(List<Pool> pools) {
+        if (pools == null || act.node() == null || act.chainBlock() <= 0 || BuildConfig.VERSION_NAME.endsWith("-diagnostic")) return;
+        for (Pool p : pools) {
+            if (p.opk == null || p.opk.isEmpty() || !mine(p)) continue;
+            if (!(p.signingStateUnverified || OwnPoolStore.confirmationFailed(p.opk))) continue;
+            if (!autoConfirmed.add(p.opk.toLowerCase(java.util.Locale.ROOT))) continue;
+            final String key = p.opk;
+            act.node().cmd("keys action:list publickey:" + key, new NodeApi.Cb() {
+                public void onResult(JSONObject j) {
+                    Integer uses = KeyUses.extractUses(j, key);
+                    int capacity = KeyUses.capacityOf(j, key);
+                    if (uses == null || capacity < KeyUses.MAX_TREE_USES) return;   // legacy key: the card's button stays
+                    if (OwnPoolStore.acknowledgeSigningState(act, key, uses, capacity, act.chainBlock())) {
+                        status("Owner key confirmed from the chain tip. Owner actions are enabled.");
+                        act.pools().refresh();
+                    }
+                }
+                public void onError(String m) {}
+            });
+        }
+    }
+
     private void maybeRefresh(List<Pool> mine) {
         if (refreshChecked || mine == null || mine.isEmpty() || act.node() == null || act.chainBlock() <= 0) return;
         refreshChecked = true;

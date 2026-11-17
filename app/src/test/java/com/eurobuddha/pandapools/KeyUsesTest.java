@@ -78,4 +78,21 @@ public class KeyUsesTest {
         // returned null for that, which read as NODE_UNREADABLE and froze ALL signing.
         assertEquals(Integer.valueOf(2342219), KeyUses.extractUses(keysReplyShaped("0xABC", 2342219, 128, 4), "0xABC"));
     }
+
+    // 0.2.95 — counterSafe: legacy keys need the counter at/above the floor; block-mode keys are safe once
+    // the chain tip has passed the floor (leaf = max(tip, uses+1)), which is what makes a restore automatic.
+    @Test public void legacyKeyBelowTheFloorIsNotSafeWhateverTheTip() {
+        org.junit.Assert.assertFalse(KeyUses.counterSafe(0, 10, KeyUses.LEGACY_TREE_USES, 2424349));
+        org.junit.Assert.assertTrue(KeyUses.counterSafe(10, 10, KeyUses.LEGACY_TREE_USES, 0));
+    }
+    @Test public void blockModeKeyIsSafeOnceTheTipPassesTheFloor() {
+        org.junit.Assert.assertTrue(KeyUses.counterSafe(0, 2420000, KeyUses.MAX_TREE_USES, 2424349));
+        org.junit.Assert.assertFalse(KeyUses.counterSafe(0, 2425000, KeyUses.MAX_TREE_USES, 2424349));  // raised counter, tip not there yet
+        org.junit.Assert.assertTrue(KeyUses.counterSafe(2425000, 2425000, KeyUses.MAX_TREE_USES, 2424349));
+    }
+    @Test public void anExhaustedOrNegativeCounterIsNeverSafe() {
+        org.junit.Assert.assertFalse(KeyUses.counterSafe(-1, -1, KeyUses.MAX_TREE_USES, 2424349));
+        org.junit.Assert.assertFalse(KeyUses.counterSafe(KeyUses.MAX_TREE_USES, 0, KeyUses.MAX_TREE_USES, 2424349));
+        org.junit.Assert.assertFalse(KeyUses.counterSafe(KeyUses.LEGACY_TREE_USES, 0, KeyUses.LEGACY_TREE_USES, 2424349));
+    }
 }
