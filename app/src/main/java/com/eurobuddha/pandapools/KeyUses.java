@@ -57,6 +57,20 @@ public final class KeyUses {
      *  the legacy 262,144 would wrongly brand every healthy block-mode key as spent. */
     static final int MAX_TREE_USES = 268435456;
 
+    /** Is it safe to sign with this key again, given the counter the node reports ({@code uses}), the highest
+     *  counter ever recorded for it ({@code floor}, -1 = none), its tree capacity and the chain tip?
+     *  <p>Legacy 64^3 keys sign leaf {@code uses+1}: the counter must have caught up with the recorded floor,
+     *  or a restored wallet re-signs a leaf the old copy already spent (key leak).
+     *  <p>Block-mode 128^4 keys (minima-core 1.1.2.31+ {@code -blockaskeyuses}) sign leaf
+     *  {@code max(chainBlock, uses+1)}: every earlier signature used a leaf at most equal to the chain tip of
+     *  its day, so once the tip has passed the recorded floor no leaf can repeat, whatever the restored
+     *  counter says. That is what makes a plain seed restore safe to sign from again — automatically. */
+    static boolean counterSafe(int uses, int floor, int capacity, int chainBlock) {
+        if (uses < 0 || uses >= capacity) return false;
+        if (uses >= floor) return true;
+        return capacity >= MAX_TREE_USES && chainBlock > floor;
+    }
+
     /** This key's one-time-signature capacity, read from its own row (size^depth). Falls back to the
      *  legacy 64x3 capacity when the row does not carry size/depth (pre-1.1.2.31 nodes, which only
      *  ever mint legacy keys). */
