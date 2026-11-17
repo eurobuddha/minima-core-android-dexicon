@@ -1613,7 +1613,7 @@ public class MyLpView extends BaseView {
                     act.node().cmd("keys action:list publickey:" + key, new NodeApi.Cb() {
                         public void onResult(JSONObject j) {
                             Integer uses = KeyUses.extractUses(j, key);
-                            if (uses != null && OwnPoolStore.acknowledgeSigningState(act, key, uses)) {
+                            if (uses != null && OwnPoolStore.acknowledgeSigningState(act, key, uses, KeyUses.capacityOf(j, key), act.chainBlock())) {   // block-mode: the tip counts too
                                 status("Signing state confirmed by you. Owner actions are enabled."); act.pools().refresh();
                             } else info("Signing remains paused", "The owner key is missing, exhausted, below a recorded count, or the confirmation could not be saved.");
                         }
