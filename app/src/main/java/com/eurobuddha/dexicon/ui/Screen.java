@@ -61,6 +61,9 @@ public abstract class Screen extends ContextWrapper {
         ViewGroup slot = host.slot();
         slot.removeAllViews();
         slot.addView(v);   // as AppCompat's own setContentView(View): default params = match_parent in a FrameLayout
+        // A view swapped in after the window's first inset pass (gate -> chrome) never gets insets on its own, so its
+        // status/navigation-bar padding stayed 0 and the header and tab bar sat under the system bars (S10+, 0.3.62).
+        androidx.core.view.ViewCompat.requestApplyInsets(v);
     }
     public <T extends View> T findViewById(int id) { return host.slot().findViewById(id); }
     public Window getWindow() { return activity().getWindow(); }
