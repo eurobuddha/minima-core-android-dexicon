@@ -27,7 +27,8 @@ public class AccountSetupSeedsTest {
     static final String SEPARATE = "Your Trading Account is a separate wallet from your Minima node's wallet. Even with the same 24 words "
             + "it has its own addresses and its own balance: coins in your node wallet do not appear here until you deposit them.";
     static final String NEW_WORDS = "A new set of words for the Trading Account is the better choice: then one leaked phrase cannot cost you both wallets.";
-    static final String SAME_WORDS = "If you do use the same words: write them down once and keep them as safe as you would for both wallets.";
+    static final String SAME_WORDS = "If you do use your node's 24 words here: on Minima Core, apps you have enabled on your node can read the "
+            + "node's words, and with them this account. Use new words for the Trading Account unless your node's vault is locked with a password.";
     static final String ONE_DEVICE = "Use a Trading Account on ONE device at a time. Restoring it on a second phone is fine once the first has "
             + "stopped using it for good. Two devices trading with the same Trading Account can expose its keys; if the app sees "
             + "another device signing, it stops signing here.";
@@ -60,7 +61,12 @@ public class AccountSetupSeedsTest {
         idle();
         String restore = texts(ShadowDialog.getLatestDialog());
         assertTrue(restore, restore.contains("Restore Trading Account"));
-        assertTrue(restore, restore.contains("Using your node's 24 words? This is still a separate wallet with its own balance"));
+        assertTrue(restore, restore.contains("Using your node's 24 words? This is still a separate wallet with its own balance. On Minima Core, "
+                + "apps you have enabled on your node can read the node's words, and with them this account: use new words unless your node's "
+                + "vault is locked with a password."));
+        String first2 = texts(first);
+        assertFalse("never the untrue blanket claim", first2.contains("— so no other app on this phone can touch"));
+        assertTrue(first2, first2.contains("— so, with new words, no other app on this phone can touch these funds"));
     }
 
     @Test public void theOwnersWordsExactly() {

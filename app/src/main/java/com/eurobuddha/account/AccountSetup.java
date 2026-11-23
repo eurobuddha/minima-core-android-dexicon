@@ -44,8 +44,13 @@ public final class AccountSetup {
             + "you deposit them.";
     public static final String NEW_WORDS = "A new set of words for the Trading Account is the better choice: then one leaked "
             + "phrase cannot cost you both wallets.";
-    public static final String SAME_WORDS = "If you do use the same words: write them down once and keep them as safe as you "
-            + "would for both wallets.";
+    /** Review 23 Nov 2026 (MAJOR-B): on stock Minima Core any enabled companion app can read the node's words (postfrom's
+     *  id-injection runs `vault` as ADMIN; core/Minima postfrom.java, CommandRunner.runMultiCommand, vault.java), so an
+     *  account made from those words can be computed and spent by such an app. A password-locked vault prints only the
+     *  encrypted phrase. */
+    public static final String SAME_WORDS = "If you do use your node's 24 words here: on Minima Core, apps you have enabled on "
+            + "your node can read the node's words, and with them this account. Use new words for the Trading Account unless "
+            + "your node's vault is locked with a password.";
     /** True to AccountKeys and the second-signer watch (VirtualWallet.watchSigners). Each install's leaf counter is raised
      *  to a wall-clock floor (one leaf per 2 s) and a restore starts past the restore floor (the time floor + 1,800 +
      *  40,000 leaves), but that is no guard against two LIVE installs: two phones signing within seconds pick the same
@@ -59,7 +64,8 @@ public final class AccountSetup {
     static final String[] SEEDS = {SEPARATE, NEW_WORDS, SAME_WORDS, ONE_DEVICE};
     /** The one-line reminder where the node's own words could be typed (Restore) or used (node seed). */
     public static final String SAME_WORDS_REMINDER = "Using your node's 24 words? This is still a separate wallet with its own "
-            + "balance — keep the words as safe as you would for both wallets.";
+            + "balance. On Minima Core, apps you have enabled on your node can read the node's words, and with them this "
+            + "account: use new words unless your node's vault is locked with a password.";
     /** Under the words in "Show 24 words" (owner, 23 Nov 2026). */
     public static final String REVEAL_NOTE = "These words restore your Trading Account only. Your node's wallet is separate, "
             + "even if you used the same words.";
@@ -193,8 +199,8 @@ public final class AccountSetup {
         String notice = noticeOf == null ? null : noticeOf.apply(a);
         boolean tradedBefore = notice != null && !notice.isEmpty();
         TextView body = text(a, app() + " keeps its own Trading Account and signs every trade itself. Your Minima node only "
-                + "reads the chain and posts what " + app() + " has already signed — so no other app on this phone can touch "
-                + "these funds, and " + app() + " needs no ADMIN rights.\n\nMove funds in from your Minima wallet with "
+                + "reads the chain and posts what " + app() + " has already signed — so, with new words, no other app on this "
+                + "phone can touch these funds, and " + app() + " needs no ADMIN rights.\n\nMove funds in from your Minima wallet with "
                 + "RECEIVE; send them back any time.\n\n" + seeds()
                 + (tradedBefore ? "\n\n⚠ " + notice : ""), false);
         AlertDialog main = dialog(a).setTitle("Your Trading Account").setView(pad(a, body)).setCancelable(false)

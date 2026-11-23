@@ -53,8 +53,12 @@ android {
         // 0.3.72: a transaction spending only Trading Account coins makes internal outputs (review 23 Nov): the
         // second-signer watch records them as the account's own, so AtomiX and PandaPools, which share one account
         // with separate records, no longer file each other's change as Received.
-        versionCode 372
-        versionName "0.3.72"
+        // 0.3.73: the seed texts are true about the node's words (review 23 Nov, MAJOR-B): on Minima Core any app
+        // enabled on the node can read the node's 24 words (postfrom runs vault as ADMIN), and with them an account
+        // made from them - SAME_WORDS, the restore screen's reminder and the first screen's 'no other app' sentence
+        // (now: with new words) say so; REVEAL_NOTE unchanged (pending owner question).
+        versionCode 373
+        versionName "0.3.73"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

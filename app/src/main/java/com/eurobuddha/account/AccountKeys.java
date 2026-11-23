@@ -14,7 +14,9 @@ import java.util.Map;
 
 /**
  * The Trading Account's keys. Dexicon holds these itself and signs locally, so on a stock Minima Core node the node
- * never sees a private key and no other companion app (even one that escalates to ADMIN) can spend account funds.
+ * never sees a private key. No other companion app can spend account funds as long as the account has its OWN words: one
+ * made from the node's seed (node mode) or from the node's own 24 words can be computed by any app enabled on stock Minima
+ * Core (postfrom runs `seedrandom` / `vault` as ADMIN; see AccountSetup.SAME_WORDS).
  *
  * <p>Derivation mirrors minima-core {@code Wallet.createNewKey} on a DOMAIN-SEPARATED base seed:
  * <pre>
