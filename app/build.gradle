@@ -33,8 +33,10 @@ android {
         // 0.3.65: Trading Account seeds in plain words - a separate wallet even with the node's 24 words, new words are the
         // better choice, one device at a time: before the first choice, beside the same-words paths, under "Show 24 words",
         // and in SETTINGS > TRADING ACCOUNT > ABOUT THIS ACCOUNT (existing accounts are not prompted again).
-        versionCode 365
-        versionName "0.3.65"
+        // 0.3.66: "ONE device at a time" no longer says "at the same moment" - a phone that resumes after the account was
+        // restored elsewhere can collide for about a day; the first phone must stop using it for good.
+        versionCode 366
+        versionName "0.3.66"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

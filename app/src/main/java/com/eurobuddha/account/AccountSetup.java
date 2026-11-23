@@ -47,10 +47,12 @@ public final class AccountSetup {
     public static final String SAME_WORDS = "If you do use the same words: write them down once and keep them as safe as you "
             + "would for both wallets.";
     /** True to AccountKeys: each phone's leaf counter is raised to a wall-clock floor (one leaf per 2 s), and a restore
-     *  starts past every leaf an earlier install signed; two phones signing at the same moment can pick the same leaf. */
+     *  starts past every leaf an earlier install signed. Not only "at the same moment": a phone that resumes after the
+     *  account was restored elsewhere can land on the restored phone's leaves for about a day (restore floor: the time
+     *  floor + 1,800 + 40,000 leaves at 2 s), so the first must stop for good. */
     public static final String ONE_DEVICE = "Use a Trading Account on ONE device at a time. Restoring it on a second phone is "
-            + "fine once the first has stopped using it; two devices trading with the same Trading Account at the same "
-            + "moment can expose its keys.";
+            + "fine once the first has stopped using it for good; two devices trading with the same Trading Account can "
+            + "expose its keys.";
     static final String[] SEEDS = {SEPARATE, NEW_WORDS, SAME_WORDS, ONE_DEVICE};
     /** The one-line reminder where the node's own words could be typed (Restore) or used (node seed). */
     public static final String SAME_WORDS_REMINDER = "Using your node's 24 words? This is still a separate wallet with its own "
