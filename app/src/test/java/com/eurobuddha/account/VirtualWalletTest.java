@@ -133,7 +133,6 @@ public class VirtualWalletTest {
         VirtualWallet w = wallet(new FakeNode());
         assertNull(w.handle("block"));
         assertNull(w.handle("coins address:MxG080CRJB1D4NHGRYGNF7Q52FK7023UM3FUUPVD1W1WCQZSA8MDQ25982N842G order:desc depth:64"));
-        assertNull(w.handle("newscript script:\"RETURN TRUE\" trackall:false"));
         assertNull(w.handle("coinexport coinid:0x1234"));
     }
 
@@ -695,5 +694,36 @@ public class VirtualWalletTest {
         assertEquals(saved[0], uses);
         k.setRestoreFloor(5);
         assertEquals("raise-only", saved[0], k.restoreFloor());
+    }
+
+    /** Review 23 Nov 2026 (MAJOR-D), the reviewer's scenario: a FAST order lists RETURN SIGNEDBY(<a key of the taker's NODE
+     *  wallet>). The account's scripts read hides node rows, so only the newscript itself can refuse it. */
+    @Test public void aCounterpartyScriptNeverReplacesTheNodesOwnRows() throws Exception {
+        String nodeKey = "0x" + "5E".repeat(32), nodeScript = "RETURN SIGNEDBY(" + nodeKey + ")";
+        String nodeAddr = new org.minima.objects.Address(nodeScript).getAddressData().to0xString();
+        FakeNode n = new FakeNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                if (cmd.equals("scripts address:" + nodeAddr)) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONObject()
+                        .put("script", nodeScript).put("address", nodeAddr).put("simple", true).put("publickey", nodeKey).put("track", true)); }
+                return super.call(cmd);
+            }
+        };
+        VirtualWallet w = wallet(n);
+        JSONObject r = w.handle("newscript script:\"" + nodeScript + "\" trackall:false");
+        assertNotNull("the account answers newscript", r);
+        assertFalse(r.toString(), r.getBoolean("status"));
+        assertTrue(r.getString("error"), r.getString("error").contains(nodeAddr));
+        assertFalse("the node's row was never replaced", n.calls.stream().anyMatch(c -> c.startsWith("newscript")));
+
+        String theirs = "RETURN SIGNEDBY(0x" + "7A".repeat(32) + ")";   // a real maker script: kept in-app for the witness
+        JSONObject ok = w.handle("newscript script:\"" + theirs + "\" trackall:false");
+        assertTrue(ok.getBoolean("status"));
+        assertFalse("nothing written on the node", n.calls.stream().anyMatch(c -> c.startsWith("newscript")));
+        assertEquals(new org.minima.objects.Address(theirs).getAddressData().to0xString(), ok.getJSONObject("response").getString("address"));
+
+        assertNull("a contract the node must track still goes to the node", w.handle("newscript script:\"RETURN TRUE\" trackall:true"));
+        String mine = w.handle("getaddress").getJSONObject("response").getString("script");
+        assertTrue("an account row is the account's own", w.handle("newscript script:\"" + mine + "\" trackall:false").getBoolean("status"));
+        assertFalse(n.calls.stream().anyMatch(c -> c.startsWith("newscript")));
     }
 }

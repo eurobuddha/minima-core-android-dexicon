@@ -111,7 +111,7 @@ public final class VirtualWallet {
 
     private static final Set<String> WALLET_VERBS = new HashSet<>(Arrays.asList(
             "getaddress", "newaddress", "keys", "balance", "send", "consolidate", "seedrandom", "vault",
-            "sign", "sendpoll", "sendnosign", "multisig", "checkmode", "scripts"));
+            "sign", "sendpoll", "sendnosign", "multisig", "checkmode", "scripts", "newscript"));
 
     private final Node node;
     private final AccountKeys keys;
@@ -449,6 +449,7 @@ public final class VirtualWallet {
             switch (verb) {
                 case "getaddress":  return ok(verb, addressRow(0, true));
                 case "scripts":     return scriptsCmd(p);
+                case "newscript":   return newScript(p);
                 case "newaddress":  return newAddress();
                 case "keys":        return keysCmd(p);
                 case "balance":     return balance(p);
@@ -507,6 +508,38 @@ public final class VirtualWallet {
             out.put(row);
         }
         return ok("scripts", out);
+    }
+
+    /**
+     * Review 23 Nov 2026 (MAJOR-D): {@code newscript} REPLACES the node's row for the script's address, and with an account
+     * loaded the engines' {@code scripts} read leaves out the node's own simple rows, so a hostile order listing
+     * {@code RETURN SIGNEDBY(<a node key>)} passed the taker's guard and its {@code newscript … trackall:false} turned the
+     * node's wallet row into simple:false / track:false (the address left the sendable set and stopped being tracked). So:
+     * <ul><li>an account address: answered here, its row is the account's own (never replaced by an engine);</li>
+     * <li>the node holds a row and it is SIMPLE (a key of the node's own wallet): refused, the node is never asked;</li>
+     * <li>no row, trackall:false (a counterparty's script, needed only in our own witness): kept HERE for
+     * {@code txninput … scriptmmr:true} / txnbasics - nothing is written on the node;</li>
+     * <li>otherwise (trackall:true, or a contract row the node already holds - PandaPools' own pools, its foreign-row
+     * demotion): null = the node registers it, as before.</li></ul>
+     * The lookup is {@code scripts address:} with the address exactly as the node stores it (0x, upper-case hex).
+     */
+    private JSONObject newScript(P p) throws Exception {
+        String script = p.s("script", "");
+        if (script.trim().isEmpty()) return fail("newscript", "newscript needs script:");
+        if (p.b("clean", false)) script = org.minima.kissvm.Contract.cleanScript(script);
+        String addr = new org.minima.objects.Address(script).getAddressData().to0xString();
+        JSONObject row = new JSONObject().put("script", script).put("address", addr)
+                .put("miniaddress", org.minima.objects.Address.makeMinimaAddress(new MiniData(addr))).put("simple", false)
+                .put("default", false).put("publickey", "0x00").put("track", p.b("trackall", false));
+        int k = indexOfAddress(addr);
+        if (k >= 0) return ok("newscript", addressRow(k, k == 0));
+        JSONObject r = node.call("scripts address:" + addr);
+        JSONObject held = r.optBoolean("status") ? r.optJSONObject("response") : null;
+        boolean exists = held != null && addr.equalsIgnoreCase(held.optString("address"));
+        if (exists && held.optBoolean("simple"))
+            return fail("newscript", "Refused: that script is an address of your node's own wallet (" + addr + "). Nothing was changed.");
+        if (!exists && !p.b("trackall", false)) { scripts.put(norm(addr), script); return ok("newscript", row); }
+        return null;
     }
 
     private JSONObject newAddress() throws Exception {

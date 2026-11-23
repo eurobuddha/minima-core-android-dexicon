@@ -57,8 +57,12 @@ android {
         // enabled on the node can read the node's 24 words (postfrom runs vault as ADMIN), and with them an account
         // made from them - SAME_WORDS, the restore screen's reminder and the first screen's 'no other app' sentence
         // (now: with new words) say so; REVEAL_NOTE unchanged (pending owner question).
-        versionCode 373
-        versionName "0.3.73"
+        // 0.3.74: a counterparty script never replaces a node wallet row (review 23 Nov, MAJOR-D): with an account
+        // loaded every newscript goes through VirtualWallet - an account address is answered in-app, a script whose
+        // address the node holds as a SIMPLE row is refused, a trackall:false script the node has no row for is kept
+        // in-app for the witness (nothing written on the node), anything else reaches the node as before.
+        versionCode 374
+        versionName "0.3.74"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

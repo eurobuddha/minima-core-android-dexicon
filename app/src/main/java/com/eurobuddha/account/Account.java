@@ -81,6 +81,7 @@ public final class Account {
         }
         if (!VirtualWallet.handles(verb)) return Route.NODE;
         Account a = get(c, t);
+        if ("newscript".equals(verb)) return a == null ? Route.NODE : Route.ACCOUNT;   // the account guards it (MAJOR-D)
         // No account here yet: a coins read that names an address or a coin can only be about a contract or someone
         // else's coin (there are no account addresses) — a plain chain read. Before 0.3.30 it was refused, so AtomiX /
         // PandaPools opened before account setup showed an empty market (on the Fold, 10 Nov: every pool's reserve read
