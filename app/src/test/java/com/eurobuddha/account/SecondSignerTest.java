@@ -31,6 +31,9 @@ public class SecondSignerTest {
         public String signerState() { return state; }
         public boolean saveSignerState(String j) { state = j; return true; }
         public void saveRestoreFloor(int f) { floor = Math.max(floor, f); }
+        final Set<String> own = new HashSet<>();
+        public void ownOutputs(java.util.Collection<String> ids) { own.addAll(ids); }
+        public boolean isOwnOutput(String id) { return own.contains(id); }
     }
 
     /** A node whose relevant history is {@code items}, newest first (the order of `history action:list`). */
@@ -202,5 +205,25 @@ public class SecondSignerTest {
         restarted.watchSigners();
         assertFalse(new JSONObject(store.state).has("reading"));
         assertEquals("never read again", 1, node.calls.stream().filter(c -> c.startsWith("history action:list")).count());
+    }
+
+    /** MINOR (review 23 Nov): AtomiX and PandaPools share one account with separate records, so each filed the other's
+     *  change as "Received". A transaction spending only account coins makes internal outputs, whoever signed it. */
+    @Test public void outputsOfATransactionFundedOnlyByTheAccountAreNeverReceived() throws Exception {
+        Node node = new Node(); Store store = new Store();
+        VirtualWallet w = wallet(node, store, new AccountKeysTest.Mem(), AccountKeys.SLOT_ATOMIX, 0);
+        String mine = w.handle("getaddress").getJSONObject("response").getString("address");
+        String change = "0x" + "C1".repeat(32), deposit = "0x" + "D2".repeat(32);
+        JSONObject sibling = txpow(txnId());
+        sibling.getJSONObject("body").getJSONObject("txn").put("inputs", new JSONArray().put(new JSONObject().put("address", mine)))
+                .put("outputs", new JSONArray().put(new JSONObject().put("coinid", change).put("address", mine)));
+        JSONObject fromOutside = txpow(txnId());
+        fromOutside.getJSONObject("body").getJSONObject("txn").put("inputs", new JSONArray()
+                        .put(new JSONObject().put("address", mine)).put(new JSONObject().put("address", "0x" + "99".repeat(32))))
+                .put("outputs", new JSONArray().put(new JSONObject().put("coinid", deposit).put("address", mine)));
+        node.add(sibling); node.add(fromOutside);
+        w.watchSigners();
+        assertTrue("the sibling's change is internal", w.isOwnOutput(change));
+        assertFalse("coins from outside stay Received", w.isOwnOutput(deposit));
     }
 }

@@ -97,4 +97,31 @@ final class SignerWatch {
         }
         return s;
     }
+
+    /** True when every input of {@code txpow}'s transaction is at an account address: its outputs are then internal
+     *  (change, a consolidation, the sibling app's own move on this phone) - never a deposit. */
+    static boolean fundedByAccount(JSONObject txpow, KeyIndex addresses) {
+        JSONObject body = txpow == null ? null : txpow.optJSONObject("body");
+        JSONObject txn = body == null ? null : body.optJSONObject("txn");
+        JSONArray ins = txn == null ? null : txn.optJSONArray("inputs");
+        if (ins == null || ins.length() == 0) return false;
+        for (int i = 0; i < ins.length(); i++) {
+            JSONObject c = ins.optJSONObject(i);
+            if (c == null || addresses.of(c.optString("address", "")) < 0) return false;
+        }
+        return true;
+    }
+
+    /** The output coin ids of {@code txpow}'s transaction, as the node printed them. */
+    static List<String> outputIds(JSONObject txpow) {
+        List<String> out = new ArrayList<>();
+        JSONObject body = txpow == null ? null : txpow.optJSONObject("body");
+        JSONObject txn = body == null ? null : body.optJSONObject("txn");
+        JSONArray outs = txn == null ? null : txn.optJSONArray("outputs");
+        for (int i = 0; outs != null && i < outs.length(); i++) {
+            String id = outs.optJSONObject(i) == null ? "" : outs.optJSONObject(i).optString("coinid", "");
+            if (id.matches("0x[0-9A-Fa-f]{64}")) out.add(id);
+        }
+        return out;
+    }
 }

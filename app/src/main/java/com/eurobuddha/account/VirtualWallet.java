@@ -1117,8 +1117,15 @@ public final class VirtualWallet {
         store.saveSignerState(st.toString());
     }
 
-    /** One TxPoW: raise past every foreign leaf; latch on a live one (see {@link #watchSigners}). */
+    /** One TxPoW: raise past every foreign leaf; latch on a live one (see {@link #watchSigners}). A transaction spending
+     *  only account coins made internal outputs: they are recorded as the account's own, so the sibling app's change
+     *  (AtomiX and PandaPools share one account, each with its own record) is never filed as "Received". */
     private void examine(JSONObject txpow, boolean baseline, JSONObject st) throws Exception {
+        if (SignerWatch.fundedByAccount(txpow, this::indexOfAddress)) {
+            List<String> outs = new ArrayList<>();
+            for (String id : SignerWatch.outputIds(txpow)) outs.add(norm(id));
+            store.ownOutputs(outs);
+        }
         int mine = keys.leafSlot();
         for (SignerWatch.Seen s : SignerWatch.signatures(txpow, this::indexOfKey)) {
             if (store.signedHere(norm(s.txnId))) continue;                       // this install signed it

@@ -50,8 +50,11 @@ android {
         // signing with a durable latch until the person confirms 'This is the only device now' (re-read, raise past
         // everything seen plus the restore margin). Own signatures are recorded before they exist. ONE_DEVICE text
         // says so.
-        versionCode 371
-        versionName "0.3.71"
+        // 0.3.72: a transaction spending only Trading Account coins makes internal outputs (review 23 Nov): the
+        // second-signer watch records them as the account's own, so AtomiX and PandaPools, which share one account
+        // with separate records, no longer file each other's change as Received.
+        versionCode 372
+        versionName "0.3.72"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
