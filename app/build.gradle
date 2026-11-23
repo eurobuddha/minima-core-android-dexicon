@@ -61,8 +61,13 @@ android {
         // loaded every newscript goes through VirtualWallet - an account address is answered in-app, a script whose
         // address the node holds as a SIMPLE row is refused, a trackall:false script the node has no row for is kept
         // in-app for the witness (nothing written on the node), anything else reaches the node as before.
-        versionCode 374
-        versionName "0.3.74"
+        // 0.3.75: counterparties can no longer burn one-time leaves (review 23 Nov): the size check before the first
+        // signature counts every account key the transaction still needs; a maker co-sign signs only the order keys
+        // whose coins the take spends; co-sign attempts are limited per taker (6) and per order (12) in 10 minutes; a
+        // counter more than half the restore margin ahead of the clock is warned with how long to wait before a
+        // restore elsewhere.
+        versionCode 375
+        versionName "0.3.75"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

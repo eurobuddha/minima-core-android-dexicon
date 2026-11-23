@@ -1040,7 +1040,11 @@ public final class VirtualWallet {
             String halt = secondSigner();
             if (halt != null) return new JSONObject().put("error", halt);
             long now = checkedClock();
-            int estimate = hex(r).length() + needed.size() * SIG_HEX_ESTIMATE + proofEstimate(r);
+            // review 23 Nov 2026: EVERY account key this transaction still needs counts, not only the one this call signs -
+            // engines sign key by key (txnsign publickey:), and a post refused for size after the first key signed burnt a leaf
+            Set<Integer> unsigned = new HashSet<>(needed);
+            for (Coin c : t.getAllInputs()) { int k = indexOfAddress(c.getAddress().to0xString()); if (k >= 0 && !w.isSignedBy(keys.publicKey(k))) unsigned.add(k); }
+            int estimate = hex(r).length() + unsigned.size() * SIG_HEX_ESTIMATE + proofEstimate(r);
             if (estimate > MAX_POST_HEX)
                 return new JSONObject().put("error", "Transaction too large for the node link (~" + estimate + " chars) — use fewer coins. Nothing was signed.");
             if (!store.recordSigned(norm(t.getTransactionID().to0xString())))   // durable BEFORE any signature exists
@@ -1070,6 +1074,21 @@ public final class VirtualWallet {
     /** History items read per pass (each one TxPoW reply), and on the first pass ever (a baseline: raise only). */
     static final int SIGNER_PER_PASS = 20, SIGNER_SEEN = 500, SIGNER_POISON = 20;
     private boolean watchedOnce;
+
+    /** Review 23 Nov 2026: a counter more than half the restore margin ahead of the time floor means a restore elsewhere
+     *  (which starts one restore margin past the time floor) could land on leaves this install already signed. The
+     *  warning says how long to wait after the last trade here; null when no key is that far ahead. Phone clock: a
+     *  warning only, nothing is written. */
+    public synchronized String aheadWarning() {
+        long now = clock.now();
+        int tf = AccountKeys.timeFloor(now), margin = AccountKeys.restoreFloor(now) - tf, worst = -1, ahead = 0;
+        for (int k = 0; k < store.keyCount(); k++) { int a = keys.storedUses(k) - tf; if (a > ahead) { ahead = a; worst = k; } }
+        if (worst < 0 || ahead <= margin / 2) return null;
+        long hours = ((long) ahead * AccountKeys.LEAF_MILLIS + 3_599_999L) / 3_600_000L;
+        return "This Trading Account has signed more often than its clock allows for: key " + worst + " is " + ahead
+                + " one-time keys ahead. If you ever restore it on another device, first stop using it here and wait at least "
+                + hours + (hours == 1 ? " hour." : " hours.");
+    }
 
     /** The halt text while the latch is set, else null. */
     public synchronized String secondSigner() {

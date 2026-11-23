@@ -149,6 +149,10 @@ public final class FillTxn {
                 List<String> outCoins = new ArrayList<>();
                 for (Coin c : outs) if (!c.coinid.isEmpty()) outCoins.add(c.coinid);
                 final FillPlan.Verdict v = verdict;
+                // review 23 Nov 2026: only the order keys whose coins this take SPENDS sign - every other one would burn a
+                // one-time leaf for nothing (a take of one coin of a three-coin order used to cost three leaves)
+                final List<String> spent = keysSpent(keys, ins);
+                if (spent.isEmpty()) { cb.done("refused: the take spends none of this order's coins", null, verdict, null); return; }
                 SignGate.submit(release -> {
                     final String id = txnId("dm");
                     node.cmdR("txnimport id:" + id + " data:" + hex, new NodeApi.Cb() {
@@ -190,7 +194,7 @@ public final class FillTxn {
                             });
                         }
                         private void sign() {
-                            signEach(node, id, keys, 0, new NodeApi.Cb() {
+                            signEach(node, id, spent, 0, new NodeApi.Cb() {
                                 public void onResult(JSONObject j2) {
                                     node.cmdR("txncheck id:" + id, new NodeApi.Cb() {
                                         public void onResult(JSONObject chkReply) {
@@ -228,6 +232,18 @@ public final class FillTxn {
             }
             public void onError(String m) { cb.done("txnview: " + m, null, null, null); }
         });
+    }
+
+    /** The keys among {@code keys} whose simple address ({@code RETURN SIGNEDBY(key)}) holds one of {@code ins}. */
+    static List<String> keysSpent(List<String> keys, List<Coin> ins) {
+        java.util.Set<String> at = new java.util.HashSet<>();
+        for (Coin c : ins) at.add(c.address.toUpperCase(java.util.Locale.ROOT));
+        List<String> out = new ArrayList<>();
+        for (String k : keys) {
+            String a = new org.minima.objects.Address("RETURN SIGNEDBY(" + k + ")").getAddressData().to0xString().toUpperCase(java.util.Locale.ROOT);
+            if (at.contains(a) && !out.contains(k)) out.add(k);
+        }
+        return out;
     }
 
     /** txnsign with each key in turn (the order's own keys only). */

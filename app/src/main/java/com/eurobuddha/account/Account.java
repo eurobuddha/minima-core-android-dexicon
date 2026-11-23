@@ -520,6 +520,7 @@ public final class Account {
         WORKER.execute(() -> {
             String halt = wallet.secondSigner(), text = halt;
             if (halt != null) { String d = wallet.secondSignerDetail(); if (d != null) text = halt + "\n\n" + d; }
+            else text = wallet.aheadWarning();
             final String t = text; final boolean stopped = halt != null;
             main().post(() -> got.accept(t, stopped));
         });

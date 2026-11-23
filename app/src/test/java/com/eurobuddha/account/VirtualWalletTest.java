@@ -726,4 +726,46 @@ public class VirtualWalletTest {
         assertTrue("an account row is the account's own", w.handle("newscript script:\"" + mine + "\" trackall:false").getBoolean("status"));
         assertFalse(n.calls.stream().anyMatch(c -> c.startsWith("newscript")));
     }
+
+    /** Review 23 Nov 2026 (MINOR): engines sign key by key; the size check counted only the key being signed, so a
+     *  transaction too big once its SECOND key signed was refused at the post - after the first leaf was spent. */
+    @Test public void theSizeCheckCountsEveryKeyStillToSignBeforeTheFirstLeaf() throws Exception {
+        AccountKeysTest.Mem mem = new AccountKeysTest.Mem();
+        AccountKeys k = AccountKeys.fromPhrase(AccountKeysTest.PHRASE, mem, null);
+        java.util.Map<String, String> exports = new java.util.HashMap<>();
+        for (int i = 0; i < 2; i++) {
+            org.minima.objects.Coin c = new org.minima.objects.Coin(new org.minima.objects.base.MiniData("0x" + String.format("%064X", 0xC0 + i)),
+                    new org.minima.objects.base.MiniData(k.address(i)), new org.minima.objects.base.MiniNumber("5"), new org.minima.objects.base.MiniData("0x00"));
+            exports.put(c.getCoinID().to0xString(), org.minima.objects.base.MiniData.getMiniDataVersion(
+                    new org.minima.objects.CoinProof(c, new org.minima.objects.mmr.MMRProof(new org.minima.objects.base.MiniNumber(1)))).to0xString());
+        }
+        FakeNode n = new FakeNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                if (cmd.startsWith("coinexport coinid:")) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONObject().put("data", exports.get(cmd.substring(18)))); }
+                return super.call(cmd);
+            }
+        };
+        Store st = new Store();
+        VirtualWallet w = new VirtualWallet(n, k, st, Collections.emptySet());
+        w.handle("newaddress");
+        w.handle("txncreate id:big");
+        for (String id : exports.keySet()) assertTrue(w.handle("txninput id:big coinid:" + id).getBoolean("status"));
+        for (int i = 0; i < 7; i++) w.handle("txnstate id:big port:" + i + " value:0x" + "AB".repeat(1000));
+        JSONObject r = w.handle("txnsign id:big publickey:" + k.publicKey(0));
+        assertFalse("two keys still to sign do not fit the node link", r.getBoolean("status"));
+        assertTrue(r.getString("error"), r.getString("error").contains("Nothing was signed"));
+        assertEquals("no leaf spent", 0, mem.currentUses(0));
+    }
+
+    @Test public void aCounterFarAheadOfTheClockIsWarnedWithTheWait() throws Exception {
+        AccountKeysTest.Mem mem = new AccountKeysTest.Mem();
+        VirtualWallet w = new VirtualWallet(new FakeNode(), AccountKeys.fromPhrase(AccountKeysTest.PHRASE, mem, null), new Store(), Collections.emptySet());
+        assertNull(w.aheadWarning());
+        long now = System.currentTimeMillis();
+        mem.recordExternalUses(0, AccountKeys.timeFloor(now) + 30_000);   // 30,000 leaves = 60,000 s ahead
+        String warn = w.aheadWarning();
+        assertNotNull(warn);
+        assertTrue(warn, warn.contains("key 0 is 30000 one-time keys ahead") || warn.contains("key 0 is 2999"));
+        assertTrue(warn, warn.endsWith("wait at least 17 hours."));
+    }
 }

@@ -504,6 +504,8 @@ public class MakerService extends Service {
         } catch (Exception e) { log("reply failed: " + e); }
     }
 
+    private final com.eurobuddha.dexicon.fill.CosignLimit cosigns = new com.eurobuddha.dexicon.fill.CosignLimit();
+
     private boolean lockCoins(List<String> ids) {
         long t = System.currentTimeMillis();
         for (String id : ids) { Long u = coinLocks.get(id); if (u != null && u > t) return false; }
@@ -519,6 +521,7 @@ public class MakerService extends Service {
         if (com.eurobuddha.dexicon.TradingGate.blocked(this)) { reply(taker, refused(orderId, PAUSED)); next.run(); return; }   // the gate shut mid-batch
         final MyOrder o = db.myOrder(orderId);
         if (o == null || !o.live()) { reply(taker, refused(orderId, "order not live")); next.run(); return; }
+        if (!cosigns.admit(taker, orderId, System.currentTimeMillis())) { reply(taker, refused(orderId, "too many takes - try again later")); next.run(); return; }
         if (!lockCoins(o.coins)) { reply(taker, refused(orderId, "taken")); next.run(); return; }
         log("take received for " + orderId + " from " + taker + " (" + hex.length() / 2 + " bytes)");
         final long receivedMs = System.currentTimeMillis();
