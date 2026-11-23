@@ -192,6 +192,8 @@ public final class Account {
             public synchronized boolean signedHere(String txnId) { return signed().contains(txnId); }
             public String signerState() { return sp.getString("signers_" + fp[0], "{}"); }
             public boolean saveSignerState(String json) { return sp.edit().putString("signers_" + fp[0], json).commit(); }
+            public String contractScripts() { return sp.getString("contracts_" + fp[0], null); }
+            public void saveContractScripts(String json) { sp.edit().putString("contracts_" + fp[0], json).apply(); }
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;

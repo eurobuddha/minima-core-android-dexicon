@@ -780,4 +780,36 @@ public class VirtualWalletTest {
         now[0] = AccountKeys.EXHAUSTED_MS - 364L * 86_400_000L;
         assertTrue(w.exhaustionWarning(), w.exhaustionWarning().contains("2043-01-05 at 18:48:32 UTC"));
     }
+
+    /** Review 23 Nov 2026 (MINOR): the scripts list read the node's WHOLE table on every call - a stock reply over ~131K
+     *  chars kills the app. It is read once (to seed the record), then never again. */
+    @Test public void theScriptsListNeverReadsTheNodesWholeTableTwice() throws Exception {
+        String pool = "RETURN TRUE", poolAddr = new org.minima.objects.Address(pool).getAddressData().to0xString();
+        FakeNode n = new FakeNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                if (cmd.equals("scripts")) { calls.add(cmd); return new JSONObject().put("status", true).put("response", new JSONArray()
+                        .put(new JSONObject().put("address", poolAddr).put("script", pool).put("simple", false).put("track", true))
+                        .put(new JSONObject().put("address", "0x" + "5E".repeat(32)).put("script", "RETURN SIGNEDBY(0x01)").put("simple", true))); }
+                if (cmd.equals("scripts address:" + poolAddr)) { calls.add(cmd); return new JSONObject().put("status", true).put("response",
+                        new JSONObject().put("address", poolAddr).put("script", pool).put("simple", false).put("track", true)); }
+                return super.call(cmd);
+            }
+        };
+        String[] saved = {null};
+        Store st = new Store() {
+            @Override public String contractScripts() { return saved[0]; }
+            @Override public void saveContractScripts(String j) { saved[0] = j; }
+        };
+        VirtualWallet w = new VirtualWallet(n, AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null), st, Collections.emptySet());
+        for (int i = 0; i < 3; i++) {
+            JSONArray rows = w.handle("scripts").getJSONArray("response");
+            assertEquals("the account's row and the contract; never the node's own simple row", 2, rows.length());
+            assertEquals(poolAddr, rows.getJSONObject(1).getString("address"));
+        }
+        assertEquals(1, n.calls.stream().filter(c -> c.equals("scripts")).count());
+        String theirs = "RETURN SIGNEDBY(0x" + "7A".repeat(32) + ")";
+        w.handle("newscript script:\"" + theirs + "\" trackall:false");
+        assertEquals("a script kept in-app is listed too", 3, w.handle("scripts").getJSONArray("response").length());
+        assertEquals(1, n.calls.stream().filter(c -> c.equals("scripts")).count());
+    }
 }

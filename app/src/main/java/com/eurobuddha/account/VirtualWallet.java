@@ -85,6 +85,10 @@ public final class VirtualWallet {
         default String signerState() { return "{}"; }
         /** Durable (synchronous) save; false = not written. */
         default boolean saveSignerState(String json) { return true; }
+        /** Contract scripts the engines registered through this account (JSON object address -> script), so the
+         *  {@code scripts} list never needs the node's whole, unbounded table; null = never recorded (seeded once). */
+        default String contractScripts() { return null; }
+        default void saveContractScripts(String json) {}
     }
 
     /** Wall clock (tests inject one). */
@@ -123,12 +127,10 @@ public final class VirtualWallet {
     private final Map<String, String> scripts = new HashMap<>();       // address -> script text
     private final Map<String, Long> spending = new HashMap<>();        // coinid -> when we posted a txn spending it
     private final SecureRandom rnd = new SecureRandom();
-    private Set<String> nodeSimple;                                     // the NODE wallet's own simple addresses
-    private long nodeSimpleAt;
     /** Re-checked immediately before the one write (postfrom): the engine's "market changed" contract. */
     private BooleanSupplier postGuard;
 
-    private static final long PROOF_TTL_MS = 60_000L, SPENDING_TTL_MS = 15 * 60_000L, NODE_SIMPLE_TTL_MS = 10 * 60_000L;
+    private static final long PROOF_TTL_MS = 60_000L, SPENDING_TTL_MS = 15 * 60_000L;
 
     private static final class Cached { final CoinProof cp; final String data; final long at; Cached(CoinProof cp, String data, long at) { this.cp = cp; this.data = data; this.at = at; } }
 
@@ -498,16 +500,62 @@ public final class VirtualWallet {
             int k = indexOfAddress(address);
             return k < 0 ? null : ok("scripts", addressRow(k, k == 0));
         }
-        JSONObject r = node.call("scripts");
-        if (!r.optBoolean("status")) return r;
-        JSONArray rows = r.optJSONArray("response"), out = new JSONArray();
+        // review 23 Nov 2026: never the node's whole table on every read (a stock reply over ~131K chars kills the app; a
+        // node polluted with pool rows is the likeliest to have one) - the account's rows, then each contract the engines
+        // registered through the account, looked up one by one (`scripts address:`, one small row each)
+        JSONObject known = contracts();
+        JSONArray out = new JSONArray();
         for (int i = 0; i < store.keyCount(); i++) out.put(addressRow(i, i == 0));
+        for (java.util.Iterator<String> it = known.keys(); it.hasNext(); ) {
+            String a = it.next();
+            JSONObject r = node.call("scripts address:" + a);
+            JSONObject row = r.optBoolean("status") ? r.optJSONObject("response") : null;
+            if (row != null && a.equalsIgnoreCase(row.optString("address")) && !row.optBoolean("simple")) out.put(row);
+            else if (scripts.containsKey(norm(a))) out.put(scriptRow(known.getString(a), a, false));   // kept in-app (newscript)
+        }
+        return ok("scripts", out);
+    }
+
+    /** Most contract rows listed by {@code scripts}: beyond this the oldest are dropped from the list (not from the node). */
+    static final int MAX_CONTRACT_ROWS = 400;
+
+    /** The recorded contract scripts. The first time (an install from before this record existed), seeded ONCE from the
+     *  node's whole table - the read every list used to make. */
+    private JSONObject contracts() throws Exception {
+        String saved = store.contractScripts();
+        if (saved != null) try { return new JSONObject(saved); } catch (Exception bad) { /* reseeded below */ }
+        JSONObject r = node.call("scripts");
+        if (!r.optBoolean("status")) throw new IllegalStateException("scripts: " + err(r));
+        JSONObject known = new JSONObject();
+        JSONArray rows = r.optJSONArray("response");
         if (rows != null) for (int i = 0; i < rows.length(); i++) {
             JSONObject row = rows.getJSONObject(i);
             if (row.optBoolean("simple") || indexOfAddress(row.optString("address")) >= 0) continue;
-            out.put(row);
+            known.put(row.optString("address"), row.optString("script"));
         }
-        return ok("scripts", out);
+        trimContracts(known);
+        store.saveContractScripts(known.toString());
+        return known;
+    }
+
+    private void recordContract(String address, String script) {
+        try {
+            JSONObject known = contracts();
+            known.remove(address);
+            known.put(address, script);
+            trimContracts(known);
+            store.saveContractScripts(known.toString());
+        } catch (Exception later) { /* listed again once recorded */ }
+    }
+
+    private static void trimContracts(JSONObject known) {
+        for (java.util.Iterator<String> it = known.keys(); it.hasNext() && known.length() > MAX_CONTRACT_ROWS; ) { it.next(); it.remove(); }
+    }
+
+    private static JSONObject scriptRow(String script, String addr, boolean track) throws Exception {
+        return new JSONObject().put("script", script).put("address", addr)
+                .put("miniaddress", org.minima.objects.Address.makeMinimaAddress(new MiniData(addr))).put("simple", false)
+                .put("default", false).put("publickey", "0x00").put("track", track);
     }
 
     /**
@@ -528,9 +576,7 @@ public final class VirtualWallet {
         if (script.trim().isEmpty()) return fail("newscript", "newscript needs script:");
         if (p.b("clean", false)) script = org.minima.kissvm.Contract.cleanScript(script);
         String addr = new org.minima.objects.Address(script).getAddressData().to0xString();
-        JSONObject row = new JSONObject().put("script", script).put("address", addr)
-                .put("miniaddress", org.minima.objects.Address.makeMinimaAddress(new MiniData(addr))).put("simple", false)
-                .put("default", false).put("publickey", "0x00").put("track", p.b("trackall", false));
+        JSONObject row = scriptRow(script, addr, p.b("trackall", false));
         int k = indexOfAddress(addr);
         if (k >= 0) return ok("newscript", addressRow(k, k == 0));
         JSONObject r = node.call("scripts address:" + addr);
@@ -538,6 +584,7 @@ public final class VirtualWallet {
         boolean exists = held != null && addr.equalsIgnoreCase(held.optString("address"));
         if (exists && held.optBoolean("simple"))
             return fail("newscript", "Refused: that script is an address of your node's own wallet (" + addr + "). Nothing was changed.");
+        recordContract(addr, script);
         if (!exists && !p.b("trackall", false)) { scripts.put(norm(addr), script); return ok("newscript", row); }
         return null;
     }
@@ -702,19 +749,6 @@ public final class VirtualWallet {
             if (indexOfAddress(row.optString("address")) >= 0 && !isSpending(row.optString("coinid"))) kept.put(row);
         }
         return ok("coins", kept);
-    }
-
-    private Set<String> nodeSimpleAddresses() throws Exception {
-        if (nodeSimple != null && clock.now() - nodeSimpleAt < NODE_SIMPLE_TTL_MS) return nodeSimple;
-        Set<String> out = new HashSet<>();
-        JSONObject r = node.call("scripts");
-        JSONArray rows = r.optJSONArray("response");
-        if (rows != null) for (int k = 0; k < rows.length(); k++) {
-            JSONObject s = rows.getJSONObject(k);
-            if (s.optBoolean("simple") && indexOfAddress(s.optString("address")) < 0) out.add(norm(s.optString("address")));
-        }
-        nodeSimple = out; nodeSimpleAt = clock.now();
-        return out;
     }
 
     private JSONObject balance(P p) throws Exception {
