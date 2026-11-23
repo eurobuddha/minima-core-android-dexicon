@@ -270,7 +270,8 @@ public class MainActivity extends com.eurobuddha.pandapools.MainActivity {
         // AtomiX / PandaPools on this phone: the hand-over GateView owns that (its guarded Hand over / Remove, the pool
         // backup move) — never cover it with the account's "one app at a time" dialog. Re-offered when the gate lifts.
         if (TradingGate.conflict(this)) return;
-        if (offering || com.eurobuddha.account.Account.get(this, node) != null) { lockedTries = 0; return; }
+        if (offering) { lockedTries = 0; return; }
+        if (com.eurobuddha.account.Account.get(this, node) != null) { lockedTries = 0; com.eurobuddha.account.AccountSetup.warnings(activity(), node); return; }
         if (com.eurobuddha.account.Account.exists(this)) {   // vault present but the keystore is busy: retry, delete nothing
             ui.removeCallbacks(retryOffer);
             if (++lockedTries <= 6) { toast("Your Trading Account is temporarily locked — Dexicon retries in a moment."); ui.postDelayed(retryOffer, 5_000); return; }

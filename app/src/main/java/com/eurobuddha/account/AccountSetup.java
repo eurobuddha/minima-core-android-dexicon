@@ -46,13 +46,16 @@ public final class AccountSetup {
             + "phrase cannot cost you both wallets.";
     public static final String SAME_WORDS = "If you do use the same words: write them down once and keep them as safe as you "
             + "would for both wallets.";
-    /** True to AccountKeys: each phone's leaf counter is raised to a wall-clock floor (one leaf per 2 s), and a restore
-     *  starts past every leaf an earlier install signed. Not only "at the same moment": a phone that resumes after the
-     *  account was restored elsewhere can land on the restored phone's leaves for about a day (restore floor: the time
-     *  floor + 1,800 + 40,000 leaves at 2 s), so the first must stop for good. */
+    /** True to AccountKeys and the second-signer watch (VirtualWallet.watchSigners). Each install's leaf counter is raised
+     *  to a wall-clock floor (one leaf per 2 s) and a restore starts past the restore floor (the time floor + 1,800 +
+     *  40,000 leaves), but that is no guard against two LIVE installs: two phones signing within seconds pick the same
+     *  leaf, and a phone still running after the account was restored elsewhere reaches the restored phone's leaves about
+     *  a day later. Text and the watch are the defence: once a signature by another install shows up on chain, this one
+     *  raises its counters past it and (at or above its restore floor) stops signing until the person confirms it is the
+     *  only device. A leaf two live phones already shared stays exposed - so the first phone must stop for good. */
     public static final String ONE_DEVICE = "Use a Trading Account on ONE device at a time. Restoring it on a second phone is "
-            + "fine once the first has stopped using it for good; two devices trading with the same Trading Account can "
-            + "expose its keys.";
+            + "fine once the first has stopped using it for good. Two devices trading with the same Trading Account can "
+            + "expose its keys; if the app sees another device signing, it stops signing here.";
     static final String[] SEEDS = {SEPARATE, NEW_WORDS, SAME_WORDS, ONE_DEVICE};
     /** The one-line reminder where the node's own words could be typed (Restore) or used (node seed). */
     public static final String SAME_WORDS_REMINDER = "Using your node's 24 words? This is still a separate wallet with its own "
@@ -73,6 +76,41 @@ public final class AccountSetup {
     /** The same text for an existing account (its info button): never shown again on its own. */
     public static void about(Activity a) {
         dialog(a).setTitle("About your Trading Account").setView(pad(a, text(a, seeds(), false))).setPositiveButton("OK", null).show();
+    }
+
+    /**
+     * The account's warnings ({@link Account#warnings}), as a dialog: each text once per process, except "signing is
+     * stopped" (another device signs with this account), which is shown on every call until the person confirms "This is
+     * the only device now" - a second confirmation, then {@link Account#onlyDeviceNow}. Each app calls this when its
+     * account check finds the account open.
+     */
+    public static void warnings(Activity a, Transport node) {
+        Account acc = Account.get(a, node);
+        if (acc == null) return;
+        acc.warnings((text, stopped) -> {
+            if (text == null || a.isFinishing() || a.isDestroyed()) return;
+            AlertDialog open = warningDialog.get();
+            if (open != null && open.isShowing()) return;
+            if (!stopped && !warned.add(text)) return;
+            AlertDialog.Builder b = dialog(a).setTitle(stopped ? "Signing stopped" : "Your Trading Account").setView(pad(a, text(a, text, false)));
+            if (stopped) b.setPositiveButton(ONLY_DEVICE, (d, w) -> confirmOnlyDevice(a, node, acc)).setNegativeButton("Not now", null);
+            else b.setPositiveButton("OK", null);
+            warningDialog = new java.lang.ref.WeakReference<>(b.show());
+        });
+    }
+    public static final String ONLY_DEVICE = "This is the only device now";
+    static final String ONLY_DEVICE_CONFIRM = "Only continue if every other device has stopped using this Trading Account for good "
+            + "(its app uninstalled, or its data cleared). This device then signs only past every one-time key the other one used.";
+    private static final java.util.Set<String> warned = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+    private static java.lang.ref.WeakReference<AlertDialog> warningDialog = new java.lang.ref.WeakReference<>(null);
+
+    private static void confirmOnlyDevice(Activity a, Transport node, Account acc) {
+        dialog(a).setTitle(ONLY_DEVICE + "?").setView(pad(a, text(a, ONLY_DEVICE_CONFIRM, false)))
+                .setPositiveButton(ONLY_DEVICE, (d, w) -> acc.onlyDeviceNow(node, err -> {
+                    if (a.isFinishing() || a.isDestroyed()) return;
+                    Toast.makeText(a, err == null ? "Signing is on again on this device." : "Signing stays stopped: " + err, Toast.LENGTH_LONG).show();
+                }))
+                .setNegativeButton("Back", null).show();
     }
 
     /**

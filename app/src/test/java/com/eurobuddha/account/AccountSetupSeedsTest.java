@@ -29,7 +29,8 @@ public class AccountSetupSeedsTest {
     static final String NEW_WORDS = "A new set of words for the Trading Account is the better choice: then one leaked phrase cannot cost you both wallets.";
     static final String SAME_WORDS = "If you do use the same words: write them down once and keep them as safe as you would for both wallets.";
     static final String ONE_DEVICE = "Use a Trading Account on ONE device at a time. Restoring it on a second phone is fine once the first has "
-            + "stopped using it for good; two devices trading with the same Trading Account can expose its keys.";
+            + "stopped using it for good. Two devices trading with the same Trading Account can expose its keys; if the app sees "
+            + "another device signing, it stops signing here.";
 
     private static String texts(Dialog d) { StringBuilder b = new StringBuilder(); collect(d.getWindow().getDecorView(), b); return b.toString(); }
     private static void collect(View v, StringBuilder b) {

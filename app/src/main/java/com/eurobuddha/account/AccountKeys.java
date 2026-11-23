@@ -150,6 +150,17 @@ public final class AccountKeys {
     }
     public int maxUses() { return (int) Math.pow(KEYS_PER_LEVEL, LEVELS); }
 
+    /** Another install signed {@code leaf} on key {@code index}: this install's next leaf is above it, in its own share. */
+    public void raiseAbove(int index, int leaf) { raiseTo(index, (int) Math.min(Integer.MAX_VALUE, (long) leaf + 1)); }
+
+    /** Raise key {@code index}'s counter to at least {@code n} (aligned up to this app's share): never lowers. */
+    public void raiseTo(int index, int n) {
+        synchronized (signLock) {
+            int target = leafSlot >= 0 ? alignToSlot(n, leafSlot) : n;
+            if (uses.currentUses(index) < target) uses.recordExternalUses(index, target);
+        }
+    }
+
     /** Leaf floor stored once when an account is RESTORED (or derived from the node seed): the time floor now, plus two
      *  phones' worth of allowed clock skew (2 × 30 min), plus a margin for an earlier install that signed faster than
      *  the clock — so a restore on a slow phone never lands on a leaf a fast one already signed. */

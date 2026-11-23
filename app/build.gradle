@@ -44,8 +44,14 @@ android {
         // 0.3.70: a restored account's restore floor comes from a chain-checked clock (review 23 Nov): stored as
         // pending at restore, computed and saved at the first chain-checked clock, raise-only; nothing signs while it
         // is pending, so a phone clock far ahead can no longer exhaust every key for good.
-        versionCode 370
-        versionName "0.3.70"
+        // 0.3.71: second-signer detection (review 23 Nov, MAJOR-A): every account-key signature on chain (the node's
+        // relevant history, one TxPoW per read, verified, its leaf read from the proofs) over a transaction this
+        // install never signed raises this install's counters past it and, at or above the restore floor, stops
+        // signing with a durable latch until the person confirms 'This is the only device now' (re-read, raise past
+        // everything seen plus the restore margin). Own signatures are recorded before they exist. ONE_DEVICE text
+        // says so.
+        versionCode 371
+        versionName "0.3.71"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

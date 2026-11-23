@@ -76,6 +76,15 @@ public final class VirtualWallet {
         /** A restored account's floor, computed from a chain-checked clock: durable (synchronous), raise-only; throws when
          *  it could not be saved (then nothing signs). */
         default void saveRestoreFloor(int floor) {}
+        /** This install signs {@code txnId} (called BEFORE the signature exists): durable (synchronous); false = not
+         *  saved, and then nothing is signed. The second-signer watch never mistakes these for another device. */
+        default boolean recordSigned(String txnId) { return true; }
+        /** {@code txnId} was signed by this install ({@link #recordSigned}). */
+        default boolean signedHere(String txnId) { return false; }
+        /** The second-signer watch's state (JSON object): position, the reading mark, the latch. */
+        default String signerState() { return "{}"; }
+        /** Durable (synchronous) save; false = not written. */
+        default boolean saveSignerState(String json) { return true; }
     }
 
     /** Wall clock (tests inject one). */
@@ -994,10 +1003,15 @@ public final class VirtualWallet {
         List<Integer> needed = new ArrayList<>();
         for (int k : toSign) if (!w.isSignedBy(keys.publicKey(k))) needed.add(k);
         if (!needed.isEmpty()) {
+            if (!watchedOnce) watchSigners();                 // at account open, before the first signature
+            String halt = secondSigner();
+            if (halt != null) return new JSONObject().put("error", halt);
             long now = checkedClock();
             int estimate = hex(r).length() + needed.size() * SIG_HEX_ESTIMATE + proofEstimate(r);
             if (estimate > MAX_POST_HEX)
                 return new JSONObject().put("error", "Transaction too large for the node link (~" + estimate + " chars) — use fewer coins. Nothing was signed.");
+            if (!store.recordSigned(norm(t.getTransactionID().to0xString())))   // durable BEFORE any signature exists
+                return new JSONObject().put("error", "Could not record this signature on the phone. Nothing was signed.");
             for (int k : needed) {
                 Signature s = keys.sign(t.getTransactionID(), k, now);
                 w.addSignature(s);
@@ -1013,6 +1027,131 @@ public final class VirtualWallet {
         if (nonsimple.length() > 0) resp.put("nonsimple", nonsimple);
         if (notfound.length() > 0) resp.put("notfound", notfound);
         return resp;
+    }
+
+    // ------------------------------------------------------------------------------------------ second-signer watch
+
+    /** Shown when another install signs with this account's keys (review 23 Nov 2026), and the refusal of every sign. */
+    public static final String ANOTHER_DEVICE = "This Trading Account is being used on another device. Signing is stopped here to "
+            + "protect its keys. Use it on one device only: on the device you keep, press 'This is the only device now'.";
+    /** History items read per pass (each one TxPoW reply), and on the first pass ever (a baseline: raise only). */
+    static final int SIGNER_PER_PASS = 20, SIGNER_SEEN = 500, SIGNER_POISON = 20;
+    private boolean watchedOnce;
+
+    /** The halt text while the latch is set, else null. */
+    public synchronized String secondSigner() {
+        JSONObject st = signerState();
+        return st.optJSONObject("latch") == null ? null : ANOTHER_DEVICE;
+    }
+
+    /** What the latch recorded (key index, leaf, transaction id), for the person; null when not latched. */
+    public synchronized String secondSignerDetail() {
+        JSONObject l = signerState().optJSONObject("latch");
+        return l == null ? null : "Key " + l.optInt("key") + " signed with one-time key " + l.optInt("leaf") + " in transaction "
+                + l.optString("txnid") + ", which this device never signed.";
+    }
+
+    private JSONObject signerState() {
+        try { return new JSONObject(store.signerState()); } catch (Exception bad) { return new JSONObject(); }
+    }
+
+    /**
+     * Second-signer detection, on the worker's regular scans and before the first signature. The node keeps every TxPoW
+     * that spends a tracked coin as "relevant" (TxPoWDB.checkTxPoWRelevant: account scripts are tracked), and
+     * {@code history action:list max:1 offset:} pages them newest first, one TxPoW per reply (a READ command on stock:
+     * CommandRunner ALL_WRITE_COMMANDS). Each one's verified account-key signatures ({@link SignerWatch}) over a
+     * transaction id this install never signed ({@link Store#signedHere}):
+     * <ul><li>raise this install's counter above that leaf (per key, share-aligned);</li>
+     * <li>at or above the restore floor: HALT signing here with a durable latch ({@link #ANOTHER_DEVICE}); below it the
+     * signature predates this install (the words' earlier install) and only raises.</li></ul>
+     * Leaves in the sibling app's share (AtomiX with PandaPools on one phone) are that app's to judge. Bounded: a pass reads
+     * at most {@link #SIGNER_PER_PASS} items, positions counted from the oldest so new items never hide old ones; the first
+     * pass ever is a baseline (raise only: an upgraded install has no record of what it signed before). A reply too big
+     * for the node link on stock Minima Core kills the process: a durable mark is set before each read, and an item read
+     * while the process died is skipped for good. Best effort: never throws.
+     */
+    public synchronized void watchSigners() {
+        watchedOnce = true;
+        try { watchSigners0(false); } catch (Exception later) { /* the next scan retries */ }
+    }
+
+    private void watchSigners0(boolean rescan) throws Exception {
+        checkedClock();                                        // the restore floor must be known (and the clock sane)
+        JSONObject st = signerState();
+        JSONObject sz = node.call("history action:size");
+        JSONObject szr = sz.optBoolean("status") ? sz.optJSONObject("response") : null;
+        if (szr == null || !szr.has("size")) return;
+        int size = szr.optInt("size", 0);
+        JSONArray poison = st.optJSONArray("poison") == null ? new JSONArray() : st.optJSONArray("poison");
+        if (st.has("reading")) {                               // the process died reading this item: never again
+            poison.put(st.getInt("reading"));
+            while (poison.length() > SIGNER_POISON) poison.remove(0);
+            st.remove("reading"); st.put("poison", poison);
+        }
+        boolean baseline = rescan || !st.has("done");
+        int done = Math.min(st.optInt("done", size), size);
+        int from = baseline ? Math.max(0, size - SIGNER_PER_PASS) : done;
+        Set<Integer> skip = new HashSet<>();
+        for (int i = 0; i < poison.length(); i++) skip.add(poison.optInt(i));
+        JSONArray seen = st.optJSONArray("seen") == null ? new JSONArray() : st.optJSONArray("seen");
+        Set<String> seenSet = new HashSet<>();
+        for (int i = 0; i < seen.length(); i++) seenSet.add(seen.optString(i));
+        int pos = from;
+        for (int n = 0; pos < size && n < SIGNER_PER_PASS; pos++, n++) {
+            if (skip.contains(pos)) continue;
+            st.put("reading", pos);
+            if (!store.saveSignerState(st.toString())) return;   // never read an item without its mark on disk
+            JSONObject r = node.call("history action:list max:1 offset:" + (size - 1 - pos));
+            st.remove("reading");
+            JSONObject resp = r.optBoolean("status") ? r.optJSONObject("response") : null;
+            JSONArray items = resp == null ? null : resp.optJSONArray("txpows");
+            JSONObject item = items == null || items.length() == 0 ? null : items.optJSONObject(0);
+            String id = item == null ? "" : item.optString("txpowid", "");
+            if (!id.isEmpty() && seenSet.contains(id)) break;    // the list moved under us: the next pass re-reads its size
+            if (item != null) examine(item, baseline, st);
+            if (!id.isEmpty()) { seenSet.add(id); seen.put(id); }
+        }
+        while (seen.length() > SIGNER_SEEN) seen.remove(0);
+        st.put("seen", seen);
+        if (!rescan) st.put("done", baseline ? size : pos);
+        store.saveSignerState(st.toString());
+    }
+
+    /** One TxPoW: raise past every foreign leaf; latch on a live one (see {@link #watchSigners}). */
+    private void examine(JSONObject txpow, boolean baseline, JSONObject st) throws Exception {
+        int mine = keys.leafSlot();
+        for (SignerWatch.Seen s : SignerWatch.signatures(txpow, this::indexOfKey)) {
+            if (store.signedHere(norm(s.txnId))) continue;                       // this install signed it
+            int slot = Math.floorMod(s.leaf, AccountKeys.LEAF_SLOTS);
+            if (slot != mine && sibling(mine, slot)) continue;                   // AtomiX / PandaPools beside us: theirs
+            keys.raiseAbove(s.key, s.leaf);
+            if (!baseline && s.leaf >= keys.restoreFloor() && st.optJSONObject("latch") == null)
+                st.put("latch", new JSONObject().put("key", s.key).put("leaf", s.leaf).put("txnid", s.txnId)
+                        .put("txpowid", txpow.optString("txpowid", "")).put("at", clock.now()));
+        }
+    }
+
+    /** AtomiX and PandaPools may hold the account side by side on one phone; Dexicon never shares a phone (Family). */
+    static boolean sibling(int mine, int slot) {
+        return (mine == AccountKeys.SLOT_ATOMIX || mine == AccountKeys.SLOT_PANDAPOOLS)
+                && (slot == AccountKeys.SLOT_ATOMIX || slot == AccountKeys.SLOT_PANDAPOOLS);
+    }
+
+    /**
+     * "This is the only device now" (confirmed by the person): re-read the latest history, then raise EVERY key past what
+     * was seen and the restore margin (time floor + two phones' skew + the out-signing margin, as a restore does), make
+     * that the new restore floor, and clear the latch. Throws (and keeps the latch) when the clock or the node fail.
+     */
+    public synchronized void onlyDeviceNow() throws Exception {
+        long now = checkedClock();
+        watchSigners0(true);
+        int floor = AccountKeys.restoreFloor(now), margin = floor - AccountKeys.timeFloor(now);
+        for (int k = 0; k < store.keyCount(); k++) keys.raiseTo(k, Math.max(floor, (int) Math.min(Integer.MAX_VALUE, (long) keys.storedUses(k) + margin)));
+        store.saveRestoreFloor(floor);
+        keys.setRestoreFloor(floor);
+        JSONObject st = signerState();
+        st.remove("latch");
+        if (!store.saveSignerState(st.toString())) throw new IllegalStateException("Could not save the change on the phone. Signing stays stopped.");
     }
 
     /** Hex chars of the coin + script proofs still to be attached before posting. */

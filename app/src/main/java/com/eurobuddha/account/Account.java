@@ -90,7 +90,9 @@ public final class Account {
         return a != null ? Route.ACCOUNT : Route.NO_ACCOUNT;
     }
 
-    private static final String PREFS = "dexicon_account_state";
+    private static final String PREFS = "dexicon_account_state", SIGNED_PREFS = "dexicon_account_signed";
+    /** Transaction ids this install signed, newest kept: far more than the second-signer watch ever looks back over. */
+    private static final int SIGNED_CAP = 3000;
     private static volatile Account instance;
     /** The MegaMMR download (~5.6 MB, up to 90 s) runs here, never on the signing worker. */
     private static final ExecutorService ARCHIVE = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "account-archive"); t.setDaemon(true); return t; });
@@ -169,6 +171,26 @@ public final class Account {
             public boolean resetPending() { return sp.getBoolean("archive_reset_" + fp[0], false); }
             public void setResetPending(boolean p) { sp.edit().putBoolean("archive_reset_" + fp[0], p).commit(); }   // commit: durable now
             public void saveRestoreFloor(int floor) { new AccountVault(app).resolveRestoreFloor(floor); }
+            // what this install signed: its own prefs file (rewritten on every signature, so kept apart from the rest)
+            private final SharedPreferences signedSp = app.getSharedPreferences(SIGNED_PREFS, Context.MODE_PRIVATE);
+            private java.util.LinkedHashSet<String> signed;
+            private java.util.LinkedHashSet<String> signed() {
+                if (signed == null) {
+                    signed = new java.util.LinkedHashSet<>();
+                    try { org.json.JSONArray a = new org.json.JSONArray(signedSp.getString(fp[0], "[]")); for (int i = 0; i < a.length(); i++) signed.add(a.getString(i)); } catch (Exception fresh) { }
+                }
+                return signed;
+            }
+            public synchronized boolean recordSigned(String txnId) {
+                java.util.LinkedHashSet<String> s = signed();
+                s.remove(txnId); s.add(txnId);
+                java.util.Iterator<String> it = s.iterator();
+                while (s.size() > SIGNED_CAP) { it.next(); it.remove(); }
+                return signedSp.edit().putString(fp[0], new org.json.JSONArray(new java.util.ArrayList<>(s)).toString()).commit();
+            }
+            public synchronized boolean signedHere(String txnId) { return signed().contains(txnId); }
+            public String signerState() { return sp.getString("signers_" + fp[0], "{}"); }
+            public boolean saveSignerState(String json) { return sp.edit().putString("signers_" + fp[0], json).commit(); }
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
@@ -285,6 +307,7 @@ public final class Account {
                             java.util.Set<String> k = new java.util.HashSet<>();
                             for (String a : wallet.accountAddresses()) k.add(VirtualWallet.norm(a));
                             knownAddresses = k;
+                            wallet.watchSigners();
                             archivePass();
                         }
                         catch (Exception later) { android.util.Log.w(config.appName, "account re-track deferred: " + later); }   // never fails a claim
@@ -440,6 +463,7 @@ public final class Account {
         long now = System.currentTimeMillis();
         if (now - scannedAt < 30_000L || app == null) return;
         scannedAt = now;
+        wallet.watchSigners();   // a second signer is looked for on every scan (bounded; never throws)
         try {
             JSONObject r = wallet.handle("coins relevant:true");
             if (r == null || !r.optBoolean("status")) return;
@@ -486,6 +510,30 @@ public final class Account {
             }
             sp.edit().putString(seenKey, new org.json.JSONArray(new java.util.ArrayList<>(seen)).toString()).apply();
         } catch (Exception later) { android.util.Log.w(config.appName, "incoming scan deferred: " + later); }
+    }
+
+    /** What the person must know about this account now (null = nothing), and whether signing is stopped because another
+     *  device signs with it (then "This is the only device now" is offered). Worked out on the worker; delivered on the
+     *  main thread. */
+    public void warnings(java.util.function.BiConsumer<String, Boolean> got) {
+        WORKER.execute(() -> {
+            String halt = wallet.secondSigner(), text = halt;
+            if (halt != null) { String d = wallet.secondSignerDetail(); if (d != null) text = halt + "\n\n" + d; }
+            final String t = text; final boolean stopped = halt != null;
+            main().post(() -> got.accept(t, stopped));
+        });
+    }
+
+    /** The person confirmed "This is the only device now" (VirtualWallet.onlyDeviceNow): {@code done} gets null, or why
+     *  signing stays stopped. On the worker; delivered on the main thread. */
+    public void onlyDeviceNow(Transport node, java.util.function.Consumer<String> done) {
+        WORKER.execute(() -> {
+            String err = null;
+            try { if (node != null) current = node; wallet.onlyDeviceNow(); }
+            catch (Exception e) { err = e.getMessage() == null ? e.toString() : e.getMessage(); }
+            final String r = err;
+            main().post(() -> done.accept(r));
+        });
     }
 
     /** The account's receive address (index 0), full 0x and Mx forms: [0x, Mx]. Computed on the worker. */
