@@ -119,6 +119,43 @@ public class ArchiveSearchTest {
         assertTrue(first.get(), first.get().startsWith("Nothing new found."));
     }
 
+    /** Review NIT: a pass that started before the node lost the account's script rows must not record the mark after the
+     *  loss reset it — what it imported may have gone with the wallet table. */
+    @Test public void aPassThatStartedBeforeALossDoesNotMarkAfterIt() throws Exception {
+        VirtualWalletTest.ScriptTableNode node = new VirtualWalletTest.ScriptTableNode();
+        Account a = account(node, false);
+        VirtualWallet w = wallet(a);
+        java.util.concurrent.CountDownLatch fetching = new java.util.concurrent.CountDownLatch(1), hold = new java.util.concurrent.CountDownLatch(1);
+        Account.archive = addrs -> { fetching.countDown(); hold.await(); return Collections.emptyList(); };
+        AtomicReference<String> done = new AtomicReference<>();
+        a.searchArchive(null, done::set);
+        while (fetching.getCount() > 0) { org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(5); }
+        node.table.clear();                 // the node is reseeded while the archive answers
+        off(() -> { w.ensureTracked(); return null; });
+        hold.countDown();
+        long end = System.currentTimeMillis() + 60_000;
+        while (done.get() == null && System.currentTimeMillis() < end) { org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(5); }
+        assertNotNull(done.get());
+        assertEquals("the older pass did not record the mark", VirtualWalletTest.nodeFolder(), off(w::archiveWanted));
+    }
+
+    /** Review NIT: the pending reset is kept in the account's prefs, so a process death before the node's status answers
+     *  cannot lose it. */
+    @Test public void aPendingResetIsKeptInThePrefs() throws Exception {
+        VirtualWalletTest.ScriptTableNode node = new VirtualWalletTest.ScriptTableNode() {
+            boolean statusDown = true;
+            @Override public JSONObject call(String cmd) throws Exception {
+                if (cmd.equals("status") && statusDown && !table.isEmpty()) { statusDown = false; return new JSONObject().put("status", false).put("error", "busy"); }
+                return super.call(cmd);
+            }
+        };
+        VirtualWallet first = wallet(account(node, false));
+        first.markArchived(VirtualWalletTest.nodeFolder(), 1);
+        off(() -> { first.ensureTracked(); return null; });   // loss seen, the status fails once — then the process dies
+        VirtualWallet restarted = wallet(account(node, false));
+        assertEquals("the reset survived the restart", VirtualWalletTest.nodeFolder(), off(restarted::archiveWanted));
+    }
+
     @Test public void theExplanationIsTheOwnersWords() {
         assertTrue(Account.ARCHIVE_SEARCH_ABOUT.startsWith("Looks for coins of this Trading Account that are older than your node keeps. "
                 + "Use it if a balance looks short after your node was resynced or restored. It moves nothing."));

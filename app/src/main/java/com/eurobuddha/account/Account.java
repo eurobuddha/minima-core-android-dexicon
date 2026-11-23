@@ -165,6 +165,8 @@ public final class Account {
             public boolean savePosted(String json) { return sp.edit().putString("posted_" + fp[0], json).commit(); }
             public int archivedKeys(String nodeId) { return sp.getInt("archived_" + fp[0] + "_" + nodeId.toLowerCase(java.util.Locale.ROOT), 0); }
             public void setArchivedKeys(String nodeId, int n) { sp.edit().putInt("archived_" + fp[0] + "_" + nodeId.toLowerCase(java.util.Locale.ROOT), n).apply(); }
+            public boolean resetPending() { return sp.getBoolean("archive_reset_" + fp[0], false); }
+            public void setResetPending(boolean p) { sp.edit().putBoolean("archive_reset_" + fp[0], p).commit(); }   // commit: durable now
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
@@ -322,11 +324,12 @@ public final class Account {
             String nodeId = wallet.archiveWanted();
             if (nodeId == null) { archiveBusy.set(false); return; }
             archiveTriedAt = now; archiveAttempts++;
+            int gen = wallet.archiveGeneration();
             java.util.List<String> addresses = wallet.accountAddresses();
             ARCHIVE.execute(() -> {
                 try {
                     java.util.List<org.minima.objects.CoinProof> proofs = archive.get(addresses);
-                    importBatch(nodeId, addresses.size(), proofs, 0, new VirtualWallet.ArchiveResult(ARCHIVE_SOURCE), null, null);
+                    importBatch(nodeId, gen, addresses.size(), proofs, 0, new VirtualWallet.ArchiveResult(ARCHIVE_SOURCE), null, null);
                 } catch (Throwable e) { android.util.Log.w(config.appName, "archive fetch deferred: " + e); archiveBusy.set(false); }
             });
         } catch (Throwable e) { archiveBusy.set(false); android.util.Log.w(config.appName, "archive check deferred: " + e); }
@@ -356,8 +359,8 @@ public final class Account {
         VirtualWallet.ArchiveResult r = new VirtualWallet.ArchiveResult(ARCHIVE_SOURCE);
         say(progress, "Asking your node…");
         WORKER.execute(() -> {
-            String nodeId; java.util.List<String> addresses;
-            try { wallet.ensureTracked(); nodeId = wallet.nodeId(); addresses = wallet.accountAddresses(); }
+            String nodeId; java.util.List<String> addresses; int gen;
+            try { wallet.ensureTracked(); gen = wallet.archiveGeneration(); nodeId = wallet.nodeId(); addresses = wallet.accountAddresses(); }
             catch (Throwable e) { r.failure = "Your node did not answer: " + why(e) + "."; finish(r, done); return; }
             say(progress, "Asking the archive at " + ARCHIVE_SOURCE + " about " + addresses.size()
                     + (addresses.size() == 1 ? " address" : " addresses") + " (a download of a few MB)…");
@@ -368,7 +371,7 @@ public final class Account {
                 r.returned = proofs.size();
                 say(progress, "The archive listed " + proofs.size() + (proofs.size() == 1 ? " coin" : " coins")
                         + " at this account's addresses. Your node is checking each one…");
-                importBatch(nodeId, addresses.size(), proofs, 0, r, progress, done);
+                importBatch(nodeId, gen, addresses.size(), proofs, 0, r, progress, done);
             });
         });
     }
@@ -380,7 +383,7 @@ public final class Account {
         if (done != null) { String t = r.text(); main().post(() -> done.accept(t)); }
     }
 
-    private void importBatch(String nodeId, int keyCount, java.util.List<org.minima.objects.CoinProof> proofs, int from,
+    private void importBatch(String nodeId, int gen, int keyCount, java.util.List<org.minima.objects.CoinProof> proofs, int from,
                              VirtualWallet.ArchiveResult r, java.util.function.Consumer<String> progress, java.util.function.Consumer<String> done) {
         WORKER.execute(() -> {
             try {
@@ -388,10 +391,11 @@ public final class Account {
                 wallet.importArchived(proofs.subList(from, to), line -> android.util.Log.i(config.appName, "archive: " + line), r);
                 if (to < proofs.size()) {
                     say(progress, "Your node checked " + to + " of " + proofs.size() + " coins…");
-                    importBatch(nodeId, keyCount, proofs, to, r, progress, done); return;
+                    importBatch(nodeId, gen, keyCount, proofs, to, r, progress, done); return;
                 }
-                if (r.clean()) wallet.markArchived(nodeId, keyCount);
-                android.util.Log.i(config.appName, "archive pass over " + proofs.size() + " coin(s) " + (r.clean() ? "complete" : "incomplete, retried later"));
+                boolean marked = r.clean() && wallet.markArchived(nodeId, keyCount, gen);
+                android.util.Log.i(config.appName, "archive pass over " + proofs.size() + " coin(s) " + (marked ? "complete"
+                        : r.clean() ? "clean, but the node lost an account address meanwhile: run again" : "incomplete, retried later"));
             } catch (Throwable e) {
                 r.failure = "Your node stopped answering while it checked the coins: " + why(e) + ".";
                 android.util.Log.w(config.appName, "archive import deferred: " + e);

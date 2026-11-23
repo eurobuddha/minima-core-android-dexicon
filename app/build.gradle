@@ -35,8 +35,10 @@ android {
         // and in SETTINGS > TRADING ACCOUNT > ABOUT THIS ACCOUNT (existing accounts are not prompted again).
         // 0.3.66: "ONE device at a time" no longer says "at the same moment" - a phone that resumes after the account was
         // restored elsewhere can collide for about a day; the first phone must stop using it for good.
-        versionCode 366
-        versionName "0.3.66"
+        // 0.3.67: archive mark (review): a lost-and-registered address is looked for in the node's own chain again; a pass
+        // that started before such a loss never records the mark after it (generation); the pending reset is kept in prefs.
+        versionCode 367
+        versionName "0.3.67"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

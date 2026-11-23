@@ -561,6 +561,47 @@ public class VirtualWalletTest {
         assertEquals(nodeFolder(), w.archiveWanted());
     }
 
+    /** Review MINOR-3: an address the node lost and got back has also lost its coins from the node's wallet — the node's
+     *  own chain is scanned for them again (recoverExisting), not only the archive. */
+    @Test public void aLostAddressIsRecoveredFromTheNodesOwnChainAgain() throws Exception {
+        ScriptTableNode n = new ScriptTableNode(); ArchiveStore st = new ArchiveStore(); st.n = 1;
+        AccountKeys k = AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null);
+        VirtualWallet w = new VirtualWallet(n, k, st, Collections.emptySet());
+        String scan = "balance address:" + k.address(0);
+        w.ensureTracked();
+        w.ensureTracked();
+        assertEquals("looked for once while the row stays", 1, n.calls.stream().filter(scan::equals).count());
+        n.table.clear();
+        w.ensureTracked();
+        assertEquals("looked for again after the node lost the row", 2, n.calls.stream().filter(scan::equals).count());
+    }
+
+    /** Review NIT: the pending reset is durable — a process death between seeing the loss and the node's status answering
+     *  does not lose it (a new wallet on the same store applies it). */
+    @Test public void aPendingResetSurvivesAProcessDeath() throws Exception {
+        final boolean[] statusDown = {true};
+        ScriptTableNode n = new ScriptTableNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                if (cmd.equals("status") && statusDown[0]) { calls.add(cmd); return new JSONObject().put("status", false).put("error", "busy"); }
+                return super.call(cmd);
+            }
+        };
+        class Durable extends ArchiveStore {   // no @Override: the methods are new
+            boolean pending;
+            public boolean resetPending() { return pending; }
+            public void setResetPending(boolean p) { pending = p; }
+        }
+        Durable st = new Durable(); st.n = 1;
+        AccountKeys k = AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null);
+        new VirtualWallet(n, k, st, Collections.emptySet()).markArchived(nodeFolder(), 1);
+        new VirtualWallet(n, k, st, Collections.emptySet()).ensureTracked();   // loss seen, status down, then the process dies
+        statusDown[0] = false;
+        VirtualWallet restarted = new VirtualWallet(n, k, st, Collections.emptySet());
+        assertEquals("the reset was not lost", nodeFolder(), restarted.archiveWanted());
+        restarted.markArchived(nodeFolder(), 1);
+        assertNull("applied once", restarted.archiveWanted());
+    }
+
     /** Pressing "Search the archive again" twice: the second import finds the coin held and imports nothing. A coin the
      *  node took between the lookup and the import ("Attempting to add relevant coin we already have") is held, not a
      *  failure. The result names the archive and what it found, per token, exactly. */

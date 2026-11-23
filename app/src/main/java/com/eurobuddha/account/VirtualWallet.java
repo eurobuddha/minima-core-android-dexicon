@@ -69,6 +69,10 @@ public final class VirtualWallet {
          *  ({@link #archiveWanted}); 0 = never. */
         default int archivedKeys(String nodeId) { return Integer.MAX_VALUE; }
         default void setArchivedKeys(String nodeId, int keyCount) {}
+        /** The node lost an account address and the archive mark is not reset yet ({@link #archiveWanted}). Durable
+         *  (synchronous), so a process death before the node's status answers cannot lose it. */
+        default boolean resetPending() { return false; }
+        default void setResetPending(boolean pending) {}
     }
 
     /** Wall clock (tests inject one). */
@@ -138,20 +142,23 @@ public final class VirtualWallet {
     public synchronized void ensureTracked() throws Exception {
         boolean lost = false;
         for (int i = 0; i < store.keyCount(); i++) {
-            if (track(i)) lost = true;
             String a = keys.address(i);
+            // a lost row lost the address's coins from the node's wallet too: look for them in its own chain again
+            if (track(i)) { lost = true; recovered.remove(norm(a)); }
             if (!recovered.contains(norm(a)) && recoverExisting(a)) recovered.add(norm(a));
         }
-        if (lost) {   // applied (persisted) by archiveWanted; if the node's status fails now, by the next archiveWanted
-            lostTracking = true;
+        if (lost) {   // applied by archiveWanted; if the node's status fails now, by the next one (kept in the store)
+            lostTracking = true; archiveGeneration++;
+            store.setResetPending(true);
             try { archiveWanted(); } catch (Exception later) { }
         }
     }
     /** Addresses whose existing coins were looked for on THIS node in this process (a node switch restarts the app). */
     private final Set<String> recovered = new HashSet<>();
-    /** The node had stopped tracking an account address ({@link #archiveWanted}). In memory until applied.
-     *  ponytail: lost if the process dies before the node's status answers once; persist it if that is ever seen. */
+    /** The node had stopped tracking an account address ({@link #archiveWanted}); also in the store until applied. */
     private boolean lostTracking;
+    /** Bumped on every such loss: a pass that started before it must not record the mark after it ({@link #markArchived}). */
+    private int archiveGeneration;
 
     /** True when the node was NOT tracking this address and now does: registered, then READ BACK as tracked. A node that
      *  never reports the row as tracked keeps answering false, so it can never re-open the archive pass in a loop. */
@@ -224,8 +231,9 @@ public final class VirtualWallet {
      */
     public synchronized String archiveWanted() throws Exception {
         String id = nodeId();
-        if (lostTracking) {
+        if (lostTracking || store.resetPending()) {
             if (store.archivedKeys(id) > 0) store.setArchivedKeys(id, 0);
+            store.setResetPending(false);
             lostTracking = false;
         }
         return store.archivedKeys(id) >= store.keyCount() ? null : id;
@@ -242,6 +250,17 @@ public final class VirtualWallet {
 
     /** Record a clean pass over the first {@code keyCount} account addresses on this node. */
     public synchronized void markArchived(String nodeId, int keyCount) { store.setArchivedKeys(nodeId, keyCount); }
+
+    /** The current {@link #archiveGeneration}: read it when a pass starts, hand it to {@link #markArchived(String, int, int)}. */
+    public synchronized int archiveGeneration() { return archiveGeneration; }
+
+    /** As above, unless the node lost an account address since the pass started ({@code generation}): then what the pass
+     *  imported may have gone with the wallet table, and the mark stays reset. False = not recorded. */
+    public synchronized boolean markArchived(String nodeId, int keyCount, int generation) {
+        if (generation != archiveGeneration || lostTracking || store.resetPending()) return false;
+        store.setArchivedKeys(nodeId, keyCount);
+        return true;
+    }
 
     /**
      * Import coins this node is missing from part of the archive's reply ({@link ArchiveProofs#fetch}, downloaded OFF the
