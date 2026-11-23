@@ -768,4 +768,16 @@ public class VirtualWalletTest {
         assertTrue(warn, warn.contains("key 0 is 30000 one-time keys ahead") || warn.contains("key 0 is 2999"));
         assertTrue(warn, warn.endsWith("wait at least 17 hours."));
     }
+
+    /** Review 23 Nov 2026 (MINOR): every key's leaves run out with the time floor on 2043-01-05T18:48:32Z; warned a year before. */
+    @Test public void theKeysEndIsWarnedFromAYearBefore() throws Exception {
+        assertEquals(java.time.Instant.parse("2043-01-05T18:48:32Z").toEpochMilli(), AccountKeys.EXHAUSTED_MS);
+        assertEquals(268_435_456L, (long) AccountKeys.timeFloor(AccountKeys.EXHAUSTED_MS));
+        long[] now = {System.currentTimeMillis()};
+        VirtualWallet w = new VirtualWallet(new FakeNode(), AccountKeys.fromPhrase(AccountKeysTest.PHRASE, new AccountKeysTest.Mem(), null),
+                new Store(), Collections.emptySet(), () -> now[0]);
+        assertNull(w.exhaustionWarning());
+        now[0] = AccountKeys.EXHAUSTED_MS - 364L * 86_400_000L;
+        assertTrue(w.exhaustionWarning(), w.exhaustionWarning().contains("2043-01-05 at 18:48:32 UTC"));
+    }
 }

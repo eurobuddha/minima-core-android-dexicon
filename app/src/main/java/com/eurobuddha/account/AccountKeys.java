@@ -45,6 +45,10 @@ public final class AccountKeys {
     /** 2026-01-01T00:00:00Z. */
     public static final long EPOCH_MS = 1767225600000L;
     public static final long LEAF_MILLIS = 2000L;
+    /** The time floor reaches the last leaf (128^4 leaves at one per 2 s from the epoch): 2043-01-05T18:48:32Z. From then
+     *  on no key of the account can sign (see {@link #sign}); the app warns from one year before. */
+    public static final long EXHAUSTED_MS = EPOCH_MS + 268_435_456L * LEAF_MILLIS;
+    public static final long EXHAUSTION_NOTICE_MS = 365L * 86_400_000L;
 
     /** Public keys survive restarts here so the expensive TreeKey build runs once per key per install. */
     public interface PubCache {

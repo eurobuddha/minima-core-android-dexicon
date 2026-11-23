@@ -1090,6 +1090,14 @@ public final class VirtualWallet {
                 + hours + (hours == 1 ? " hour." : " hours.");
     }
 
+    /** From one year before every key's leaves run out (AccountKeys.EXHAUSTED_MS), the date and what to do; else null. */
+    public String exhaustionWarning() {
+        if (clock.now() < AccountKeys.EXHAUSTED_MS - AccountKeys.EXHAUSTION_NOTICE_MS) return null;
+        return EXHAUSTION;
+    }
+    static final String EXHAUSTION = "The one-time keys of this Trading Account run out on 2043-01-05 at 18:48:32 UTC: from then "
+            + "on it cannot sign at all. Move everything in it to a new Trading Account (new words) before then.";
+
     /** The halt text while the latch is set, else null. */
     public synchronized String secondSigner() {
         JSONObject st = signerState();

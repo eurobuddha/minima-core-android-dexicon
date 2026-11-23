@@ -66,8 +66,10 @@ android {
         // whose coins the take spends; co-sign attempts are limited per taker (6) and per order (12) in 10 minutes; a
         // counter more than half the restore margin ahead of the clock is warned with how long to wait before a
         // restore elsewhere.
-        versionCode 375
-        versionName "0.3.75"
+        // 0.3.76: every key's leaves run out on 2043-01-05T18:48:32Z (the time floor reaches 128^4): from one year
+        // before, the account's warnings say so and to move the funds to a new Trading Account (review 23 Nov).
+        versionCode 376
+        versionName "0.3.76"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
