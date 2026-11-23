@@ -31,9 +31,9 @@ public class ArchiveSearchTest {
     static Account account(VirtualWalletTest.FakeNode node, boolean nodeDown) throws Exception {
         Account.configure(new Account.Config("Dexicon", null, null, null, null, AccountKeys.SLOT_DEXICON));
         Transport t = transport(node, nodeDown);
-        java.lang.reflect.Constructor<Account> c = Account.class.getDeclaredConstructor(android.content.Context.class, String.class, String.class, int.class, Transport.class);
+        java.lang.reflect.Constructor<Account> c = Account.class.getDeclaredConstructor(android.content.Context.class, String.class, String.class, int.class, boolean.class, Transport.class);
         c.setAccessible(true);
-        return c.newInstance(RuntimeEnvironment.getApplication(), AccountKeysTest.PHRASE, AccountVault.MODE_PHRASE, 0, t);
+        return c.newInstance(RuntimeEnvironment.getApplication(), AccountKeysTest.PHRASE, AccountVault.MODE_PHRASE, 0, false, t);
     }
 
     static Transport transport(VirtualWalletTest.FakeNode node, boolean nodeDown) {

@@ -159,7 +159,16 @@ public final class AccountKeys {
         return (int) Math.min(Integer.MAX_VALUE, (long) timeFloor(nowMillis) + skewLeaves + 10_000L * LEAF_SLOTS);
     }
 
-    public void setRestoreFloor(int floor) { restoreFloor = Math.max(0, floor); }
+    /** Raise-only: a floor once set never goes down (a second call with a lower value changes nothing). */
+    public void setRestoreFloor(int floor) { restoreFloor = Math.max(restoreFloor, Math.max(0, floor)); }
+    public int restoreFloor() { return restoreFloor; }
+
+    /** A restored / node-derived account whose floor is not computed yet: it is taken from the first CHAIN-CHECKED clock
+     *  (VirtualWallet.checkedClock), never from the phone clock alone - a phone set years ahead at restore would otherwise
+     *  store a floor that exhausts every key for good. Nothing signs while it is pending. */
+    private volatile boolean floorPending;
+    public void setRestoreFloorPending(boolean pending) { floorPending = pending; }
+    public boolean restoreFloorPending() { return floorPending; }
 
     public void setLeafSlot(int slot) {
         if (slot < 0 || slot >= LEAF_SLOTS) throw new IllegalArgumentException("leaf slot must be 0.." + (LEAF_SLOTS - 1));
@@ -180,6 +189,7 @@ public final class AccountKeys {
      *  is raised to the time floor and the leaf reserved durably BEFORE the signature exists. */
     public Signature sign(MiniData txnId, int index, long nowMillis) {
         synchronized (signLock) {
+            if (floorPending) throw new IllegalStateException("account key " + index + ": the restore floor is not set yet (no chain-checked clock) — refusing to sign");
             TreeKey key = tree(index);
             if (!key.getPublicKey().to0xString().equalsIgnoreCase(publicKey(index)))
                 throw new IllegalStateException("account key " + index + " does not match its cached public key — refusing to sign");

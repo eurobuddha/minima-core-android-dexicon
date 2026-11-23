@@ -41,8 +41,11 @@ android {
         // named as such; the dialog lives in the shared AccountSetup, keeps its result when closed and holds no screen.
         // 0.3.69: the vendored MinimaHtlc is byte-identical to AtomiX again: host mode's "start fresh" forgets the swap
         // identity through a Dexicon-side shim (doors/HtlcIdentity), same effect.
-        versionCode 369
-        versionName "0.3.69"
+        // 0.3.70: a restored account's restore floor comes from a chain-checked clock (review 23 Nov): stored as
+        // pending at restore, computed and saved at the first chain-checked clock, raise-only; nothing signs while it
+        // is pending, so a phone clock far ahead can no longer exhaust every key for good.
+        versionCode 370
+        versionName "0.3.70"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

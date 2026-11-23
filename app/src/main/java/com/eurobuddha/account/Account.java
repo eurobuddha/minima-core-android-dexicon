@@ -118,7 +118,7 @@ public final class Account {
     /** The transport of the call being handled: screens come and go, the account outlives them. Worker-thread only. */
     private volatile Transport current;
 
-    private Account(Context c, String secret, String mode, int restoreFloor, Transport node) {
+    private Account(Context c, String secret, String mode, int restoreFloor, boolean floorPending, Transport node) {
         Context app = c.getApplicationContext();
         SharedPreferences sp = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         final String[] fp = {""};   // filled once the keys exist: the cache below is keyed by the seed's fingerprint
@@ -132,6 +132,7 @@ public final class Account {
                 : AccountVault.MODE_ANY.equals(mode) ? AccountKeys.fromAnyPhrase(AccountVault.anyPhraseOf(secret), uses, cache)
                 : AccountKeys.fromPhrase(secret, uses, cache);
         keys.setRestoreFloor(restoreFloor);
+        keys.setRestoreFloorPending(floorPending);
         // the share is defined ONCE, by the app's package (Family): a Config that names another app's share is refused
         int ownSlot = Family.slotOf(app.getPackageName());
         if (ownSlot >= 0 && ownSlot != config.leafSlot)
@@ -167,6 +168,7 @@ public final class Account {
             public void setArchivedKeys(String nodeId, int n) { sp.edit().putInt("archived_" + fp[0] + "_" + nodeId.toLowerCase(java.util.Locale.ROOT), n).apply(); }
             public boolean resetPending() { return sp.getBoolean("archive_reset_" + fp[0], false); }
             public void setResetPending(boolean p) { sp.edit().putBoolean("archive_reset_" + fp[0], p).commit(); }   // commit: durable now
+            public void saveRestoreFloor(int floor) { new AccountVault(app).resolveRestoreFloor(floor); }
         };
         this.app = app; this.sp = sp; this.seenKey = "seen_coins_" + fp[0];
         current = node;
@@ -188,7 +190,7 @@ public final class Account {
             catch (AccountVault.Unavailable later) { lockedAt = System.currentTimeMillis(); return null; }   // retry later, delete nothing
             catch (AccountVault.Lost lost) { v.quarantine(); return null; }    // key gone for good: setup offers RESTORE
             v.markCreated();
-            instance = new Account(c, secret, v.mode(), v.restoreFloor(), node);
+            instance = new Account(c, secret, v.mode(), v.restoreFloor(), v.restoreFloorPending(), node);
             v.recordIdentity(instance.keys.fingerprint(), v.mode());
             return instance;
         }

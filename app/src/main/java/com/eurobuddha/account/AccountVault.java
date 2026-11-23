@@ -36,7 +36,8 @@ public final class AccountVault {
 
     private static final String PREFS = "dexicon_account_vault", QUARANTINE = "dexicon_account_vault_quarantine",
             MARKER = "dexicon_account_marker", KEY_ALIAS = "dexicon_account_v1";
-    private static final String P_MODE = "mode", P_CT = "ct", P_IV = "iv", P_FLOOR = "restore_floor", P_CREATED = "created", P_ALIAS = "alias";
+    private static final String P_MODE = "mode", P_CT = "ct", P_IV = "iv", P_FLOOR = "restore_floor", P_CREATED = "created", P_ALIAS = "alias",
+            P_FLOOR_PENDING = "restore_floor_pending";
     public static final String MODE_PHRASE = "phrase", MODE_NODE = "node";
     /** 13 Nov 2026: a free-form phrase (not 24 list words), RESTORE only - stored trimmed, never cleaned, behind
      *  {@link #ANY_PREFIX}: an older app reads the secret as a 24-word phrase and its BIP39.cleanSeedPhrase always throws on
@@ -89,6 +90,14 @@ public final class AccountVault {
     public boolean everCreated() { return exists() || marker.getLong(P_CREATED, 0) > 0; }
     /** The minimum leaf for every key: set when the account was restored or node-derived; 0 for a brand-new phrase. */
     public int restoreFloor() { return prefs.getInt(P_FLOOR, 0); }
+    /** Restored (or node-derived) and the floor still waits for a chain-checked clock: nothing signs until it is set. */
+    public boolean restoreFloorPending() { return prefs.getBoolean(P_FLOOR_PENDING, false); }
+    /** The floor from a chain-checked clock: raise-only, durable (synchronous), and it ends "pending". */
+    void resolveRestoreFloor(int floor) {
+        int f = Math.max(prefs.getInt(P_FLOOR, 0), floor);
+        if (!prefs.edit().putInt(P_FLOOR, f).putBoolean(P_FLOOR_PENDING, false).commit())
+            throw new IllegalStateException("Could not save the Trading Account's restore floor.");
+    }
 
     /** A brand-new 24-word phrase (not yet stored — the user confirms they wrote it down first). */
     public static String newPhrase() { return BIP39.convertWordListToString(BIP39.getNewWordList()); }
@@ -105,22 +114,23 @@ public final class AccountVault {
     /** A NEW phrase (never signed anywhere): no restore floor. */
     public void storeNewPhrase(String phrase) throws Exception { store(MODE_PHRASE, cleanPhrase(phrase), 0); }
 
-    /** A RESTORED phrase: may have signed on another install, so every key starts at the restore floor. */
+    /** A RESTORED phrase: may have signed on another install, so every key starts at the restore floor - computed at the
+     *  first sign from a clock the chain vouches for (never from this phone's clock alone). */
     public void storeRestoredPhrase(String phrase) throws Exception {
-        store(MODE_PHRASE, cleanPhrase(phrase), AccountKeys.restoreFloor(System.currentTimeMillis()));
+        store(MODE_PHRASE, cleanPhrase(phrase), FLOOR_PENDING);
     }
 
     /** A RESTORED free-form phrase (owner: restore only, with a warning): exactly as made, trimmed; restore floor. */
     public void storeRestoredAnyPhrase(String phrase) throws Exception {
         String why = WordEntry.anyPhraseProblem(phrase, false);
         if (why != null) throw new IllegalArgumentException(why);
-        store(MODE_ANY, ANY_PREFIX + phrase.trim(), AccountKeys.restoreFloor(System.currentTimeMillis()));
+        store(MODE_ANY, ANY_PREFIX + phrase.trim(), FLOOR_PENDING);
     }
 
     public void storeNodeBase(String seedRandomHex) throws Exception {
         String h = seedRandomHex == null ? "" : seedRandomHex.trim();
         if (!h.matches("0x[0-9a-fA-F]{64}")) throw new IllegalArgumentException("The node returned no derived seed.");
-        store(MODE_NODE, h, AccountKeys.restoreFloor(System.currentTimeMillis()));
+        store(MODE_NODE, h, FLOOR_PENDING);
     }
 
     /** Thrown when the vault can not be read RIGHT NOW (Keystore busy after boot, …): retry later, never delete. */
@@ -158,15 +168,18 @@ public final class AccountVault {
         String t = "_" + System.currentTimeMillis();
         q.edit().putString(P_MODE + t, prefs.getString(P_MODE, "")).putString(P_CT + t, prefs.getString(P_CT, ""))
                 .putString(P_IV + t, prefs.getString(P_IV, "")).putString(P_ALIAS + t, prefs.getString(P_ALIAS, KEY_ALIAS))
-                .putInt(P_FLOOR + t, prefs.getInt(P_FLOOR, 0)).commit();
+                .putInt(P_FLOOR + t, prefs.getInt(P_FLOOR, 0)).putBoolean(P_FLOOR_PENDING + t, prefs.getBoolean(P_FLOOR_PENDING, false)).commit();
         if (!q.getString(P_CT + t, "").equals(prefs.getString(P_CT, ""))) return;   // the copy did not land: keep the vault
-        prefs.edit().remove(P_CT).remove(P_IV).remove(P_MODE).remove(P_ALIAS).remove(P_FLOOR).commit();
+        prefs.edit().remove(P_CT).remove(P_IV).remove(P_MODE).remove(P_ALIAS).remove(P_FLOOR).remove(P_FLOOR_PENDING).commit();
     }
 
     /** Show the phrase again (phrase mode only) so the user can re-check their backup. */
     public String revealPhrase() throws Exception {
         return MODE_PHRASE.equals(mode()) ? secret() : MODE_ANY.equals(mode()) ? anyPhraseOf(secret()) : null;
     }
+
+    /** {@link #store} floor value: restored, floor pending (see {@link #restoreFloorPending}). */
+    private static final int FLOOR_PENDING = -1;
 
     private void store(String mode, String secret, int floor) throws Exception {
         if (exists()) throw new IllegalStateException("A Trading Account already exists on this phone.");
@@ -177,7 +190,7 @@ public final class AccountVault {
         Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
         c.init(Cipher.ENCRYPT_MODE, newKey(alias));
         byte[] ct = c.doFinal(secret.getBytes(StandardCharsets.UTF_8));
-        boolean ok = prefs.edit().putString(P_MODE, mode).putInt(P_FLOOR, floor).putString(P_ALIAS, alias)
+        boolean ok = prefs.edit().putString(P_MODE, mode).putInt(P_FLOOR, Math.max(0, floor)).putBoolean(P_FLOOR_PENDING, floor == FLOOR_PENDING).putString(P_ALIAS, alias)
                 .putString(P_IV, Base64.encodeToString(c.getIV(), Base64.NO_WRAP))
                 .putString(P_CT, Base64.encodeToString(ct, Base64.NO_WRAP)).commit();
         if (!ok) throw new IllegalStateException("Could not save the Trading Account.");

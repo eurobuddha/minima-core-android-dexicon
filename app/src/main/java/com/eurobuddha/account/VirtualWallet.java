@@ -73,6 +73,9 @@ public final class VirtualWallet {
          *  (synchronous), so a process death before the node's status answers cannot lose it. */
         default boolean resetPending() { return false; }
         default void setResetPending(boolean pending) {}
+        /** A restored account's floor, computed from a chain-checked clock: durable (synchronous), raise-only; throws when
+         *  it could not be saved (then nothing signs). */
+        default void saveRestoreFloor(int floor) {}
     }
 
     /** Wall clock (tests inject one). */
@@ -1018,12 +1021,19 @@ public final class VirtualWallet {
         return Math.max(0, inputs - have) * 3_000;
     }
 
-    /** Wall clock, after checking it against the chain tip's time. */
+    /** Wall clock, after checking it against the chain tip's time. A restored account's pending floor is set here, from
+     *  this checked clock (raise-only, saved before it is used) - never from the phone clock alone. */
     private long checkedClock() throws Exception {
         JSONObject b = blockInfo();
         long tipTime = Long.parseLong(b.optString("timemilli", "0")), now = clock.now();
         if (tipTime <= 0 || Math.abs(now - tipTime) > MAX_CLOCK_SKEW_MS)
             throw new IllegalStateException("This phone's clock and the Minima chain disagree by more than 30 minutes (or the node is not synced). Fix the clock / wait for the node, then retry. Nothing was signed.");
+        if (keys.restoreFloorPending()) {
+            int floor = AccountKeys.restoreFloor(now);
+            store.saveRestoreFloor(floor);          // durable first: a floor in memory only would be lost by a crash
+            keys.setRestoreFloor(floor);
+            keys.setRestoreFloorPending(false);
+        }
         return now;
     }
 

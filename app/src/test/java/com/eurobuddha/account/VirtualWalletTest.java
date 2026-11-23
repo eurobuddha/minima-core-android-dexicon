@@ -663,4 +663,37 @@ public class VirtualWalletTest {
                 new org.minima.objects.CoinProof(odd, new org.minima.objects.mmr.MMRProof(new org.minima.objects.base.MiniNumber(1))));
         assertEquals("10 MINIMA, 1.234567 MxUSD, 7 of token " + other, VirtualWallet.ArchiveResult.amounts(coins));
     }
+
+    /** Review 23 Nov 2026: a restored account's floor came from the phone clock alone, so a phone set years ahead at the
+     *  restore stored a floor past every key's capacity, for good. Now it waits for a chain-checked clock. */
+    @Test public void aRestoreFloorIsTakenOnlyFromAChainCheckedClock() throws Exception {
+        long[] chainTime = {System.currentTimeMillis()};
+        FakeNode n = new FakeNode() {
+            @Override public JSONObject call(String cmd) throws Exception {
+                if (cmd.equals("block")) return new JSONObject().put("status", true).put("response", new JSONObject().put("block", "100")
+                        .put("timemilli", String.valueOf(chainTime[0])));
+                return super.call(cmd);
+            }
+        };
+        long[] phone = {System.currentTimeMillis() + 5L * 365 * 86_400_000L};   // the phone clock five years ahead
+        int[] saved = {-1};
+        Store store = new Store() { @Override public void saveRestoreFloor(int f) { saved[0] = f; } };
+        AccountKeysTest.Mem mem = new AccountKeysTest.Mem();
+        AccountKeys k = AccountKeys.fromPhrase(AccountKeysTest.PHRASE, mem, null);
+        k.setRestoreFloorPending(true);
+        VirtualWallet w = new VirtualWallet(n, k, store, Collections.emptySet(), () -> phone[0]);
+        try { k.sign(new org.minima.objects.base.MiniData("0x01"), 0, phone[0]); fail("signed with the floor still pending"); }
+        catch (IllegalStateException expected) { assertTrue(expected.getMessage().contains("restore floor")); }
+        w.handle("keys");
+        assertEquals("nothing saved from an unchecked clock", -1, saved[0]);
+        assertTrue(k.restoreFloorPending());
+        assertEquals("no leaf burnt by a clock years ahead", 0, mem.currentUses(0));
+        phone[0] = chainTime[0] + 60_000L;                                        // the clock is fixed
+        int uses = w.handle("keys").getJSONObject("response").getJSONArray("keys").getJSONObject(0).getInt("uses");
+        assertEquals(AccountKeys.restoreFloor(phone[0]), saved[0]);
+        assertFalse(k.restoreFloorPending());
+        assertEquals(saved[0], uses);
+        k.setRestoreFloor(5);
+        assertEquals("raise-only", saved[0], k.restoreFloor());
+    }
 }
