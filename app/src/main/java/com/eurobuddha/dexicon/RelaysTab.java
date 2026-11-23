@@ -121,6 +121,10 @@ public final class RelaysTab extends LinearLayout {
             search.setOnClickListener(v -> searchArchive());
             LayoutParams sl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); sl.topMargin = Design.dp(act, 8);
             accountCard.addView(search, sl);
+            TextView about = button("ABOUT THIS ACCOUNT");
+            about.setOnClickListener(v -> com.eurobuddha.account.AccountSetup.about(act.activity()));
+            LayoutParams al = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); al.topMargin = Design.dp(act, 8);
+            accountCard.addView(about, al);
             TextView move = button("MOVE TO ATOMIX / PANDAPOOLS");
             move.setOnClickListener(v -> moveAway());
             LayoutParams ml = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); ml.topMargin = Design.dp(act, 8);
