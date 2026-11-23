@@ -75,6 +75,40 @@ public final class AccountSetup {
         dialog(a).setTitle("About your Trading Account").setView(pad(a, text(a, seeds(), false))).setPositiveButton("OK", null).show();
     }
 
+    /**
+     * "Search the archive again" ({@link Account#searchArchive}), the same in every app: what it does, then progress and
+     * the plain result in place. Closing the dialog never drops the answer: the account keeps the latest progress or
+     * result and this shows it when opened again (a running search is followed again). The dialog is held only weakly,
+     * so a running search never keeps a closed screen alive. {@code node}: the calling screen's connection.
+     */
+    public static void searchArchive(Activity a, Transport node) {
+        Account acc = Account.get(a, node);
+        if (acc == null) { Toast.makeText(a, "The Trading Account is not open yet. Try again in a moment.", Toast.LENGTH_LONG).show(); return; }
+        String last = acc.archiveSearchText();
+        AlertDialog d = dialog(a).setTitle("Search the archive again")
+                .setMessage(last == null ? Account.ARCHIVE_SEARCH_ABOUT : last)
+                .setPositiveButton(last == null ? "Search" : "Search again", null).setNegativeButton("Close", null).create();
+        searchDialog = new java.lang.ref.WeakReference<>(d);
+        d.setOnShowListener(x -> {
+            android.widget.Button go = d.getButton(AlertDialog.BUTTON_POSITIVE);
+            go.setEnabled(!acc.archiveSearching());
+            go.setOnClickListener(v -> {
+                go.setEnabled(false);
+                acc.searchArchive(node, AccountSetup::searchShown, AccountSetup::searchEnded);   // static: captures no screen
+            });
+        });
+        d.show();
+    }
+    private static java.lang.ref.WeakReference<AlertDialog> searchDialog = new java.lang.ref.WeakReference<>(null);
+    private static void searchShown(String s) { AlertDialog d = searchDialog.get(); if (d != null && d.isShowing()) d.setMessage(s); }
+    private static void searchEnded(String s) {
+        AlertDialog d = searchDialog.get();
+        if (d == null || !d.isShowing()) return;
+        d.setMessage(s);
+        android.widget.Button go = d.getButton(AlertDialog.BUTTON_POSITIVE);
+        if (go != null) { go.setText("Search again"); go.setEnabled(true); }
+    }
+
     private static String app() { return Account.config().appName; }
     private static AlertDialog.Builder dialog(Activity a) {
         Look l = Account.config().look;

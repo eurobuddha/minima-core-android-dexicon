@@ -37,8 +37,10 @@ android {
         // restored elsewhere can collide for about a day; the first phone must stop using it for good.
         // 0.3.67: archive mark (review): a lost-and-registered address is looked for in the node's own chain again; a pass
         // that started before such a loss never records the mark after it (generation); the pending reset is kept in prefs.
-        versionCode 367
-        versionName "0.3.67"
+        // 0.3.68: "Search the archive again" (review): uses the calling screen's node connection; an unusable archive reply is
+        // named as such; the dialog lives in the shared AccountSetup, keeps its result when closed and holds no screen.
+        versionCode 368
+        versionName "0.3.68"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

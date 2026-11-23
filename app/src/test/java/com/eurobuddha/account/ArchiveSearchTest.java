@@ -30,13 +30,23 @@ public class ArchiveSearchTest {
     /** The node answers through the account's own Transport, as on a phone (replies on the main thread). */
     static Account account(VirtualWalletTest.FakeNode node, boolean nodeDown) throws Exception {
         Account.configure(new Account.Config("Dexicon", null, null, null, null, AccountKeys.SLOT_DEXICON));
-        Transport t = (cmd, guard, timeout, cb) -> {
-            if (nodeDown) { cb.onError("Minima Core is not running"); return; }
-            try { cb.onResult(node.call(cmd)); } catch (Exception e) { cb.onError(e.toString()); }
-        };
+        Transport t = transport(node, nodeDown);
         java.lang.reflect.Constructor<Account> c = Account.class.getDeclaredConstructor(android.content.Context.class, String.class, String.class, int.class, Transport.class);
         c.setAccessible(true);
         return c.newInstance(RuntimeEnvironment.getApplication(), AccountKeysTest.PHRASE, AccountVault.MODE_PHRASE, 0, t);
+    }
+
+    static Transport transport(VirtualWalletTest.FakeNode node, boolean nodeDown) {
+        return (cmd, guard, timeout, cb) -> {
+            if (nodeDown) { cb.onError("Minima Core is not running"); return; }
+            try { cb.onResult(node.call(cmd)); } catch (Exception e) { cb.onError(e.toString()); }
+        };
+    }
+
+    /** The connection the account was opened with (as if the same screen is still open). */
+    static Transport transportOf(Account a) throws Exception {
+        java.lang.reflect.Field f = Account.class.getDeclaredField("current"); f.setAccessible(true);
+        return (Transport) f.get(a);
     }
 
     static VirtualWallet wallet(Account a) throws Exception {
@@ -44,9 +54,11 @@ public class ArchiveSearchTest {
         return (VirtualWallet) f.get(a);
     }
 
-    static String search(Account a, List<String> progress) throws Exception {
+    static String search(Account a, List<String> progress) throws Exception { return search(a, transportOf(a), progress); }
+
+    static String search(Account a, Transport screen, List<String> progress) throws Exception {
         AtomicReference<String> done = new AtomicReference<>();
-        a.searchArchive(progress::add, done::set);
+        a.searchArchive(screen, progress::add, done::set);
         long end = System.currentTimeMillis() + 60_000;
         while (done.get() == null && System.currentTimeMillis() < end) { org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(5); }
         assertNotNull("the search never finished", done.get());
@@ -111,7 +123,7 @@ public class ArchiveSearchTest {
         java.util.concurrent.CountDownLatch hold = new java.util.concurrent.CountDownLatch(1);
         Account.archive = addrs -> { hold.await(); return Collections.emptyList(); };
         AtomicReference<String> first = new AtomicReference<>();
-        a.searchArchive(null, first::set);
+        a.searchArchive(transportOf(a), null, first::set);
         assertEquals(Account.ARCHIVE_BUSY, search(a, new ArrayList<>()));
         hold.countDown();
         long end = System.currentTimeMillis() + 60_000;
@@ -128,7 +140,7 @@ public class ArchiveSearchTest {
         java.util.concurrent.CountDownLatch fetching = new java.util.concurrent.CountDownLatch(1), hold = new java.util.concurrent.CountDownLatch(1);
         Account.archive = addrs -> { fetching.countDown(); hold.await(); return Collections.emptyList(); };
         AtomicReference<String> done = new AtomicReference<>();
-        a.searchArchive(null, done::set);
+        a.searchArchive(transportOf(a), null, done::set);
         while (fetching.getCount() > 0) { org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(5); }
         node.table.clear();                 // the node is reseeded while the archive answers
         off(() -> { w.ensureTracked(); return null; });
@@ -154,6 +166,63 @@ public class ArchiveSearchTest {
         off(() -> { first.ensureTracked(); return null; });   // loss seen, the status fails once — then the process dies
         VirtualWallet restarted = wallet(account(node, false));
         assertEquals("the reset survived the restart", VirtualWalletTest.nodeFolder(), off(restarted::archiveWanted));
+    }
+
+    /** Review NIT: an archive that answered, but with something unusable (limits, protocol, out of memory), is not "no answer". */
+    @Test public void anUnusableAnswerIsNamed() throws Exception {
+        Account a = account(new VirtualWalletTest.ArchiveNode(), false);
+        Account.archive = addrs -> { throw new java.io.IOException("ARCHIVE_PROTOCOL: expected a MegaMMR reply."); };
+        assertEquals("The archive's answer could not be used: ARCHIVE_PROTOCOL: expected a MegaMMR reply.\n\nNothing was moved and no key was used.",
+                search(a, new ArrayList<>()));
+        Account.archive = addrs -> { throw new java.io.IOException("ARCHIVE_REPLY_LIMIT: archive reply exceeds the mobile recovery limit."); };
+        assertEquals("The archive's answer could not be used: ARCHIVE_REPLY_LIMIT: archive reply exceeds the mobile recovery limit.\n\n"
+                + "Nothing was moved and no key was used.", search(a, new ArrayList<>()));
+        Account.archive = addrs -> { throw new OutOfMemoryError("Failed to allocate a 268435468 byte allocation"); };
+        assertEquals("The archive's answer could not be used: Failed to allocate a 268435468 byte allocation.\n\nNothing was moved and no key was used.",
+                search(a, new ArrayList<>()));
+        Account.archive = addrs -> { throw new java.net.SocketTimeoutException("ARCHIVE_TIMEOUT: recovery time limit reached."); };
+        assertEquals("No answer from the archive at eurobuddha.com:9001: ARCHIVE_TIMEOUT: recovery time limit reached.\n\n"
+                + "Nothing was moved and no key was used.", search(a, new ArrayList<>()));
+    }
+
+    /** Review MINOR-4: the account outlives the screen (MakerService keeps the process); the connection it was opened
+     *  with was closed with that screen. The search uses the calling screen's connection. */
+    @Test public void aRecreatedScreensNodeIsUsed() throws Exception {
+        VirtualWalletTest.ArchiveNode node = new VirtualWalletTest.ArchiveNode();
+        Account a = account(node, true);   // the first screen's node, closed since
+        Account.archive = addrs -> Collections.emptyList();
+        String r = search(a, transport(node, false), new ArrayList<>());
+        assertTrue(r, r.startsWith("Nothing new found."));
+    }
+
+    /** Review NIT: closing the dialog while the search runs drops nothing — opened again, it shows the result. */
+    @Test public void aClosedDialogKeepsTheResult() throws Exception {
+        VirtualWalletTest.ArchiveNode node = new VirtualWalletTest.ArchiveNode();
+        Account a = account(node, false);
+        java.lang.reflect.Field inst = Account.class.getDeclaredField("instance"); inst.setAccessible(true);
+        Object before = inst.get(null);
+        inst.set(null, a);
+        try {
+            java.util.concurrent.CountDownLatch hold = new java.util.concurrent.CountDownLatch(1);
+            Account.archive = addrs -> { hold.await(); return Collections.singletonList(VirtualWalletTest.archived("0x44", address0(), 100 - 256)); };
+            androidx.appcompat.app.AppCompatActivity act = org.robolectric.Robolectric.buildActivity(androidx.appcompat.app.AppCompatActivity.class).setup().get();
+            AccountSetup.searchArchive(act, transportOf(a));
+            org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle();
+            androidx.appcompat.app.AlertDialog d = (androidx.appcompat.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            assertEquals(Account.ARCHIVE_SEARCH_ABOUT, ((android.widget.TextView) d.findViewById(android.R.id.message)).getText().toString());
+            d.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick();
+            d.dismiss();                                    // closed while the archive answers
+            hold.countDown();
+            long end = System.currentTimeMillis() + 60_000;
+            while (a.archiveSearching() && System.currentTimeMillis() < end) { org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle(); Thread.sleep(5); }
+            assertFalse(a.archiveSearching());
+            AccountSetup.searchArchive(act, transportOf(a));   // opened again
+            org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle();
+            androidx.appcompat.app.AlertDialog again = (androidx.appcompat.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            String shown = ((android.widget.TextView) again.findViewById(android.R.id.message)).getText().toString();
+            assertTrue(shown, shown.startsWith("Found 1 coin your node did not have: 5 MINIMA."));
+            assertEquals("Search again", again.getButton(android.content.DialogInterface.BUTTON_POSITIVE).getText().toString());
+        } finally { inst.set(null, before); }
     }
 
     @Test public void theExplanationIsTheOwnersWords() {
