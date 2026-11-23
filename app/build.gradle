@@ -68,8 +68,11 @@ android {
         // restore elsewhere.
         // 0.3.76: every key's leaves run out on 2043-01-05T18:48:32Z (the time floor reaches 128^4): from one year
         // before, the account's warnings say so and to move the funds to a new Trading Account (review 23 Nov).
-        versionCode 376
-        versionName "0.3.76"
+        // 0.3.77: one shared single-command rule (review 23 Nov): com.eurobuddha.account.CommandSafety (no ';', no
+        // control characters, at most 100,000 chars) is vendored with the account, so AtomiX and PandaPools apply
+        // Dexicon's guard too; Dexicon's own CommandSafety delegates to it.
+        versionCode 377
+        versionName "0.3.77"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
