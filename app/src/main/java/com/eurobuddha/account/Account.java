@@ -325,24 +325,78 @@ public final class Account {
             java.util.List<String> addresses = wallet.accountAddresses();
             ARCHIVE.execute(() -> {
                 try {
-                    java.util.List<org.minima.objects.CoinProof> proofs = ArchiveProofs.fetch(addresses);
-                    importBatch(nodeId, addresses.size(), proofs, 0, true);
+                    java.util.List<org.minima.objects.CoinProof> proofs = archive.get(addresses);
+                    importBatch(nodeId, addresses.size(), proofs, 0, new VirtualWallet.ArchiveResult(ARCHIVE_SOURCE), null, null);
                 } catch (Throwable e) { android.util.Log.w(config.appName, "archive fetch deferred: " + e); archiveBusy.set(false); }
             });
         } catch (Throwable e) { archiveBusy.set(false); android.util.Log.w(config.appName, "archive check deferred: " + e); }
     }
 
-    private void importBatch(String nodeId, int keyCount, java.util.List<org.minima.objects.CoinProof> proofs, int from, boolean clean) {
+    /** The archive download; tests replace it, so no test ever contacts the archive. */
+    interface Fetch { java.util.List<org.minima.objects.CoinProof> get(java.util.Collection<String> addresses) throws Exception; }
+    static volatile Fetch archive = ArchiveProofs::fetch;
+
+    /** Which archive answers, as the person is told. */
+    public static final String ARCHIVE_SOURCE = ArchiveProofs.HOST + ":" + ArchiveProofs.PORT;
+    /** What the manual search does, in plain words (owner, 23 Nov 2026). */
+    public static final String ARCHIVE_SEARCH_ABOUT = "Looks for coins of this Trading Account that are older than your node keeps. "
+            + "Use it if a balance looks short after your node was resynced or restored. It moves nothing.\n\n"
+            + "It asks the MegaMMR archive at " + ARCHIVE_SOURCE + " (a download of a few MB), which reports only the coins it holds; "
+            + "your node checks every coin before taking it.";
+    static final String ARCHIVE_BUSY = "The archive is already being searched. Wait for that search to finish, then try again.";
+
+    /**
+     * "Search the archive again": the full archive pass for every account address on the current node, whatever the
+     * stored mark says (it closes the gap the automatic pass cannot see: an archive or node that answered short before).
+     * Safe to repeat: one search at a time (shared with the automatic pass), coins the node holds are skipped, nothing is
+     * signed or sent. A clean search records the mark again. Both callbacks run on the main thread; {@code done} once.
+     */
+    public void searchArchive(java.util.function.Consumer<String> progress, java.util.function.Consumer<String> done) {
+        if (!archiveBusy.compareAndSet(false, true)) { main().post(() -> done.accept(ARCHIVE_BUSY)); return; }
+        VirtualWallet.ArchiveResult r = new VirtualWallet.ArchiveResult(ARCHIVE_SOURCE);
+        say(progress, "Asking your node…");
         WORKER.execute(() -> {
-            boolean ok = clean;
+            String nodeId; java.util.List<String> addresses;
+            try { wallet.ensureTracked(); nodeId = wallet.nodeId(); addresses = wallet.accountAddresses(); }
+            catch (Throwable e) { r.failure = "Your node did not answer: " + why(e) + "."; finish(r, done); return; }
+            say(progress, "Asking the archive at " + ARCHIVE_SOURCE + " about " + addresses.size()
+                    + (addresses.size() == 1 ? " address" : " addresses") + " (a download of a few MB)…");
+            ARCHIVE.execute(() -> {
+                java.util.List<org.minima.objects.CoinProof> proofs;
+                try { proofs = archive.get(addresses); }
+                catch (Throwable e) { r.failure = "No answer from the archive at " + ARCHIVE_SOURCE + ": " + why(e) + "."; finish(r, done); return; }
+                r.returned = proofs.size();
+                say(progress, "The archive listed " + proofs.size() + (proofs.size() == 1 ? " coin" : " coins")
+                        + " at this account's addresses. Your node is checking each one…");
+                importBatch(nodeId, addresses.size(), proofs, 0, r, progress, done);
+            });
+        });
+    }
+
+    private static String why(Throwable e) { return e.getMessage() == null ? e.toString() : e.getMessage(); }
+    private static void say(java.util.function.Consumer<String> to, String s) { if (to != null) main().post(() -> to.accept(s)); }
+    private void finish(VirtualWallet.ArchiveResult r, java.util.function.Consumer<String> done) {
+        archiveBusy.set(false);
+        if (done != null) { String t = r.text(); main().post(() -> done.accept(t)); }
+    }
+
+    private void importBatch(String nodeId, int keyCount, java.util.List<org.minima.objects.CoinProof> proofs, int from,
+                             VirtualWallet.ArchiveResult r, java.util.function.Consumer<String> progress, java.util.function.Consumer<String> done) {
+        WORKER.execute(() -> {
             try {
                 int to = Math.min(proofs.size(), from + VirtualWallet.ARCHIVE_BATCH);
-                ok &= wallet.importArchived(proofs.subList(from, to), line -> android.util.Log.i(config.appName, "archive: " + line));
-                if (to < proofs.size()) { importBatch(nodeId, keyCount, proofs, to, ok); return; }
-                if (ok) wallet.markArchived(nodeId, keyCount);
-                android.util.Log.i(config.appName, "archive pass over " + proofs.size() + " coin(s) " + (ok ? "complete" : "incomplete, retried later"));
-            } catch (Throwable e) { android.util.Log.w(config.appName, "archive import deferred: " + e); }
-            archiveBusy.set(false);
+                wallet.importArchived(proofs.subList(from, to), line -> android.util.Log.i(config.appName, "archive: " + line), r);
+                if (to < proofs.size()) {
+                    say(progress, "Your node checked " + to + " of " + proofs.size() + " coins…");
+                    importBatch(nodeId, keyCount, proofs, to, r, progress, done); return;
+                }
+                if (r.clean()) wallet.markArchived(nodeId, keyCount);
+                android.util.Log.i(config.appName, "archive pass over " + proofs.size() + " coin(s) " + (r.clean() ? "complete" : "incomplete, retried later"));
+            } catch (Throwable e) {
+                r.failure = "Your node stopped answering while it checked the coins: " + why(e) + ".";
+                android.util.Log.w(config.appName, "archive import deferred: " + e);
+            }
+            finish(r, done);
         });
     }
 

@@ -78,6 +78,23 @@ public final class RelaysTab extends LinearLayout {
                 .setPositiveButton("OK", null).show();
     }
 
+    /** "Search the archive again" (Account.searchArchive): what it does, then progress and the plain result in place. */
+    private void searchArchive() {
+        com.eurobuddha.account.Account a = com.eurobuddha.account.Account.get(act, act.dexNode());
+        if (a == null) { act.toast("The Trading Account is not open yet. Try again in a moment."); return; }
+        android.app.AlertDialog d = new android.app.AlertDialog.Builder(act, Design.dialogTheme()).setTitle("Search the archive again")
+                .setMessage(com.eurobuddha.account.Account.ARCHIVE_SEARCH_ABOUT)
+                .setPositiveButton("Search", null).setNegativeButton("Close", null).create();
+        d.setOnShowListener(x -> {
+            android.widget.Button go = d.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
+            go.setOnClickListener(v -> {
+                go.setEnabled(false);
+                a.searchArchive(d::setMessage, result -> { d.setMessage(result); go.setText("Search again"); go.setEnabled(true); });
+            });
+        });
+        d.show();
+    }
+
     /** TRADING ACCOUNT (the keys Dexicon signs with) + NODE (which installed node to use when several answer). */
     private void renderAccount() {
         accountCard.removeAllViews();
@@ -100,6 +117,10 @@ public final class RelaysTab extends LinearLayout {
             words.setOnClickListener(v -> com.eurobuddha.account.AccountSetup.reveal(act.activity()));
             LayoutParams wl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); wl.topMargin = Design.dp(act, 8);
             accountCard.addView(words, wl);
+            TextView search = button("SEARCH THE ARCHIVE AGAIN");
+            search.setOnClickListener(v -> searchArchive());
+            LayoutParams sl = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); sl.topMargin = Design.dp(act, 8);
+            accountCard.addView(search, sl);
             TextView move = button("MOVE TO ATOMIX / PANDAPOOLS");
             move.setOnClickListener(v -> moveAway());
             LayoutParams ml = new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT); ml.topMargin = Design.dp(act, 8);

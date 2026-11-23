@@ -27,8 +27,11 @@ android {
         // header returns to the host (Pandamonium full-screen Dexicon tab).
         // 0.3.59: host language API (HostMode.setTranslator / tr / translateTree / translated) - Pandamonium shows Dexicon in
         // its chosen language (zh-Hans / ru / uk); labels only, never typed text. Standalone: no translator, unchanged.
-        versionCode 363
-        versionName "0.3.63"
+        // 0.3.64: Trading Account - "Search the archive again" (SETTINGS > TRADING ACCOUNT): the full MegaMMR archive pass on
+        // demand, mark or no mark, with a plain result naming the archive; the automatic pass re-opens when the node lost the
+        // account's script rows (reseed / restore of an older backup of the same node folder).
+        versionCode 364
+        versionName "0.3.64"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
