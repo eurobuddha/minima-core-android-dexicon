@@ -39,8 +39,10 @@ android {
         // that started before such a loss never records the mark after it (generation); the pending reset is kept in prefs.
         // 0.3.68: "Search the archive again" (review): uses the calling screen's node connection; an unusable archive reply is
         // named as such; the dialog lives in the shared AccountSetup, keeps its result when closed and holds no screen.
-        versionCode 368
-        versionName "0.3.68"
+        // 0.3.69: the vendored MinimaHtlc is byte-identical to AtomiX again: host mode's "start fresh" forgets the swap
+        // identity through a Dexicon-side shim (doors/HtlcIdentity), same effect.
+        versionCode 369
+        versionName "0.3.69"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

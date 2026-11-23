@@ -514,7 +514,7 @@ public final class DoorHost {
                 + "start fresh once every one is claimed or refunded.";
         h.post(() -> {
             prefs.edit().remove("swap_addr").remove("swap_pk").commit();
-            minima.forgetIdentity();
+            HtlcIdentity.forget(minima);
             wallet.clear();
             keysLoaded = false;
             IdentityWatch.forceNext();
