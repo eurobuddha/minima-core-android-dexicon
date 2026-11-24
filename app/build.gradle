@@ -74,8 +74,11 @@ android {
         // 0.3.78: the scripts list never reads the node's whole table again (review 23 Nov): the account's rows plus
         // every contract the engines registered through the account (recorded at newscript, seeded once from the
         // node's table), each looked up with scripts address: - a stock reply over ~131K chars would kill the app.
-        versionCode 378
-        versionName "0.3.78"
+        // 0.3.79: a node re-registration waits for every pending reply (review 23 Nov): NodeTransportService's
+        // __register__ destroyed the SDK with replies still pending, so a write in flight lost its outcome; it now
+        // runs once no request is pending (each ends by its reply or the SDK's own expiry).
+        versionCode 379
+        versionName "0.3.79"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -18,6 +18,8 @@ public final class NodeTransportService extends Service {
     private android.content.BroadcastReceiver notifications;
     private long lastEvent;
 
+    private final RegisterGate gate = new RegisterGate();   // declared before the handler that uses it
+
     private final Handler handler = new Handler(Looper.getMainLooper(), msg -> {
         if ((msg.what != 1 && msg.what != 2) || msg.replyTo == null || msg.sendingUid != android.os.Process.myUid()) return true;
         String id = msg.getData().getString("id", "");
@@ -29,26 +31,64 @@ public final class NodeTransportService extends Service {
             request.delete();
             if (msg.what == 2) {   // PandaPools FILE request: {"action","path","newPath"?,"uri"?}
                 JSONObject file = new JSONObject(command);
-                api.FileCommand(file.getString("action"), file.getString("path"), file.optString("newPath", null),
-                        file.has("uri") ? android.net.Uri.parse(file.getString("uri")) : null,
-                        reply -> respond(target, id, reply));
+                final String action = file.getString("action"), path = file.getString("path");   // read BEFORE the gate counts it
+                final int run = gate.begin();
+                try {
+                    api.FileCommand(action, path, file.optString("newPath", null),
+                            file.has("uri") ? android.net.Uri.parse(file.getString("uri")) : null,
+                            reply -> { respond(target, id, reply); gate.end(run); });
+                } catch (Exception thrown) { gate.end(run); throw thrown; }   // a request that never started is not pending
             } else if ("__register__".equals(command)) {
-                api.onDestroy();
-                api = new MinimaAPI(getApplicationContext(), reply -> {
-                    JSONObject result = new JSONObject();
-                    try { result.put("status", true); result.put("enabled", reply.optBoolean("enabled", false)); }
-                    catch (Exception ignored) { }
-                    respond(target, id, result);
+                // review 23 Nov 2026: onDestroy() drops every pending reply handler - a write in flight would lose its
+                // outcome. Re-registration waits until no request is pending (each ends by its reply or the SDK's expiry).
+                // a reply that never comes must not hold the re-registration for ever: after REGISTER_WAIT_MS it runs anyway
+                new Handler(Looper.getMainLooper()).postDelayed(() -> gate.force(), REGISTER_WAIT_MS);
+                gate.register(() -> {
+                    api.onDestroy();
+                    api = new MinimaAPI(getApplicationContext(), reply -> {
+                        JSONObject result = new JSONObject();
+                        try { result.put("status", true); result.put("enabled", reply.optBoolean("enabled", false)); }
+                        catch (Exception ignored) { }
+                        respond(target, id, result);
+                    });
                 });
             } else {
                 String invalid = CommandSafety.failure(command);
                 if (invalid != null) respond(target, id, NodeTransport.failure(invalid));
-                else api.Command(command, reply -> respond(target, id, reply));
+                else {
+                    final int run = gate.begin();
+                    try { api.Command(command, reply -> { respond(target, id, reply); gate.end(run); }); }
+                    catch (Exception thrown) { gate.end(run); throw thrown; }
+                }
             }
         } catch (Exception error) { respond(target, id, NodeTransport.failure("Node transport could not read the request.")); }
         return true;
     });
     private final Messenger messenger = new Messenger(handler);
+
+    /** how long a re-registration waits for replies still pending before it runs anyway */
+    static final long REGISTER_WAIT_MS = 60000;
+
+    /** Requests in flight on the current SDK instance, and re-registrations waiting for them (main thread only).
+     *  Each request carries the gate's run number: a reply that arrives after the SDK was replaced (force, or a
+     *  re-registration that ran) belongs to an older run and does not count against the new one. */
+    static final class RegisterGate {
+        private int pending, run;
+        private final java.util.List<Runnable> waiting = new java.util.ArrayList<>();
+        int begin() { pending++; return run; }
+        void end(int zRun) {
+            if (zRun != run) return;
+            if (pending > 0) pending--;
+            drain();
+        }
+        void register(Runnable r) { waiting.add(r); drain(); }
+        /** the replies did not all come: forget them and run what waits */
+        void force() { if (waiting.isEmpty()) return; pending = 0; drain(); }
+        private void drain() {
+            while (pending == 0 && !waiting.isEmpty()) { run++; waiting.remove(0).run(); }
+        }
+        int pending() { return pending; }
+    }
 
     @Override public void onCreate() {
         super.onCreate();
